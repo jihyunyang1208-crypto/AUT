@@ -304,6 +304,7 @@ class WebSocketClient:
                 base_payload.update(extra)
             if self.on_new_stock_detail:
                 self.on_new_stock_detail(base_payload)
+
         except Exception as e:
             print(f"⚠️ on_new_stock_detail 콜백 처리 오류: {e}")
 

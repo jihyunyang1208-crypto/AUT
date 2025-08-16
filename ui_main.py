@@ -4,17 +4,22 @@ import json
 import pandas as pd
 from datetime import datetime
 from typing import Dict, Any
+import asyncio
 
 from PyQt5.QtCore import (
     Qt, QSortFilterProxyModel, QTimer, QAbstractTableModel, QModelIndex, pyqtSlot, pyqtSignal, QSettings
-
 )
 from PyQt5.QtWidgets import (
     QDialog, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QPushButton, QListWidget, QListWidgetItem, QLabel, QTextEdit, QMessageBox,
-    QLineEdit, QTableView, QToolBar, QAction, QHeaderView, QStatusBar
+    QLineEdit, QTableView, QToolBar, QAction, QHeaderView, QStatusBar, QCheckBox
 )
 
+from core.auto_trade_controller import AutoTradeController, AutoTradeSettings
+from utils.notifier import PrintNotifier
+
+
+# ---- 간단 토스트 다이얼로그 ----
 class _Toast(QDialog):
     def __init__(self, parent, text: str, timeout_ms: int = 2500):
         super().__init__(parent)
@@ -23,7 +28,6 @@ class _Toast(QDialog):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
 
-        # 간단한 라벨 UI
         self._label = QLabel(text, self)
         self._label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self._label.setStyleSheet("""
@@ -39,7 +43,6 @@ class _Toast(QDialog):
         self._label.adjustSize()
         self.resize(self._label.sizeHint())
 
-        # 자동 종료
         QTimer.singleShot(timeout_ms, self.close)
 
     def show_at_bottom_right(self, margin: int = 16):
@@ -48,9 +51,10 @@ class _Toast(QDialog):
             return
         parent_geom = self.parent().geometry()
         x = parent_geom.x() + parent_geom.width() - self.width() - margin
-        y = parent_geom.y() + parent_geom.height() - self.height() - margin - 40  # 상태바 고려
+        y = parent_geom.y() + parent_geom.height() - self.height() - margin - 40
         self.move(x, y)
         self.show()
+
 
 # ----------------------------
 # DataFrame → Qt 모델
@@ -100,7 +104,7 @@ class MainWindow(QMainWindow):
     """
     main.py에서 넘겨주는 것들:
       - bridge: AsyncBridge 인스턴스
-      - engine: Engine 인스턴스 (start_loop/initialize 등 보유)
+      - engine: Engine 인스턴스 (start_loop/initialize 등 보유, 가능하면 .loop 제공)
       - perform_filtering_cb: callable -> 필터 실행 후 출력 경로(str) 반환 가능
       - project_root: str
     """
@@ -130,7 +134,7 @@ class MainWindow(QMainWindow):
         main_split = QSplitter(Qt.Horizontal)
         root_layout.addWidget(main_split)
 
-        # ========== 좌측 패널: 조건식/검색/버튼 ==========
+        # ========== 좌측 패널 ==========
         left_panel = QWidget()
         left = QVBoxLayout(left_panel)
 
@@ -155,10 +159,9 @@ class MainWindow(QMainWindow):
 
         main_split.addWidget(left_panel)
 
-        # ========== 우측 패널: 상단(좌/우) + 하단(로그) ==========
+        # ========== 우측 패널 ==========
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-
 
         # 세로 분할: 상단(좌/우) | 하단(로그)
         vsplit = QSplitter(Qt.Vertical)
@@ -166,9 +169,10 @@ class MainWindow(QMainWindow):
 
         # ── 상단: 좌우 스플리터 ──
         hsplit = QSplitter(Qt.Horizontal)
+        self.hsplit = hsplit  # ✅ 상태 저장/복원 위해 인스턴스 보관
         vsplit.addWidget(hsplit)
 
-        # (상단-좌) 25일이내 급등 종목 (검색+테이블)
+        # (상단-좌) 후보 테이블
         pane_top_left = QWidget()
         top_left = QVBoxLayout(pane_top_left)
         top_left.addWidget(QLabel("25일이내 급등 종목"))
@@ -180,47 +184,61 @@ class MainWindow(QMainWindow):
         self.cand_proxy = QSortFilterProxyModel(self)
         self.cand_proxy.setSourceModel(self.cand_model)
         self.cand_proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
-        self.cand_proxy.setFilterKeyColumn(-1)  # 모든 컬럼 검색
+        self.cand_proxy.setFilterKeyColumn(-1)
         self.cand_table.setModel(self.cand_proxy)
         self.cand_table.setSortingEnabled(False)
         self.cand_table.horizontalHeader().setStretchLastSection(True)
         self.cand_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.cand_table.setSelectionBehavior(QTableView.SelectRows)
-        self.cand_table.setAlternatingRowColors(False)  # 줄무늬 제거
-        self.cand_table.verticalHeader().setVisible(False)   # 행 번호 숨김
-        self.cand_table.setCornerButtonEnabled(False)        # 좌상단 코너 버튼 숨김(선택)
-        self.cand_table.setAlternatingRowColors(True)        # 줄무늬
-
+        self.cand_table.setAlternatingRowColors(False)
+        self.cand_table.verticalHeader().setVisible(False)
+        self.cand_table.setCornerButtonEnabled(False)
+        self.cand_table.setAlternatingRowColors(True)
         top_left.addWidget(self.cand_table, 1)
 
         hsplit.addWidget(pane_top_left)
 
-        # (상단-우) 종목 검색 결과 (신규 종목 / MACD + 상세 stkinfo 피드)
+        # (상단-우) 결과 로그/카드
         pane_top_right = QWidget()
         top_right = QVBoxLayout(pane_top_right)
         top_right.addWidget(QLabel("종목 검색 결과"))
-        self.text_result = QTextEdit(); self.text_result.setReadOnly(True)
+
+        row_auto = QHBoxLayout()
+        self.cb_auto_buy = QCheckBox("자동 매수")
+        self.cb_auto_sell = QCheckBox("자동 매도")
+        row_auto.addWidget(self.cb_auto_buy)
+        row_auto.addWidget(self.cb_auto_sell)
+        row_auto.addStretch(1)  # 오른쪽으로 밀기
+        top_right.addLayout(row_auto)
+
+        self.cb_auto_buy.stateChanged.connect(lambda _:
+            setattr(self.auto_trade_controller.settings, "auto_buy", self.cb_auto_buy.isChecked()))
+        self.cb_auto_sell.stateChanged.connect(lambda _:
+            setattr(self.auto_trade_controller.settings, "auto_sell", self.cb_auto_sell.isChecked()))
+
+
+        self.text_result = QTextEdit()
+        self.text_result.setReadOnly(True)
         top_right.addWidget(self.text_result, 1)
 
-        # 카드 중복 방지 상태
         self._last_cards: dict[str, str] = {}   # code -> last html
-        self._card_limit = 200                  # (선택) 메모리 안전용
-
+        self._card_limit = 200
 
         hsplit.addWidget(pane_top_right)
-        hsplit.setSizes([680, 440])  # 초기 상단 좌/우 비율
+        hsplit.setSizes([680, 440])
 
         # ── 하단: 로그 ──
         pane_bottom = QWidget()
         bottom = QVBoxLayout(pane_bottom)
         bottom.addWidget(QLabel("로그"))
-        self.text_log = QTextEdit(); self.text_log.setReadOnly(True)
+        self.text_log = QTextEdit()
+        self.text_log.setReadOnly(True)
         bottom.addWidget(self.text_log, 1)
         vsplit.addWidget(pane_bottom)
-        vsplit.setSizes([540, 220])  # 상/하 초기 비율
+        vsplit.setSizes([540, 220])
 
         main_split.addWidget(right_panel)
-        main_split.setSizes([380, 800])  # 좌/우 초기 비율
+        main_split.setSizes([380, 800])
 
         # 상태바 + 시계
         self.status = QStatusBar()
@@ -230,7 +248,6 @@ class MainWindow(QMainWindow):
         self.label_new_stock = QLabel("신규 종목 없음")
         self.label_new_stock.setObjectName("label_new_stock")
         self.status.addPermanentWidget(self.label_new_stock)
-
 
         # 시그널 연결
         self.btn_init.clicked.connect(self.on_click_init)
@@ -247,28 +264,22 @@ class MainWindow(QMainWindow):
         self.bridge.new_stock_received.connect(self.on_new_stock)
         self.bridge.macd_data_received.connect(self.on_macd_data)
 
-        # ✔ bridge가 Qt 시그널을 이미 제공한다면 그대로 연결
         if hasattr(self.bridge, "new_stock_detail_received"):
             self.bridge.new_stock_detail_received.connect(self.on_new_stock_detail)
 
         # ✅ 어떤 스레드/루프에서 오든 UI 스레드로 안전하게 전환되도록 내부 시그널도 연결
         self.sig_new_stock_detail.connect(self.on_new_stock_detail)
 
-        # 스타일(원치 않으면 주석)
+        # 스타일
         self.setStyleSheet("""
-            /* 기본 배경 & 글자색 */
             QMainWindow, QWidget { background: #1f2124; color: #E6E6E6; }
             QLabel { color: #E6E6E6; }
-
-            /* 입력/텍스트/리스트/테이블 */
             QLineEdit, QTextEdit, QListWidget, QTableView {
                 background: #2a2d31; color: #E6E6E6; border: 1px solid #3a3d42;
                 selection-background-color: #3d4650; selection-color: #ffffff;
                 alternate-background-color: #26292d;
             }
             QLineEdit:focus, QTextEdit:focus { border: 1px solid #4d5661; }
-
-            /* 버튼 */
             QPushButton {
                 background: #2f3237; border: 1px solid #454a50; padding: 6px 10px;
                 border-radius: 6px;
@@ -276,34 +287,61 @@ class MainWindow(QMainWindow):
             QPushButton:hover { background: #353a40; }
             QPushButton:pressed { background: #2a2e33; }
             QPushButton:disabled { color: #8b8f94; border-color: #3a3d42; }
-
-            /* 테이블 */
             QTableView { gridline-color: #3a3d42; }
             QTableView::item:selected { background: #3d4650; }
             QHeaderView::section {
                 background: #26292d; color: #E6E6E6; border: 0px; padding: 6px;
                 border-bottom: 1px solid #3a3d42;
             }
-
-            /* 상태바 & 스플리터 */
             QStatusBar { background: #1b1d20; color: #cfd3d8; }
             QSplitter::handle { background: #2a2d31; }
         """)
+
         # 초기 로딩
         if hasattr(self.engine, "start_loop"):
             self.engine.start_loop()
         self.load_local_conditions_if_any()
         self.load_candidates()
 
+        # 상태 저장/복원
         self._settings = QSettings("Trade", "AutoTraderUI")
         state = self._settings.value("hsplit_state")
         if state is not None:
-            self.hsplit.restoreState(state)
+            try:
+                self.hsplit.restoreState(state)
+            except Exception:
+                pass
+        self.cb_auto_buy.setChecked(self._settings.value("auto_buy", False, type=bool))
+        self.cb_auto_sell.setChecked(self._settings.value("auto_sell", False, type=bool))
 
+        # --- AutoTrader 컨트롤러 (최소 버전: 드라이런) ---
+        class DummyTradeAPI:
+            async def place_order(self, side, code, qty, order_type, limit_price=None, tag=None):
+                from core.ports import OrderResult
+                return OrderResult(order_id="SIM-001", accepted=True, message="simulated")
+            async def get_position(self, code): return 0
+            async def get_cash(self): return 10_000_000
+
+        self.auto_trade_controller = AutoTradeController(
+            trade_api=DummyTradeAPI(),
+            notifier=PrintNotifier(),
+            settings=AutoTradeSettings()  # master_enable=True, auto_buy=True, dry_run=True 기본
+        )
+
+    # 종료 시 상태 저장 + 엔진 종료
     def closeEvent(self, event):
         try:
-            self._settings.setValue("hsplit_state", self.hsplit.saveState())
-            self.engine.shutdown()
+            if hasattr(self, "hsplit"):
+                try:
+                    self._settings.setValue("hsplit_state", self.hsplit.saveState())
+                except Exception:
+                    pass
+
+            self._settings.setValue("auto_buy", self.cb_auto_buy.isChecked())
+            self._settings.setValue("auto_sell", self.cb_auto_sell.isChecked())
+
+            if hasattr(self.engine, "shutdown"):
+                self.engine.shutdown()
         finally:
             event.accept()
 
@@ -311,15 +349,9 @@ class MainWindow(QMainWindow):
     # 🔒 외부(웹소켓/async/스레드)에서 안전하게 호출할 프록시
     # ========================================================
     def threadsafe_new_stock_detail(self, payload: dict):
-        """
-        비UI 스레드/async 컨텍스트에서 UI 업데이트를 요청할 때 호출.
-        내부에서 self.sig_new_stock_detail.emit(payload)로
-        UI 스레드(메인 스레드)에서 on_new_stock_detail이 실행되도록 한다.
-        """
         try:
             self.sig_new_stock_detail.emit(payload)
         except Exception as e:
-            # 로그 텍스트에 안전하게 찍어두기
             self.append_log(f"[UI] emit 실패: {e}")
 
     # -------- 툴바/시계 --------
@@ -385,7 +417,7 @@ class MainWindow(QMainWindow):
 
     def on_click_filter(self):
         try:
-            out_path = self.perform_filtering_cb()  # main.py에서 전달한 콜백
+            out_path = self.perform_filtering_cb()
             self.append_log("✅ 필터링 완료 (finance + technical)")
             self.load_candidates(out_path if isinstance(out_path, str) else None)
             self.status.showMessage("필터링 완료", 3000)
@@ -396,16 +428,11 @@ class MainWindow(QMainWindow):
         key = code or f"__nocode__:{hash(html)}"
         prev = self._last_cards.get(key)
         if prev == html:
-            return  # 동일 내용이면 재출력 안 함
-
-        # (선택) 오래된 키 정리
+            return
         if len(self._last_cards) >= self._card_limit and key not in self._last_cards:
-            # 임의로 하나 제거(간단 버전)
             self._last_cards.pop(next(iter(self._last_cards)))
-
         self._last_cards[key] = html
-        self.text_result.append(html) 
-
+        self.text_result.append(html)
 
     # -------- 브리지 → UI --------
     @pyqtSlot(str)
@@ -439,11 +466,9 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def on_new_stock(self, code: str):
         self.label_new_stock.setText(f"신규 종목: {code}")
-        #self.text_result.append(f"🆕 신규 종목: {code}")
         self.append_log(f"🆕 신규 종목: {code}")
         self.status.showMessage(f"신규 종목: {code}", 3000)
         QMessageBox.information(self, "알림", f"🆕 신규 종목 감지: {code}")
-
 
     @pyqtSlot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
@@ -457,13 +482,39 @@ class MainWindow(QMainWindow):
                 return str(v)
         return default
 
+    # ✅ 자동매매 태스크 제출용 보조 함수
+    def _trigger_auto_trade(self, payload: dict):
+        # 체크박스 상태로 게이트
+        if not (self.cb_auto_buy.isChecked() or self.cb_auto_sell.isChecked()):
+            return
+
+        ctrl = getattr(self, "auto_trade_controller", None)
+        if not ctrl:
+            return
+
+        # 체크박스 → 설정 반영
+        ctrl.settings.master_enable = True
+        ctrl.settings.auto_buy = self.cb_auto_buy.isChecked()
+        ctrl.settings.auto_sell = self.cb_auto_sell.isChecked()
+
+        # 비동기 태스크로 실행
+        coro = ctrl.handle_signal(payload)
+        loop = getattr(self.engine, "loop", None)
+        if loop and hasattr(loop, "create_task"):
+            loop.create_task(coro)
+        else:
+            try:
+                asyncio.get_event_loop().create_task(coro)
+            except RuntimeError:
+                self.append_log("⚠️ asyncio 루프 없음: auto-trade 스킵")
+
     @pyqtSlot(dict)
     def on_new_stock_detail(self, payload: Dict[str, Any]):
         code = (payload.get("stock_code") or "").strip()
         name = payload.get("stock_name") or payload.get("isu_nm") or "종목명 없음"
         cond = payload.get("condition_name") or ""
 
-        # 다양한 케이스 대응
+        # 데이터 추출
         cur  = self._pick(payload, ["cur_prc", "stck_prpr", "price"])
         rt   = self._pick(payload, ["flu_rt", "prdy_ctrt"])
         opn  = self._pick(payload, ["open_pric", "stck_oprc"])
@@ -473,64 +524,59 @@ class MainWindow(QMainWindow):
         strength = self._pick(payload, ["cntr_str", "antc_tr_pbmn", "cttr"])
         opn_diff = self._pick(payload, ["open_pric_pre", "opn_diff", "prdy_vrss"])
 
-        # 등락률 색
+        # 등락률/색
         try:
-            rt_val = float(str(rt).replace("%","").replace(",",""))
+            rt_val = float(str(rt).replace("%", "").replace(",", ""))
         except Exception:
             rt_val = 0.0
         color = "#e53935" if rt_val > 0 else ("#43a047" if rt_val < 0 else "#cfcfcf")
         rt_fmt = f"{rt_val:.2f}%"
         cond_chip = f'<span style="margin-left:8px; font-size:11px; padding:2px 6px; border:1px solid #2c2c2c; border-radius:10px; color:#cfd8dc;">[{cond}]</span>' if cond else ""
 
+        # 카드 렌더
         html = f"""
         <div style="margin:10px 0;">
-        <div style="border:1px solid #2c2c2c; border-left:6px solid {color}; background:#161616; padding:10px; border-radius:8px;">
+          <div style="border:1px solid #2c2c2c; border-left:6px solid {color}; background:#161616; padding:10px; border-radius:8px;">
             <table style="width:100%; border-collapse:collapse;">
-            
-            <tr>
+              <tr>
                 <td style="vertical-align:top; width:70%;">
-                <div style="padding-top:6px; border-top:1px dashed #333; margin-top:2px;">
+                  <div style="padding-top:6px; border-top:1px dashed #333; margin-top:2px;">
                     <hr style="border:0; border-top:1px dashed #333; margin:8px 0;">
-
                     <b style="font-size:15px; color:#ff9800;">{name}</b>
                     <span style="color:#9aa0a6; margin-left:6px;">{code}</span>
                     {cond_chip}
-                </div>
+                  </div>
                 </td>
-            </tr>
+              </tr>
             </table>
-
-
             <div style="font-size:12px; color:#bdbdbd; font-weight:700; line-height:1.6;">
-            현재가 <b style="color:#e0e0e0; font-weight:700">{cur}</b>
-            <span style="color:#8e8e8e; font-weight:700"> ({rt_fmt})</span><br>
-            시가 <b style="color:#e0e0e0;">{opn}</b>
-            <span style="color:#8e8e8e;"> (시가대비 {opn_diff})</span><br>
-            고가 <b style="color:#e0e0e0;">{high}</b>&nbsp;&nbsp;저가 <b style="color:#e0e0e0;">{low}</b><br>
-            거래량 <b style="color:#e0e0e0;">{vol}</b>&nbsp;&nbsp;체결강도 <b style="color:#e0e0e0;">{strength}</b>
+              현재가 <b style="color:#e0e0e0; font-weight:700">{cur}</b>
+              <span style="color:#8e8e8e; font-weight:700"> ({rt_fmt})</span><br>
+              시가 <b style="color:#e0e0e0;">{opn}</b>
+              <span style="color:#8e8e8e;"> (시가대비 {opn_diff})</span><br>
+              고가 <b style="color:#e0e0e0;">{high}</b>&nbsp;&nbsp;저가 <b style="color:#e0e0e0;">{low}</b><br>
+              거래량 <b style="color:#e0e0e0;">{vol}</b>&nbsp;&nbsp;체결강도 <b style="color:#e0e0e0;">{strength}</b>
             </div>
-        </div>
+          </div>
         </div>
         """
-        #self.text_result.append(html)
         self._render_card(code, html)
+
         if code:
             self.label_new_stock.setText(f"신규 종목: {code}")
-
+            # 간단 알림(선택)
             try:
-                rt_val = float(str(self._pick(payload, ["flu_rt", "prdy_ctrt"], "0")).replace("%","").replace(",",""))
+                rt_val2 = float(str(self._pick(payload, ["flu_rt", "prdy_ctrt"], "0")).replace("%","").replace(",",""))
             except Exception:
-                rt_val = 0.0
-            sign = "▲" if rt_val > 0 else ("▼" if rt_val < 0 else "■")
-            QMessageBox.information(self, "신규 종목", f"🆕 {name} ({code}) {sign} {rt_val:.2f}%")
+                rt_val2 = 0.0
+            sign = "▲" if rt_val2 > 0 else ("▼" if rt_val2 < 0 else "■")
+            QMessageBox.information(self, "신규 종목", f"🆕 {name} ({code}) {sign} {rt_val2:.2f}%")
 
+        # ✅ 자동매매 트리거 (체크박스 켜진 경우에만 내부에서 실행)
+        self._trigger_auto_trade(payload)
 
     # -------- 후보 로딩/검색 --------
     def load_candidates(self, path: str = None):
-        """
-        candidate_stocks.csv를 읽어 테이블에 표기.
-        컬럼명이 제각각이어도 회사명/종목코드/현재가로 정규화.
-        """
         if path is None:
             path = os.path.join(self.project_root, "candidate_stocks.csv")
 
@@ -593,10 +639,3 @@ class MainWindow(QMainWindow):
                     self.append_log("📄 로컬 conditions.json 로드됨")
             except Exception as e:
                 self.append_log(f"⚠️ 로컬 조건식 로드 실패: {e}")
-
-    # -------- 종료 --------
-    def closeEvent(self, event):
-        try:
-            self.engine.shutdown()
-        finally:
-            event.accept()
