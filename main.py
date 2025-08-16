@@ -6,7 +6,7 @@ import asyncio
 import threading
 from datetime import datetime
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer  
 from PyQt5.QtWidgets import QApplication
 
 from utils.utils import load_api_keys
@@ -291,6 +291,7 @@ def main():
         project_root=project_root
     )
     w.show()
+    QTimer.singleShot(0, w.on_click_init)  # ← 프로그램 시작 시 자동 초기화
 
     sys.exit(app.exec_())
 

@@ -10,10 +10,47 @@ from PyQt5.QtCore import (
 
 )
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
+    QDialog, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QPushButton, QListWidget, QListWidgetItem, QLabel, QTextEdit, QMessageBox,
     QLineEdit, QTableView, QToolBar, QAction, QHeaderView, QStatusBar
 )
+
+class _Toast(QDialog):
+    def __init__(self, parent, text: str, timeout_ms: int = 2500):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint | Qt.ToolTip
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        # 간단한 라벨 UI
+        self._label = QLabel(text, self)
+        self._label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._label.setStyleSheet("""
+            QLabel {
+                background: rgba(30, 30, 35, 220);
+                color: #ffffff;
+                padding: 10px 14px;
+                border-radius: 10px;
+                border: 1px solid rgba(255,255,255,0.08);
+                font-size: 13px;
+            }
+        """)
+        self._label.adjustSize()
+        self.resize(self._label.sizeHint())
+
+        # 자동 종료
+        QTimer.singleShot(timeout_ms, self.close)
+
+    def show_at_bottom_right(self, margin: int = 16):
+        if not self.parent():
+            self.show()
+            return
+        parent_geom = self.parent().geometry()
+        x = parent_geom.x() + parent_geom.width() - self.width() - margin
+        y = parent_geom.y() + parent_geom.height() - self.height() - margin - 40  # 상태바 고려
+        self.move(x, y)
+        self.show()
 
 # ----------------------------
 # DataFrame → Qt 모델
@@ -122,9 +159,6 @@ class MainWindow(QMainWindow):
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
 
-        # ✅ 신규 종목 라벨 (명시적으로 생성)
-        self.label_new_stock = QLabel("신규 종목: -")
-        right_layout.addWidget(self.label_new_stock)
 
         # 세로 분할: 상단(좌/우) | 하단(로그)
         vsplit = QSplitter(Qt.Vertical)
@@ -193,6 +227,10 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status)
         self.status.showMessage("준비됨")
         self._start_clock()
+        self.label_new_stock = QLabel("신규 종목 없음")
+        self.label_new_stock.setObjectName("label_new_stock")
+        self.status.addPermanentWidget(self.label_new_stock)
+
 
         # 시그널 연결
         self.btn_init.clicked.connect(self.on_click_init)
@@ -404,6 +442,8 @@ class MainWindow(QMainWindow):
         #self.text_result.append(f"🆕 신규 종목: {code}")
         self.append_log(f"🆕 신규 종목: {code}")
         self.status.showMessage(f"신규 종목: {code}", 3000)
+        QMessageBox.information(self, "알림", f"🆕 신규 종목 감지: {code}")
+
 
     @pyqtSlot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
@@ -476,6 +516,14 @@ class MainWindow(QMainWindow):
         self._render_card(code, html)
         if code:
             self.label_new_stock.setText(f"신규 종목: {code}")
+
+            try:
+                rt_val = float(str(self._pick(payload, ["flu_rt", "prdy_ctrt"], "0")).replace("%","").replace(",",""))
+            except Exception:
+                rt_val = 0.0
+            sign = "▲" if rt_val > 0 else ("▼" if rt_val < 0 else "■")
+            QMessageBox.information(self, "신규 종목", f"🆕 {name} ({code}) {sign} {rt_val:.2f}%")
+
 
     # -------- 후보 로딩/검색 --------
     def load_candidates(self, path: str = None):
