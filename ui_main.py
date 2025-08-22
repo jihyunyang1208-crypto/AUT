@@ -5,18 +5,29 @@ import pandas as pd
 from datetime import datetime
 from typing import Dict, Any
 import asyncio
+import time
+from collections import deque
 
 from PyQt5.QtCore import (
-    Qt, QSortFilterProxyModel, QTimer, QAbstractTableModel, QModelIndex, pyqtSlot, pyqtSignal, QSettings
+    Qt, QSortFilterProxyModel, QTimer, QAbstractTableModel, QModelIndex,
+    pyqtSlot, pyqtSignal, QSettings
 )
 from PyQt5.QtWidgets import (
     QDialog, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QPushButton, QListWidget, QListWidgetItem, QLabel, QTextEdit, QMessageBox,
-    QLineEdit, QTableView, QToolBar, QAction, QHeaderView, QStatusBar, QCheckBox
+    QLineEdit, QTableView, QToolBar, QAction, QHeaderView, QStatusBar,
+    QCheckBox, QFrame
 )
+
+# matplotlib (MACD 모달 차트)
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 from core.auto_trade_controller import AutoTradeController, AutoTradeSettings
 from utils.notifier import PrintNotifier
+import logging
+
+logger = logging.getLogger("ui_main")
 
 
 # ---- 간단 토스트 다이얼로그 ----
@@ -89,12 +100,166 @@ class DataFrameModel(QAbstractTableModel):
                 return str(self._df.columns[section])
             except Exception:
                 return ""
-        return str(section + 1)
+        return ""  # 세로 헤더는 숨김 처리
 
-    def flags(self, index: QModelIndex):
-        if not index.isValid():
-            return Qt.NoItemFlags
-        return Qt.ItemIsSelectable | Qt.ItemIsEnabled
+
+# ----------------------------
+# MACD 모달 다이얼로그
+# ----------------------------
+class MacdDialog(QDialog):
+    """종목별 MACD 모니터링 모달 창 (+ 현재가/등락률 배지 + 매수/매도 버튼)"""
+    buy_requested = pyqtSignal(str)   # code
+    sell_requested = pyqtSignal(str)  # code
+
+    def __init__(self, code: str, parent=None, max_points: int = 300):
+        super().__init__(parent)
+        self.setWindowTitle(f"MACD 모니터 - {code}")
+        self.setWindowModality(Qt.ApplicationModal)  # 모달
+        self.resize(720, 480)
+        self.code = code
+        self.max_points = max_points
+
+        # ── 데이터 버퍼 ──
+        self.ts = deque(maxlen=max_points)
+        self.macd = deque(maxlen=max_points)
+        self.signal = deque(maxlen=max_points)
+        self.hist = deque(maxlen=max_points)
+
+        # ── 루트 레이아웃 ──
+        root = QVBoxLayout(self)
+
+        # 헤더: 좌(코드/버튼), 우(현재가/등락률)
+        hdr = QHBoxLayout()
+        root.addLayout(hdr)
+
+        # 좌측: 코드 + 매수/매도
+        left = QVBoxLayout()
+        self.lbl_name = QLabel()
+        self.lbl_name.setText(f"<b style='font-size:15px;'>{code}</b>")
+        self.lbl_name.setTextFormat(Qt.RichText)
+        left.addWidget(self.lbl_name)
+
+        btn_row = QHBoxLayout()
+        self.btn_buy = QPushButton("매수")
+        self.btn_sell = QPushButton("매도")
+        self.btn_buy.setCursor(Qt.PointingHandCursor)
+        self.btn_sell.setCursor(Qt.PointingHandCursor)
+        self.btn_buy.setStyleSheet(
+            "QPushButton{background:#2f3237; border:1px solid #454a50; padding:6px 10px; border-radius:6px;} "
+            "QPushButton:hover{background:#353a40;}"
+        )
+        self.btn_sell.setStyleSheet(
+            "QPushButton{background:#2f3237; border:1px solid #454a50; padding:6px 10px; border-radius:6px;} "
+            "QPushButton:hover{background:#353a40;}"
+        )
+        btn_row.addWidget(self.btn_buy)
+        btn_row.addWidget(self.btn_sell)
+        btn_row.addStretch(1)
+        left.addLayout(btn_row)
+
+        self.btn_buy.clicked.connect(lambda: self.buy_requested.emit(self.code))
+        self.btn_sell.clicked.connect(lambda: self.sell_requested.emit(self.code))
+
+        hdr.addLayout(left, 1)
+
+        # 우측: 현재가 + 등락률 배지
+        right = QVBoxLayout()
+        right.setAlignment(Qt.AlignRight | Qt.AlignTop)
+
+        self.lbl_price = QLabel("-")
+        self.lbl_price.setStyleSheet("font-size:20px; font-weight:700; font-family:Consolas,'Courier New',monospace;")
+        right.addWidget(self.lbl_price, alignment=Qt.AlignRight)
+
+        self.lbl_change = QLabel("0.00%")
+        self.lbl_change.setStyleSheet(
+            "padding:2px 8px; border-radius:999px; border:1px solid #3a3d42; background:#2a2d31; font-weight:700;"
+        )
+        right.addWidget(self.lbl_change, alignment=Qt.AlignRight)
+
+        hdr.addLayout(right, 0)
+
+        # 구분선
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("color:#3a3d42;")
+        root.addWidget(line)
+
+        # 차트
+        self.fig = Figure(figsize=(6, 3), tight_layout=True)
+        self.canvas = FigureCanvas(self.fig)
+        root.addWidget(self.canvas)
+
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_title(f"{code} - MACD", fontsize=10)
+        self.ax.grid(True, alpha=0.25)
+        self.ax.set_xlabel("time")
+        self.ax.set_ylabel("value")
+
+        (self.line_macd,) = self.ax.plot([], [], label="MACD")
+        (self.line_signal,) = self.ax.plot([], [], label="Signal")
+        self.ax.legend(loc="upper left", fontsize=8)
+
+        # 하단 상태 라벨
+        self.lbl_state = QLabel("대기 중…")
+        root.addWidget(self.lbl_state)
+
+    # ── 외부에서 가격/등락률 갱신 ──
+    def update_quote(self, price_text: str | float, change_pct: float | str):
+        try:
+            self.lbl_price.setText(f"{float(str(price_text).replace(',','')):,.0f}")
+        except Exception:
+            self.lbl_price.setText(str(price_text))
+
+        try:
+            val = float(str(change_pct).replace("%", "").replace(",", "").strip())
+        except Exception:
+            val = 0.0
+
+        self.lbl_change.setText(f"{val:.2f}%")
+        if val > 0:
+            self.lbl_change.setStyleSheet(
+                "padding:2px 8px; border-radius:999px; border:1px solid #5a2222; background:#3a1f1f; color:#ff6b6b; font-weight:700;"
+            )
+        elif val < 0:
+            self.lbl_change.setStyleSheet(
+                "padding:2px 8px; border-radius:999px; border:1px solid #1e3a24; background:#1f2f22; color:#7ddc8a; font-weight:700;"
+            )
+        else:
+            self.lbl_change.setStyleSheet(
+                "padding:2px 8px; border-radius:999px; border:1px solid #3a3d42; background:#2a2d31; color:#cfd3d8; font-weight:700;"
+            )
+
+    # ── MACD 데이터 갱신 ──
+    def update_data(self, macd_line: float, signal_line: float, macd_histogram: float):
+        t = time.strftime("%H:%M:%S")
+        self.ts.append(t)
+        self.macd.append(macd_line)
+        self.signal.append(signal_line)
+        self.hist.append(macd_histogram)
+
+        self.line_macd.set_data(range(len(self.ts)), list(self.macd))
+        self.line_signal.set_data(range(len(self.ts)), list(self.signal))
+
+        # 히스토그램: 막대 재그리기
+        self.ax.collections.clear()
+        colors = ["#e53935" if h > 0 else "#43a047" for h in self.hist]
+        self.ax.bar(range(len(self.ts)), list(self.hist), alpha=0.3, align="center", color=colors, width=0.8)
+
+        self.ax.relim()
+        self.ax.autoscale_view()
+
+        # x축 눈금
+        if len(self.ts) > 10:
+            step = max(1, len(self.ts) // 6)
+            self.ax.set_xticks(list(range(0, len(self.ts), step)))
+            self.ax.set_xticklabels([self.ts[i] for i in range(0, len(self.ts), step)], rotation=0)
+        else:
+            self.ax.set_xticks(range(len(self.ts)))
+            self.ax.set_xticklabels(list(self.ts), rotation=0)
+
+        self.lbl_state.setText(f"MACD:{macd_line:.2f}  Signal:{signal_line:.2f}  Hist:{macd_histogram:.2f}")
+        self.canvas.draw_idle()
 
 
 # ----------------------------
@@ -169,7 +334,7 @@ class MainWindow(QMainWindow):
 
         # ── 상단: 좌우 스플리터 ──
         hsplit = QSplitter(Qt.Horizontal)
-        self.hsplit = hsplit  # ✅ 상태 저장/복원 위해 인스턴스 보관
+        self.hsplit = hsplit  # 상태 저장/복원
         vsplit.addWidget(hsplit)
 
         # (상단-좌) 후보 테이블
@@ -190,10 +355,9 @@ class MainWindow(QMainWindow):
         self.cand_table.horizontalHeader().setStretchLastSection(True)
         self.cand_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.cand_table.setSelectionBehavior(QTableView.SelectRows)
-        self.cand_table.setAlternatingRowColors(False)
+        self.cand_table.setAlternatingRowColors(True)
         self.cand_table.verticalHeader().setVisible(False)
         self.cand_table.setCornerButtonEnabled(False)
-        self.cand_table.setAlternatingRowColors(True)
         top_left.addWidget(self.cand_table, 1)
 
         hsplit.addWidget(pane_top_left)
@@ -208,14 +372,20 @@ class MainWindow(QMainWindow):
         self.cb_auto_sell = QCheckBox("자동 매도")
         row_auto.addWidget(self.cb_auto_buy)
         row_auto.addWidget(self.cb_auto_sell)
-        row_auto.addStretch(1)  # 오른쪽으로 밀기
+        row_auto.addStretch(1)
         top_right.addLayout(row_auto)
 
-        self.cb_auto_buy.stateChanged.connect(lambda _:
-            setattr(self.auto_trade_controller.settings, "auto_buy", self.cb_auto_buy.isChecked()))
-        self.cb_auto_sell.stateChanged.connect(lambda _:
-            setattr(self.auto_trade_controller.settings, "auto_sell", self.cb_auto_sell.isChecked()))
-
+        # 컨트롤러 생성 전 클릭해도 안전하게 동작하도록 getattr 사용
+        self.cb_auto_buy.stateChanged.connect(
+            lambda _:
+                (getattr(self, "auto_trade_controller", None) and
+                 setattr(self.auto_trade_controller.settings, "auto_buy", self.cb_auto_buy.isChecked()))
+        )
+        self.cb_auto_sell.stateChanged.connect(
+            lambda _:
+                (getattr(self, "auto_trade_controller", None) and
+                 setattr(self.auto_trade_controller.settings, "auto_sell", self.cb_auto_sell.isChecked()))
+        )
 
         self.text_result = QTextEdit()
         self.text_result.setReadOnly(True)
@@ -264,13 +434,14 @@ class MainWindow(QMainWindow):
         self.bridge.new_stock_received.connect(self.on_new_stock)
         self.bridge.macd_data_received.connect(self.on_macd_data)
 
+        # 상세 정보 (Engine → Bridge → UI)
         if hasattr(self.bridge, "new_stock_detail_received"):
             self.bridge.new_stock_detail_received.connect(self.on_new_stock_detail)
 
         # ✅ 어떤 스레드/루프에서 오든 UI 스레드로 안전하게 전환되도록 내부 시그널도 연결
         self.sig_new_stock_detail.connect(self.on_new_stock_detail)
 
-        # 스타일
+        # 스타일 (그레이 톤)
         self.setStyleSheet("""
             QMainWindow, QWidget { background: #1f2124; color: #E6E6E6; }
             QLabel { color: #E6E6E6; }
@@ -327,6 +498,10 @@ class MainWindow(QMainWindow):
             notifier=PrintNotifier(),
             settings=AutoTradeSettings()  # master_enable=True, auto_buy=True, dry_run=True 기본
         )
+
+        # 종목별 MACD 모달 창 관리
+        self.macd_windows: dict[str, MacdDialog] = {}
+        self.auto_open_macd_modal = True  # 신규 종목 감지 시 자동 오픈
 
     # 종료 시 상태 저장 + 엔진 종료
     def closeEvent(self, event):
@@ -391,7 +566,11 @@ class MainWindow(QMainWindow):
     # -------- 버튼 핸들러 --------
     def on_click_init(self):
         try:
+            if getattr(self.engine, "_initialized", False):
+                QMessageBox.information(self, "안내", "이미 초기화되었습니다.")
+                return
             self.engine.initialize()
+            self.btn_init.setEnabled(False)  # ✅ 중복 눌림 방지
             self.status.showMessage("초기화 완료: WebSocket 수신 시작", 3000)
             QMessageBox.information(self, "초기화", "초기화 완료: WebSocket 수신 시작")
         except Exception as e:
@@ -424,11 +603,55 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "오류", str(e))
 
+    # -------- 모달창 관리/주문 --------
+    def _open_macd_modal(self, code: str):
+        if not code:
+            return
+        dlg = self.macd_windows.get(code)
+        if dlg is None:
+            dlg = MacdDialog(code, parent=self)
+            dlg.buy_requested.connect(lambda c: self._on_order_request(c, "BUY"))
+            dlg.sell_requested.connect(lambda c: self._on_order_request(c, "SELL"))
+            dlg.finished.connect(lambda _: self.macd_windows.pop(code, None))
+            self.macd_windows[code] = dlg
+            dlg.show(); dlg.raise_(); dlg.activateWindow()
+        else:
+            dlg.show(); dlg.raise_(); dlg.activateWindow()
+
+    def _on_order_request(self, code: str, side: str):
+        """모달의 매수/매도 버튼 → 실제 주문 API 호출(비동기)."""
+        ctrl = getattr(self, "auto_trade_controller", None)
+        api = getattr(ctrl, "trade_api", None) if ctrl else None
+        if not (ctrl and api and hasattr(api, "place_order")):
+            QMessageBox.warning(self, "주문 실패", "주문 API가 준비되지 않았습니다.")
+            return
+
+        async def go():
+            try:
+                # 예: 시장가 모사 → order_type="market", qty=1
+                res = await api.place_order(side=side, code=code, qty=1, order_type="market", limit_price=None, tag="manual")
+                msg = f"[주문] {side} {code} → {getattr(res, 'message', 'ok')}"
+                self.append_log(msg)
+                QMessageBox.information(self, "주문 결과", msg)
+            except Exception as e:
+                self.append_log(f"❌ 주문 실패: {e}")
+                QMessageBox.critical(self, "주문 실패", str(e))
+
+        loop = getattr(self.engine, "loop", None)
+        if loop and hasattr(loop, "create_task"):
+            loop.create_task(go())
+        else:
+            try:
+                asyncio.get_event_loop().create_task(go())
+            except RuntimeError:
+                self.append_log("⚠️ asyncio 루프 없음: 주문 제출 실패")
+
+    # -------- 카드 렌더 --------
     def _render_card(self, code: str, html: str):
         key = code or f"__nocode__:{hash(html)}"
         prev = self._last_cards.get(key)
         if prev == html:
-            return
+            return  # 동일 내용이면 재출력 안 함
         if len(self._last_cards) >= self._card_limit and key not in self._last_cards:
             self._last_cards.pop(next(iter(self._last_cards)))
         self._last_cards[key] = html
@@ -468,11 +691,20 @@ class MainWindow(QMainWindow):
         self.label_new_stock.setText(f"신규 종목: {code}")
         self.append_log(f"🆕 신규 종목: {code}")
         self.status.showMessage(f"신규 종목: {code}", 3000)
-        QMessageBox.information(self, "알림", f"🆕 신규 종목 감지: {code}")
+        # 모달 자동 오픈
+        if getattr(self, "auto_open_macd_modal", True):
+            self._open_macd_modal(code)
+        # (선공지에서는 카드 출력하지 않음)
 
     @pyqtSlot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
-        self.text_result.append(f"{code} | MACD:{macd:.2f}  Signal:{signal:.2f}  Hist:{hist:.2f}")
+        # self.text_result.append(f"{code} | MACD:{macd:.2f}  Signal:{signal:.2f}  Hist:{hist:.2f}")
+        dlg = self.macd_windows.get(code)
+        if dlg is None and getattr(self, "auto_open_macd_modal", True):
+            self._open_macd_modal(code)
+            dlg = self.macd_windows.get(code)
+        if dlg is not None:
+            dlg.update_data(macd, signal, hist)
 
     @staticmethod
     def _pick(payload, keys, default="-"):
@@ -509,20 +741,42 @@ class MainWindow(QMainWindow):
                 self.append_log("⚠️ asyncio 루프 없음: auto-trade 스킵")
 
     @pyqtSlot(dict)
-    def on_new_stock_detail(self, payload: Dict[str, Any]):
-        code = (payload.get("stock_code") or "").strip()
-        name = payload.get("stock_name") or payload.get("isu_nm") or "종목명 없음"
-        cond = payload.get("condition_name") or ""
+    def on_new_stock_detail(self, payload: dict):
+        logger.info("[UI] on_new_stock_detail: code=%s, cond=%s",
+                    payload.get("stock_code"), payload.get("condition_name"))
+        logger.debug("[UI] payload keys: %s", list(payload.keys()))
 
-        # 데이터 추출
-        cur  = self._pick(payload, ["cur_prc", "stck_prpr", "price"])
-        rt   = self._pick(payload, ["flu_rt", "prdy_ctrt"])
-        opn  = self._pick(payload, ["open_pric", "stck_oprc"])
-        high = self._pick(payload, ["high_pric", "stck_hgpr"])
-        low  = self._pick(payload, ["low_pric", "stck_lwpr"])
-        vol  = self._pick(payload, ["now_trde_qty", "acml_vol", "trqu"])
-        strength = self._pick(payload, ["cntr_str", "antc_tr_pbmn", "cttr"])
-        opn_diff = self._pick(payload, ["open_pric_pre", "opn_diff", "prdy_vrss"])
+        # ── KA10015 전용: 리스트의 첫 행(row0)을 최상위로 올림 ──
+        row0 = None
+        if isinstance(payload.get("open_pric_pre_flu_rt"), list) and payload["open_pric_pre_flu_rt"]:
+            row0 = payload["open_pric_pre_flu_rt"][0]
+        elif isinstance(payload.get("rows"), list) and payload["rows"]:  # 혹시 서버/내부에서 rows로 넘길 때
+            row0 = payload["rows"][0]
+
+        flat = dict(payload)
+        if isinstance(row0, dict):
+            # 이미 같은 키가 있으면 최상위를 우선하기 위해 setdefault 사용
+            for k, v in row0.items():
+                flat.setdefault(k, v)
+
+        logger.debug("[UI] after flat keys: %s", list(flat.keys()))
+
+        # ── 여기부터는 flat 기준으로 그대로 사용 ──
+        code = (flat.get("stock_code") or "").strip()
+        name = flat.get("stock_name") or flat.get("stk_nm") or flat.get("isu_nm") or "종목명 없음"
+        cond = flat.get("condition_name") or ""
+
+        cur      = self._pick(flat, ["cur_prc", "stck_prpr", "price"])
+        rt       = self._pick(flat, ["flu_rt", "prdy_ctrt"])
+        opn      = self._pick(flat, ["open_pric", "stck_oprc"])
+        high     = self._pick(flat, ["high_pric", "stck_hgpr"])
+        low      = self._pick(flat, ["low_pric", "stck_lwpr"])
+        vol      = self._pick(flat, ["now_trde_qty", "acml_vol", "trqu"])
+        strength = self._pick(flat, ["cntr_str", "antc_tr_pbmn", "cttr"])
+        opn_diff = self._pick(flat, ["open_pric_pre", "opn_diff", "prdy_vrss"])
+
+        logger.info("[UI] extracted: name=%s cur=%s rt=%s opn=%s high=%s low=%s vol=%s strength=%s opn_diff=%s",
+                    name, cur, rt, opn, high, low, vol, strength, opn_diff)
 
         # 등락률/색
         try:
@@ -533,7 +787,7 @@ class MainWindow(QMainWindow):
         rt_fmt = f"{rt_val:.2f}%"
         cond_chip = f'<span style="margin-left:8px; font-size:11px; padding:2px 6px; border:1px solid #2c2c2c; border-radius:10px; color:#cfd8dc;">[{cond}]</span>' if cond else ""
 
-        # 카드 렌더
+        # 카드 렌더(이름 위 분할선 + 종목명 주황색)
         html = f"""
         <div style="margin:10px 0;">
           <div style="border:1px solid #2c2c2c; border-left:6px solid {color}; background:#161616; padding:10px; border-radius:8px;">
@@ -541,17 +795,23 @@ class MainWindow(QMainWindow):
               <tr>
                 <td style="vertical-align:top; width:70%;">
                   <div style="padding-top:6px; border-top:1px dashed #333; margin-top:2px;">
-                    <hr style="border:0; border-top:1px dashed #333; margin:8px 0;">
+                  
                     <b style="font-size:15px; color:#ff9800;">{name}</b>
                     <span style="color:#9aa0a6; margin-left:6px;">{code}</span>
                     {cond_chip}
                   </div>
                 </td>
+                <td style="vertical-align:top; text-align:right;">
+                  <div style="font-size:12px; color:#bdbdbd;">현재가</div>
+                  <div style="font-size:18px; font-weight:700; font-family:Consolas,'Courier New',monospace;">{cur}</div>
+                  <div style="margin-top:2px; font-weight:700; color:{color};">{rt_fmt}</div>
+                </td>
               </tr>
             </table>
-            <div style="font-size:12px; color:#bdbdbd; font-weight:700; line-height:1.6;">
-              현재가 <b style="color:#e0e0e0; font-weight:700">{cur}</b>
-              <span style="color:#8e8e8e; font-weight:700"> ({rt_fmt})</span><br>
+
+            <hr style="border:0; border-top:1px dashed #333; margin:8px 0;">
+
+            <div style="font-size:12px; color:#bdbdbd; line-height:1.6;">
               시가 <b style="color:#e0e0e0;">{opn}</b>
               <span style="color:#8e8e8e;"> (시가대비 {opn_diff})</span><br>
               고가 <b style="color:#e0e0e0;">{high}</b>&nbsp;&nbsp;저가 <b style="color:#e0e0e0;">{low}</b><br>
@@ -564,13 +824,11 @@ class MainWindow(QMainWindow):
 
         if code:
             self.label_new_stock.setText(f"신규 종목: {code}")
-            # 간단 알림(선택)
-            try:
-                rt_val2 = float(str(self._pick(payload, ["flu_rt", "prdy_ctrt"], "0")).replace("%","").replace(",",""))
-            except Exception:
-                rt_val2 = 0.0
-            sign = "▲" if rt_val2 > 0 else ("▼" if rt_val2 < 0 else "■")
-            QMessageBox.information(self, "신규 종목", f"🆕 {name} ({code}) {sign} {rt_val2:.2f}%")
+
+        # ✅ 모달 배지(현재가/등락률) 업데이트
+        dlg = self.macd_windows.get(code)
+        if dlg is not None:
+            dlg.update_quote(cur, rt_val)
 
         # ✅ 자동매매 트리거 (체크박스 켜진 경우에만 내부에서 실행)
         self._trigger_auto_trade(payload)

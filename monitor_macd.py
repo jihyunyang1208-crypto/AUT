@@ -18,8 +18,8 @@ import numpy as np # numpy는 여전히 유용할 수 있습니다.
 import pandas as pd # pandas 라이브러리
 from collections import deque
 
-
-# calculate_ema 함수는 pandas ewm 사용으로 인해 더 이상 필요 없습니다.
+import logging
+logger = logging.getLogger(__name__)
 
 
 # MACD, 시그널 라인, 히스토그램 계산 함수 (pandas 사용)
@@ -75,11 +75,11 @@ def track_moving_average_trend(value, history: deque, label: str, previous_avg_h
         previous_avg = previous_avg_holder.get(label)
         if previous_avg is not None:
             if current_avg > previous_avg:
-                print(f"🔴🔺 {label} 6개 평균 상승 중 ({previous_avg:.2f} → {current_avg:.2f})")
+                logger.debug(f"🔴🔺 {label} 6개 평균 상승 중 ({previous_avg:.2f} → {current_avg:.2f})")
             elif current_avg < previous_avg:
-                print(f"🔵🔻 {label} 6개 평균 하락 중 ({previous_avg:.2f} → {current_avg:.2f})")
+                logger.debug(f"🔵🔻 {label} 6개 평균 하락 중 ({previous_avg:.2f} → {current_avg:.2f})")
             else:
-                print(f"⚖️  {label} 6개 평균 변화 없음 ({current_avg:.2f})")
+                logger.debug(f"⚖️  {label} 6개 평균 변화 없음 ({current_avg:.2f})")
 
         previous_avg_holder[label] = current_avg  # 최신 평균값 저장
 
@@ -120,11 +120,11 @@ def monitor_macd(token, stk_cd, macd_callback=None):
             response.raise_for_status() # HTTP 에러 발생 시 예외 발생
             data = response.json()
         except requests.exceptions.RequestException as e:
-            print(f"API 요청 오류 ({stk_cd}): {e}")
+            logger.debug(f"API 요청 오류 ({stk_cd}): {e}")
             time.sleep(60) # 오류 발생 시에도 잠시 대기 후 재시도
             continue
         except json.JSONDecodeError as e:
-            print(f"JSON 디코딩 오류 ({stk_cd}): {e}")
+            logger.debug(f"JSON 디코딩 오류 ({stk_cd}): {e}")
             time.sleep(60)
             continue
 
@@ -139,7 +139,7 @@ def monitor_macd(token, stk_cd, macd_callback=None):
                     cur_prc = float(entry['cur_prc'])  # 현재가
                     current_prices.append(cur_prc)  # 가격 리스트에 추가 (오래된 것부터)
                 except (ValueError, KeyError) as e:
-                    print(f"가격 데이터 파싱 오류 ({stk_cd}): {e}, entry: {entry}")
+                    logger.debug(f"가격 데이터 파싱 오류 ({stk_cd}): {e}, entry: {entry}")
                     continue
 
             # 충분한 가격 데이터가 있을 때만 MACD 및 시그널 계산 시도
@@ -148,13 +148,13 @@ def monitor_macd(token, stk_cd, macd_callback=None):
                 macd_line, signal_line, macd_histogram = calculate_macd_and_signal(current_prices)
                 
                 if macd_line is not None and signal_line is not None:
-                    print(f"종목: {stk_cd}, MACD: {macd_line:.2f}, Signal: {signal_line:.2f}, Histogram: {macd_histogram:.2f}")
+                    logger.debug(f"종목: {stk_cd}, MACD: {macd_line:.2f}, Signal: {signal_line:.2f}, Histogram: {macd_histogram:.2f}")
 
                                         # 시그널 라인 골든 크로스 감지 로직 추가
                     if previous_signal_line is not None: # 이전 시그널 값이 있을 때만 비교
                         # 시그널 라인이 음수에서 양수로 전환되는 시점 감지
                         if previous_signal_line < 0 and signal_line >= 0:
-                            print(f"🚨🚨🚨 종목: {stk_cd} - 시그널 라인 골든 크로스 발생! (이전: {previous_signal_line:.2f} -> 현재: {signal_line:.2f})")
+                            logger.debug(f"🚨🚨🚨 종목: {stk_cd} - 시그널 라인 골든 크로스 발생! (이전: {previous_signal_line:.2f} -> 현재: {signal_line:.2f})")
                             # 골든 크로스 발생 시, 현재 가격 및 지표 값을 콜백 함수로 전달
                             if macd_callback:
                                 # current_prices의 마지막 요소가 가장 최근 가격입니다.
@@ -168,11 +168,11 @@ def monitor_macd(token, stk_cd, macd_callback=None):
 
                 else:
                     # 데이터 부족 메시지를 덜 혼란스럽게 변경
-                    print(f"종목: {stk_cd}, MACD/Signal 계산을 위한 충분한 유효 데이터 부족. 현재 가격 봉 수: {len(current_prices)}")
+                    logger.debug(f"종목: {stk_cd}, MACD/Signal 계산을 위한 충분한 유효 데이터 부족. 현재 가격 봉 수: {len(current_prices)}")
             else:
-                print(f"종목: {stk_cd}, API에서 유효한 차트 가격 데이터를 가져오지 못했습니다.")
+                logger.debug(f"종목: {stk_cd}, API에서 유효한 차트 가격 데이터를 가져오지 못했습니다.")
         else:
-            print(f"종목: {stk_cd}, 차트 데이터 없음 또는 응답 형식 오류: {data}")
+            logger.debug(f"종목: {stk_cd}, 차트 데이터 없음 또는 응답 형식 오류: {data}")
 
 
         if current_prices:
@@ -183,11 +183,11 @@ def monitor_macd(token, stk_cd, macd_callback=None):
                 track_moving_average_trend(macd_line, macd_history, "MACD", previous_avgs)
                 track_moving_average_trend(signal_line, signal_history, "Signal", previous_avgs)
 
-                print(f"종목: {stk_cd}, MACD: {macd_line:.2f}, Signal: {signal_line:.2f}, Histogram: {macd_histogram:.2f}")
+                logger.debug(f"종목: {stk_cd}, MACD: {macd_line:.2f}, Signal: {signal_line:.2f}, Histogram: {macd_histogram:.2f}")
 
                 # 골든크로스 감지
                 if previous_signal_line is not None and previous_signal_line < 0 and signal_line >= 0:
-                    print(f"🚨🚨🚨 종목: {stk_cd} - 시그널 라인 골든 크로스 발생!")
+                    logger.debug(f"🚨🚨🚨 종목: {stk_cd} - 시그널 라인 골든 크로스 발생!")
                     if macd_callback:
                         current_price_at_crossover = current_prices[-1]
                         macd_callback(stk_cd, current_price_at_crossover, macd_line, signal_line, macd_histogram)
@@ -213,6 +213,6 @@ if __name__ == '__main__':
     stock_list = ['408900']  # 모니터링할 종목 리스트
 
     def test_macd_callback(stock_code, macd_line, signal_line, macd_histogram):
-        print(f"콜백 수신 - 종목: {stock_code}, MACD: {macd_line:.2f}, Signal: {signal_line:.2f}, Histogram: {macd_histogram:.2f}")
+        logger.debug(f"콜백 수신 - 종목: {stock_code}, MACD: {macd_line:.2f}, Signal: {signal_line:.2f}, Histogram: {macd_histogram:.2f}")
 
     start_monitoring(access_token, stock_list, test_macd_callback)

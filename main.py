@@ -12,10 +12,11 @@ from PyQt5.QtWidgets import QApplication
 from utils.utils import load_api_keys
 from utils.token_manager import get_access_token
 from monitor_macd import start_monitoring
-from websocket_client import WebSocketClient
+from core.websocket_client import WebSocketClient
 
 from strategy.filter_1_finance import run_finance_filter
 from strategy.filter_2_technical import run_technical_filter
+from core.detail_information_getter import SimpleMarketAPI
 
 # ★ UI 모듈
 from ui_main import MainWindow
@@ -26,8 +27,10 @@ from ui_main import MainWindow
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+        force=True,
     )
 
 try:
@@ -36,41 +39,6 @@ except NameError:
     project_root = os.getcwd()
 
 
-import sys
-import os
-import logging
-import asyncio
-import threading
-from datetime import datetime
-
-from PyQt5.QtCore import QObject, pyqtSignal
-from PyQt5.QtWidgets import QApplication
-
-from utils.utils import load_api_keys
-from utils.token_manager import get_access_token
-from monitor_macd import start_monitoring
-from websocket_client import WebSocketClient
-
-from strategy.filter_1_finance import run_finance_filter
-from strategy.filter_2_technical import run_technical_filter
-
-# ★ UI 모듈
-from ui_main import MainWindow
-
-# ─────────────────────────────────────────────────────────
-# 로거 설정
-# ─────────────────────────────────────────────────────────
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s"
-    )
-
-try:
-    project_root  # noqa: F823
-except NameError:
-    project_root = os.getcwd()
 
 
 # ─────────────────────────────────────────────────────────
@@ -88,6 +56,8 @@ class AsyncBridge(QObject):
     # MACD 데이터 수신
     macd_data_received = pyqtSignal(str, float, float, float)
 
+    def __init__(self):
+        super().__init__()
 
 
 # ─────────────────────────────────────────────────────────
@@ -111,6 +81,11 @@ class Engine(QObject):
         self.websocket_client: WebSocketClient | None = None
         self.monitored_stocks: set[str] = set()  # 중복 모니터링 방지
 
+        self.appkey = None
+        self.secretkey = None
+        self.market_api = None
+
+
     # ---------- 루프 ----------
     def _run_loop(self):
         asyncio.set_event_loop(self.loop)
@@ -124,36 +99,71 @@ class Engine(QObject):
 
     # ---------- 초기화 ----------
     def initialize(self):
+        if getattr(self, "_initialized", False):
+            self.bridge.log.emit("[Engine] initialize: already initialized, skip")
+            return
+        self._initialized = True
+
         """
-        API 키 로드 → 토큰 발급 → WebSocketClient 연결 및 수신 시작
+        API 키 로드 → 토큰 발급 → SimpleMarketAPI 생성 → WebSocketClient(DI) 연결
         """
         try:
-            appkey, secretkey = load_api_keys()
-            self.access_token = get_access_token(appkey, secretkey)
+            # 1) 토큰 발급
+            self.appkey, self.secretkey = load_api_keys()
+            self.access_token = get_access_token(self.appkey, self.secretkey)
             self.bridge.log.emit("🔐 액세스 토큰 발급 완료")
 
-            # WebSocketClient 생성 (콜백 연결)
-            # on_new_stock_detail 콜백을 명시적으로 연결하여 상세 딕셔너리 전달
-            self.websocket_client = WebSocketClient(
-                uri='wss://api.kiwoom.com:10000/api/dostk/websocket',
-                token=self.access_token,
-                socketio=None,                              # 웹 Socket.IO 사용 안 함
-                on_condition_list=self._on_condition_list,  # 조건식 수신 → UI
-                on_new_stock=self._on_new_stock,            # 신규 종목 선공지 → MACD 시작
-                on_new_stock_detail=self._on_new_stock_detail  # 상세 딕셔너리 → UI
-            )
+            # 2) SimpleMarketAPI 생성 (여기서 지연 임포트로 상단 import 안 건드립니다)
+            from core.detail_information_getter import SimpleMarketAPI
+            self.market_api = SimpleMarketAPI(token=self.access_token)
+
+            # 3) WebSocketClient 생성 (의존성 주입)
+            if self.websocket_client is None:
+                self.websocket_client = WebSocketClient(
+                    uri='wss://api.kiwoom.com:10000/api/dostk/websocket',
+                    token=self.access_token,
+                    bridge=self.bridge,
+                    market_api=self.market_api,                 
+                    socketio=None,
+                    on_condition_list=self._on_condition_list,
+                    on_new_stock=self._on_new_stock,
+                    on_new_stock_detail=self._on_new_stock_detail,
+                    dedup_ttl_sec=3,
+                    detail_timeout_sec=6.0,
+                    refresh_token_cb=self._refresh_token_sync,  # (옵션) WS 재로그인용
+                )
+            else :
+                self.bridge.log.emit("[Engine] Reusing existing WebSocketClient")
+                
 
             async def handle_websocket():
                 await self.websocket_client.connect()
                 await self.websocket_client.receive_messages()
 
-            # 비동기 태스크 실행 (백그라운드 루프에 등록)
+            # 4) 비동기 태스크 실행 (백그라운드 루프에 등록)
             asyncio.run_coroutine_threadsafe(handle_websocket(), self.loop)
             self.bridge.log.emit("🌐 WebSocket 연결 및 수신 시작")
+
+
 
         except Exception as e:
             self.bridge.log.emit(f"❌ 초기화 실패: {e}")
             raise
+
+    def _refresh_token_sync(self) -> str | None:
+        """WebSocketClient에서 호출하는 동기 콜백. 새 토큰 반환 (실패 시 None)."""
+        try:
+            new_token = get_access_token(self.appkey, self.secretkey)
+            if new_token:
+                self.access_token = new_token
+                # HTTP 클라(SimpleMarketAPI)에도 반영
+                if self.market_api:
+                    self.market_api.set_token(new_token)
+                self.bridge.log.emit("🔁 액세스 토큰 재발급 완료")
+                return new_token
+        except Exception as e:
+            self.bridge.log.emit(f"❌ 토큰 재발급 실패: {e}")
+        return None
 
     # ---------- 콜백 처리 ----------
     def _on_condition_list(self, conditions: list):
@@ -161,8 +171,34 @@ class Engine(QObject):
         self.bridge.condition_list_received.emit(conditions or [])
 
     def _on_new_stock_detail(self, payload: dict):
-        # 상세 딕셔너리를 UI로 전달
+        # 1) UI로 바로 송신
         self.bridge.new_stock_detail_received.emit(payload)
+
+        # 2) MACD 모듈에 rows 전달
+        try:
+            rows = payload.get("rows") or []
+            code = payload.get("stock_code")
+            if rows and code:
+                threading.Thread(
+                    target=self._run_macd_from_rows, args=(code, rows), daemon=True
+                ).start()
+        except Exception as e:
+            self.bridge.log.emit(f"❌ MACD rows 전달 실패: {e}")
+
+
+    def _run_macd_from_rows(self, code: str, rows: list[dict]):
+        """
+        예: rows -> pandas DataFrame -> MACD 계산 -> bridge.macd_data_received.emit(...)
+        rows 포맷은 KA10015 응답 구조에 맞춰 파싱하세요.
+        """
+        try:
+            # 필요한 필드를 rows에서 추출 (예: 체결가/종가, 일자, 시각 등)
+            # df = build_dataframe_from_rows(rows)  # 직접 구현
+            # macd_line, signal_line, hist = compute_macd(df['close'])  # 직접 구현
+            # self.bridge.macd_data_received.emit(code, macd_line[-1], signal_line[-1], hist[-1])
+            pass
+        except Exception as e:
+            self.bridge.log.emit(f"❌ MACD 계산 실패({code}): {e}")
 
     def _on_new_stock(self, stock_code: str):
         # 신규 종목 선공지 수신
@@ -273,28 +309,66 @@ def perform_filtering():
 # 진입점
 # ─────────────────────────────────────────────────────────
 def main():
-    # 정적 폴더 준비(필요 시)
-    if not os.path.exists('static'):
-        os.makedirs('static')
 
     app = QApplication(sys.argv)
 
     # Bridge & Engine 준비 (UI에 주입)
     bridge = AsyncBridge()
+    logger.info("[MAIN] bridge id=%s", id(bridge))
+
     engine = Engine(bridge)
 
-    # MainWindow 생성(엔진/콜백/루트 전달)
-    w = MainWindow(
+    # post 방식 API 컨트롤러
+    market_api = getattr(engine, "market_api", None)
+    if market_api is None:
+        appkey, secretkey = load_api_keys()
+        access_token = get_access_token(appkey, secretkey)
+        market_api = SimpleMarketAPI(token=access_token)
+        # 엔진에서도 동일 인스턴스를 쓰게 연결
+        setattr(engine, "market_api", market_api)
+
+    def refresh_token_cb():
+        ak, sk = load_api_keys()
+        return get_access_token(ak, sk)
+
+    # WS URI 준비 (환경변수 없으면 기본값 사용)
+    WS_URI = os.getenv("WS_URI") or DEFAULT_WS_URI
+    logger.info("[MAIN] WS_URI=%s", WS_URI)
+
+    # WebSocket 클라이언트 (동일 bridge 인스턴스 주입!)
+    ws = WebSocketClient(
+        uri=WS_URI,
+        token=market_api.token,
+        market_api=market_api,
+        bridge=bridge,
+        dedup_ttl_sec=3,
+        detail_timeout_sec=6.0,
+        refresh_token_cb=refresh_token_cb,
+    )
+
+    # UI 생성
+    project_root = os.getcwd()
+    ui = MainWindow(
         bridge=bridge,
         engine=engine,
         perform_filtering_cb=perform_filtering,
-        project_root=project_root
+        project_root=project_root,
     )
-    w.show()
-    QTimer.singleShot(0, w.on_click_init)  # ← 프로그램 시작 시 자동 초기화
+
+    # 브릿지 → UI 슬롯 연결 (MainWindow 내에서 이미 연결했다면 중복 연결은 생략 가능)
+    bridge.new_stock_received.connect(ui.on_new_stock)
+    bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
+
+    ui.show()
+
+    # 프로그램 시작 시 자동 초기화 (토큰/WS 등 엔진 초기화)
+    QTimer.singleShot(0, ui.on_click_init)
+
+    # 엔진 루프 시작 후, WS 시작(가능하면 같은 루프 사용)
+    engine.start_loop()
+    ws.start(getattr(engine, "loop", None))
 
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()

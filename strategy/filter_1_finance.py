@@ -328,11 +328,11 @@ if __name__ == "__main__":
     try:
         from dotenv import load_dotenv
         load_dotenv()
-        print("💡 .env 파일 로드 완료 (단독 실행 모드).")
+        logger.debug("💡 .env 파일 로드 완료 (단독 실행 모드).")
     except ImportError:
-        print("⚠️ python-dotenv 라이브러리가 설치되지 않았습니다. 'pip install python-dotenv'로 설치하세요.")
+        logger.debug("⚠️ python-dotenv 라이브러리가 설치되지 않았습니다. 'pip install python-dotenv'로 설치하세요.")
     except Exception as e:
-        print(f"⚠️ .env 파일 로드 중 오류 발생: {e}")
+        logger.debug(f"⚠️ .env 파일 로드 중 오류 발생: {e}")
 
     # Argument 파싱
     parser = argparse.ArgumentParser(description="재무 데이터를 기반으로 주식 종목을 필터링합니다.")

@@ -1,0 +1,43 @@
+'''
+모니터링 함수: monitor_macd 함수는 특정 종목의 5분봉/30분봉 MACD 신호를 계산하는 역할을 합니다.
+이 함수는 1분 간격으로 MACD, 시그널 라인, 히스토그램을 계산합니다.
+스레드 생성: start_monitoring 함수는 주어진 종목 리스트에 대해 각각의 스레드를 생성하여 monitor_macd 함수를 실행합니다.
+API 요청: 각 스레드는 키움증권 REST API를 통해 데이터를 조회하고, 응답 데이터에서 MACD, 시그널 라인, 히스토그램을 계산하여 출력합니다.
+MACD, 시그널, 히스토그램 계산 함수: calculate_macd_and_signal 함수는 가격 리스트를 입력받아 MACD, 시그널 라인, 히스토그램 값을 반환합니다. (pandas 활용)
+MACD 출력: 계산된 MACD, 시그널 라인, 히스토그램 값을 콜백을 통해 전달하고 터미널에도 출력합니다.
+'''
+
+import pandas as pd
+import pandas_ta as ta
+import matplotlib.pyplot as plt
+import yfinance as yf   # 예제용, 키움 데이터도 동일하게 처리 가능
+
+# 예제: 삼성전자 (Yahoo Finance에서 데이터 받기)
+df = yf.download("005930.KQ", period="3mo", interval="1d")  # 일봉 데이터
+df.rename(columns={"Close":"종가"}, inplace=True)
+
+# MACD 계산
+macd = ta.macd(df["종가"], fast=12, slow=26, signal=9)
+df = pd.concat([df, macd], axis=1)
+
+
+fig, (ax_price, ax_macd) = plt.subplots(2, 1, figsize=(12,8), sharex=True, gridspec_kw={"height_ratios":[2,1]})
+
+# --- 가격 차트 ---
+ax_price.plot(df.index, df["종가"], label="Close Price", color="black")
+ax_price.set_title("Price & MACD")
+ax_price.legend()
+
+# --- MACD 차트 ---
+ax_macd.plot(df.index, df["MACD_12_26_9"], label="MACD", color="blue")
+ax_macd.plot(df.index, df["MACDs_12_26_9"], label="Signal", color="red")
+
+# Histogram (양수=녹색, 음수=빨강)
+ax_macd.bar(df.index, df["MACDh_12_26_9"], label="Histogram", 
+            color=["green" if val >=0 else "red" for val in df["MACDh_12_26_9"]])
+
+ax_macd.axhline(0, color="black", linewidth=1, linestyle="--")  # 0선
+ax_macd.legend()
+
+plt.tight_layout()
+plt.show()
