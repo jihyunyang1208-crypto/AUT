@@ -22,12 +22,16 @@ from PyQt5.QtWidgets import (
 # matplotlib (MACD 모달 차트)
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import matplotlib
 
 from core.auto_trade_controller import AutoTradeController, AutoTradeSettings
+from core.macd_dialog import MacdDialog
 from utils.notifier import PrintNotifier
 import logging
 
 logger = logging.getLogger("ui_main")
+matplotlib.set_loglevel("warning")
+logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
 
 
 # ---- 간단 토스트 다이얼로그 ----
@@ -103,164 +107,6 @@ class DataFrameModel(QAbstractTableModel):
         return ""  # 세로 헤더는 숨김 처리
 
 
-# ----------------------------
-# MACD 모달 다이얼로그
-# ----------------------------
-class MacdDialog(QDialog):
-    """종목별 MACD 모니터링 모달 창 (+ 현재가/등락률 배지 + 매수/매도 버튼)"""
-    buy_requested = pyqtSignal(str)   # code
-    sell_requested = pyqtSignal(str)  # code
-
-    def __init__(self, code: str, parent=None, max_points: int = 300):
-        super().__init__(parent)
-        self.setWindowTitle(f"MACD 모니터 - {code}")
-        self.setWindowModality(Qt.ApplicationModal)  # 모달
-        self.resize(720, 480)
-        self.code = code
-        self.max_points = max_points
-
-        # ── 데이터 버퍼 ──
-        self.ts = deque(maxlen=max_points)
-        self.macd = deque(maxlen=max_points)
-        self.signal = deque(maxlen=max_points)
-        self.hist = deque(maxlen=max_points)
-
-        # ── 루트 레이아웃 ──
-        root = QVBoxLayout(self)
-
-        # 헤더: 좌(코드/버튼), 우(현재가/등락률)
-        hdr = QHBoxLayout()
-        root.addLayout(hdr)
-
-        # 좌측: 코드 + 매수/매도
-        left = QVBoxLayout()
-        self.lbl_name = QLabel()
-        self.lbl_name.setText(f"<b style='font-size:15px;'>{code}</b>")
-        self.lbl_name.setTextFormat(Qt.RichText)
-        left.addWidget(self.lbl_name)
-
-        btn_row = QHBoxLayout()
-        self.btn_buy = QPushButton("매수")
-        self.btn_sell = QPushButton("매도")
-        self.btn_buy.setCursor(Qt.PointingHandCursor)
-        self.btn_sell.setCursor(Qt.PointingHandCursor)
-        self.btn_buy.setStyleSheet(
-            "QPushButton{background:#2f3237; border:1px solid #454a50; padding:6px 10px; border-radius:6px;} "
-            "QPushButton:hover{background:#353a40;}"
-        )
-        self.btn_sell.setStyleSheet(
-            "QPushButton{background:#2f3237; border:1px solid #454a50; padding:6px 10px; border-radius:6px;} "
-            "QPushButton:hover{background:#353a40;}"
-        )
-        btn_row.addWidget(self.btn_buy)
-        btn_row.addWidget(self.btn_sell)
-        btn_row.addStretch(1)
-        left.addLayout(btn_row)
-
-        self.btn_buy.clicked.connect(lambda: self.buy_requested.emit(self.code))
-        self.btn_sell.clicked.connect(lambda: self.sell_requested.emit(self.code))
-
-        hdr.addLayout(left, 1)
-
-        # 우측: 현재가 + 등락률 배지
-        right = QVBoxLayout()
-        right.setAlignment(Qt.AlignRight | Qt.AlignTop)
-
-        self.lbl_price = QLabel("-")
-        self.lbl_price.setStyleSheet("font-size:20px; font-weight:700; font-family:Consolas,'Courier New',monospace;")
-        right.addWidget(self.lbl_price, alignment=Qt.AlignRight)
-
-        self.lbl_change = QLabel("0.00%")
-        self.lbl_change.setStyleSheet(
-            "padding:2px 8px; border-radius:999px; border:1px solid #3a3d42; background:#2a2d31; font-weight:700;"
-        )
-        right.addWidget(self.lbl_change, alignment=Qt.AlignRight)
-
-        hdr.addLayout(right, 0)
-
-        # 구분선
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        line.setStyleSheet("color:#3a3d42;")
-        root.addWidget(line)
-
-        # 차트
-        self.fig = Figure(figsize=(6, 3), tight_layout=True)
-        self.canvas = FigureCanvas(self.fig)
-        root.addWidget(self.canvas)
-
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_title(f"{code} - MACD", fontsize=10)
-        self.ax.grid(True, alpha=0.25)
-        self.ax.set_xlabel("time")
-        self.ax.set_ylabel("value")
-
-        (self.line_macd,) = self.ax.plot([], [], label="MACD")
-        (self.line_signal,) = self.ax.plot([], [], label="Signal")
-        self.ax.legend(loc="upper left", fontsize=8)
-
-        # 하단 상태 라벨
-        self.lbl_state = QLabel("대기 중…")
-        root.addWidget(self.lbl_state)
-
-    # ── 외부에서 가격/등락률 갱신 ──
-    def update_quote(self, price_text: str | float, change_pct: float | str):
-        try:
-            self.lbl_price.setText(f"{float(str(price_text).replace(',','')):,.0f}")
-        except Exception:
-            self.lbl_price.setText(str(price_text))
-
-        try:
-            val = float(str(change_pct).replace("%", "").replace(",", "").strip())
-        except Exception:
-            val = 0.0
-
-        self.lbl_change.setText(f"{val:.2f}%")
-        if val > 0:
-            self.lbl_change.setStyleSheet(
-                "padding:2px 8px; border-radius:999px; border:1px solid #5a2222; background:#3a1f1f; color:#ff6b6b; font-weight:700;"
-            )
-        elif val < 0:
-            self.lbl_change.setStyleSheet(
-                "padding:2px 8px; border-radius:999px; border:1px solid #1e3a24; background:#1f2f22; color:#7ddc8a; font-weight:700;"
-            )
-        else:
-            self.lbl_change.setStyleSheet(
-                "padding:2px 8px; border-radius:999px; border:1px solid #3a3d42; background:#2a2d31; color:#cfd3d8; font-weight:700;"
-            )
-
-    # ── MACD 데이터 갱신 ──
-    def update_data(self, macd_line: float, signal_line: float, macd_histogram: float):
-        t = time.strftime("%H:%M:%S")
-        self.ts.append(t)
-        self.macd.append(macd_line)
-        self.signal.append(signal_line)
-        self.hist.append(macd_histogram)
-
-        self.line_macd.set_data(range(len(self.ts)), list(self.macd))
-        self.line_signal.set_data(range(len(self.ts)), list(self.signal))
-
-        # 히스토그램: 막대 재그리기
-        self.ax.collections.clear()
-        colors = ["#e53935" if h > 0 else "#43a047" for h in self.hist]
-        self.ax.bar(range(len(self.ts)), list(self.hist), alpha=0.3, align="center", color=colors, width=0.8)
-
-        self.ax.relim()
-        self.ax.autoscale_view()
-
-        # x축 눈금
-        if len(self.ts) > 10:
-            step = max(1, len(self.ts) // 6)
-            self.ax.set_xticks(list(range(0, len(self.ts), step)))
-            self.ax.set_xticklabels([self.ts[i] for i in range(0, len(self.ts), step)], rotation=0)
-        else:
-            self.ax.set_xticks(range(len(self.ts)))
-            self.ax.set_xticklabels(list(self.ts), rotation=0)
-
-        self.lbl_state.setText(f"MACD:{macd_line:.2f}  Signal:{signal_line:.2f}  Hist:{macd_histogram:.2f}")
-        self.canvas.draw_idle()
-
 
 # ----------------------------
 # 고도화 UI MainWindow
@@ -286,6 +132,7 @@ class MainWindow(QMainWindow):
         self.engine = engine
         self.perform_filtering_cb = perform_filtering_cb
         self.project_root = project_root
+        self._macd_dialogs: dict[str, QDialog] = {}
 
         # 상단 툴바
         self._build_toolbar()
@@ -433,6 +280,8 @@ class MainWindow(QMainWindow):
         self.bridge.condition_list_received.connect(self.populate_conditions)
         self.bridge.new_stock_received.connect(self.on_new_stock)
         self.bridge.macd_data_received.connect(self.on_macd_data)
+        self.bridge.macd_series_ready.connect(self.on_macd_series_ready)
+
 
         # 상세 정보 (Engine → Bridge → UI)
         if hasattr(self.bridge, "new_stock_detail_received"):
@@ -691,20 +540,60 @@ class MainWindow(QMainWindow):
         self.label_new_stock.setText(f"신규 종목: {code}")
         self.append_log(f"🆕 신규 종목: {code}")
         self.status.showMessage(f"신규 종목: {code}", 3000)
-        # 모달 자동 오픈
-        if getattr(self, "auto_open_macd_modal", True):
-            self._open_macd_modal(code)
-        # (선공지에서는 카드 출력하지 않음)
+
+
+    def _open_macd_dialog(self, code: str):
+        # 중복 오픈 방지
+        if not hasattr(self, "_macd_dialogs"):
+            self._macd_dialogs = {}
+        code6 = str(code)[-6:].zfill(6)
+
+        dlg = self._macd_dialogs.get(code6)
+        if dlg and dlg.isVisible():
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+
+        from core.macd_dialog import MacdDialog
+        dlg = MacdDialog(code=code6, bridge=self.bridge, parent=self)
+        # 필요시 초기 데이터 재요청
+        if hasattr(self.bridge, "request_minutes_bars"):
+            try: self.bridge.request_minutes_bars(code6)
+            except Exception: pass
+        if hasattr(self.bridge, "request_daily_bars"):
+            try: self.bridge.request_daily_bars(code6)
+            except Exception: pass
+
+        dlg.show()  # exec_()로 완전 모달도 가능
+        self._macd_dialogs[code6] = dlg
 
     @pyqtSlot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
-        # self.text_result.append(f"{code} | MACD:{macd:.2f}  Signal:{signal:.2f}  Hist:{hist:.2f}")
-        dlg = self.macd_windows.get(code)
-        if dlg is None and getattr(self, "auto_open_macd_modal", True):
-            self._open_macd_modal(code)
-            dlg = self.macd_windows.get(code)
-        if dlg is not None:
-            dlg.update_data(macd, signal, hist)
+        """엔진/브릿지에서 올라오는 MACD 실시간 수신 슬롯"""
+        # 상태바에 짧게 표시
+        self.status.showMessage(f"[MACD] {code}  M:{macd:.2f}  S:{signal:.2f}  H:{hist:.2f}", 2500)
+
+        # 모달 MACD 다이얼로그가 열린 경우 업데이트 시도
+        dlg = self.macd_dialogs.get(code)
+        if dlg and hasattr(dlg, "push_point"):
+            try:
+                dlg.push_point(macd=macd, signal=signal, hist=hist)
+            except Exception as e:
+                self.append_log(f"[MACD dlg] update fail for {code}: {e}")
+
+        logger.info(f"[MACD] {code} | MACD:{macd:.2f}  Signal:{signal:.2f}  Hist:{hist:.2f}")
+        self.bridge.macd_data_received.connect(self.on_macd_data)
+
+
+    @pyqtSlot(str, str, dict)
+    def on_macd_series_ready(self, code: str, tf: str, series: dict):
+        dlg = self._macd_dialogs.get(code)
+        if not dlg:
+            # 아직 안 열렸다면 자동 오픈
+            self._open_macd_dialog(code)
+            dlg = self._macd_dialogs.get(code)
+        if dlg:
+            dlg.update_series(tf, series)
 
     @staticmethod
     def _pick(payload, keys, default="-"):
@@ -760,6 +649,7 @@ class MainWindow(QMainWindow):
                 flat.setdefault(k, v)
 
         logger.debug("[UI] after flat keys: %s", list(flat.keys()))
+
 
         # ── 여기부터는 flat 기준으로 그대로 사용 ──
         code = (flat.get("stock_code") or "").strip()
@@ -829,6 +719,9 @@ class MainWindow(QMainWindow):
         dlg = self.macd_windows.get(code)
         if dlg is not None:
             dlg.update_quote(cur, rt_val)
+
+        if code and code not in self._macd_dialogs:
+            self._open_macd_dialog(code)
 
         # ✅ 자동매매 트리거 (체크박스 켜진 경우에만 내부에서 실행)
         self._trigger_auto_trade(payload)
