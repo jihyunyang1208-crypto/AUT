@@ -11,7 +11,6 @@ from PyQt5.QtWidgets import QApplication
 
 from utils.utils import load_api_keys
 from utils.token_manager import get_access_token
-from monitor_macd import start_monitoring
 from core.websocket_client import WebSocketClient
 
 from strategy.filter_1_finance import run_finance_filter
@@ -84,6 +83,8 @@ class Engine(QObject):
     - WebSocketClient 연결/수신
     - 신규 종목 감지 시 MACD 모니터링 연결
     """
+    initialization_complete = pyqtSignal()
+
     def __init__(self, bridge: AsyncBridge, parent=None):
         super().__init__(parent)
         self.bridge = bridge
@@ -182,13 +183,11 @@ class Engine(QObject):
                 self.bridge.log.emit("[Engine] Reusing existing WebSocketClient")
                 
 
-            async def handle_websocket():
-                await self.websocket_client.connect()
-                await self.websocket_client.receive_messages()
+            self.websocket_client.start(loop=self.loop)
+            
+            self.bridge.log.emit("🌐 WebSocket 클라이언트 시작")
+            self.initialization_complete.emit()
 
-            # 4) 비동기 태스크 실행 (백그라운드 루프에 등록)
-            asyncio.run_coroutine_threadsafe(handle_websocket(), self.loop)
-            self.bridge.log.emit("🌐 WebSocket 연결 및 수신 시작")
 
 
 
@@ -449,34 +448,9 @@ def main():
 
     engine = Engine(bridge)
 
-    # post 방식 API 컨트롤러
-    market_api = getattr(engine, "market_api", None)
-    if market_api is None:
-        appkey, secretkey = load_api_keys()
-        access_token = get_access_token(appkey, secretkey)
-        market_api = SimpleMarketAPI(token=access_token)
-        # 엔진에서도 동일 인스턴스를 쓰게 연결
-        setattr(engine, "market_api", market_api)
-
-    def refresh_token_cb():
-        ak, sk = load_api_keys()
-        return get_access_token(ak, sk)
-
-    # WS URI 준비 (환경변수 없으면 기본값 사용)
-    WS_URI = os.getenv("WS_URI") or DEFAULT_WS_URI
-    logger.info("[MAIN] WS_URI=%s", WS_URI)
-
-    # WebSocket 클라이언트 (동일 bridge 인스턴스 주입!)
-    ws = WebSocketClient(
-        uri=WS_URI,
-        token=market_api.token,
-        market_api=market_api,
-        bridge=bridge,
-        dedup_ttl_sec=3,
-        detail_timeout_sec=6.0,
-        refresh_token_cb=refresh_token_cb,
-    )
-
+    # 🌟 수정: main() 함수에서 WebSocketClient를 직접 생성하지 않습니다.
+    # 🌟 대신 Engine의 initialize() 메서드에 모든 책임을 위임합니다.
+    
     # UI 생성
     project_root = os.getcwd()
     ui = MainWindow(
@@ -485,21 +459,21 @@ def main():
         perform_filtering_cb=perform_filtering,
         project_root=project_root,
     )
-
+    
     # 브릿지 → UI 슬롯 연결 (MainWindow 내에서 이미 연결했다면 중복 연결은 생략 가능)
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
 
     ui.show()
 
+    # 🌟 수정: Engine의 루프만 시작하고, WS 클라이언트 초기화 및 시작은 Engine.initialize()에 맡깁니다.
+    engine.start_loop()
+    
     # 프로그램 시작 시 자동 초기화 (토큰/WS 등 엔진 초기화)
     QTimer.singleShot(0, ui.on_click_init)
-
-    # 엔진 루프 시작 후, WS 시작(가능하면 같은 루프 사용)
-    engine.start_loop()
-    ws.start(getattr(engine, "loop", None))
 
     sys.exit(app.exec_())
 
 if __name__ == "__main__":
     main()
+

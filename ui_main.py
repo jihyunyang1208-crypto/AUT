@@ -134,6 +134,8 @@ class MainWindow(QMainWindow):
         self.project_root = project_root
         self._macd_dialogs: dict[str, QDialog] = {}
 
+
+
         # 상단 툴바
         self._build_toolbar()
 
@@ -157,6 +159,7 @@ class MainWindow(QMainWindow):
         self.btn_filter = QPushButton("종목 필터링 실행 (재무+기술)")
         self.list_conditions = QListWidget()
         self.lbl_cond_info = QLabel("0개 / 선택: 0")
+
 
         left.addWidget(self.search_conditions)
         left.addWidget(QLabel("조건식 목록"))
@@ -351,6 +354,13 @@ class MainWindow(QMainWindow):
         # 종목별 MACD 모달 창 관리
         self.macd_windows: dict[str, MacdDialog] = {}
         self.auto_open_macd_modal = True  # 신규 종목 감지 시 자동 오픈
+        self.setup_signals()
+
+
+    def setup_signals(self):
+        # ★★★ Connect the signal here ★★★
+        self.btn_init.clicked.connect(self.on_click_init)
+        self.engine.initialization_complete.connect(self.on_initialization_complete)
 
     # 종료 시 상태 저장 + 엔진 종료
     def closeEvent(self, event):
@@ -420,10 +430,14 @@ class MainWindow(QMainWindow):
                 return
             self.engine.initialize()
             self.btn_init.setEnabled(False)  # ✅ 중복 눌림 방지
-            self.status.showMessage("초기화 완료: WebSocket 수신 시작", 3000)
-            QMessageBox.information(self, "초기화", "초기화 완료: WebSocket 수신 시작")
+            self.status.showMessage("초기화 진행 중...", 0)
         except Exception as e:
             QMessageBox.critical(self, "초기화 실패", str(e))
+
+    def on_initialization_complete(self):
+        # Engine에서 초기화 완료 시그널을 받으면 이 메서드가 실행됩니다.
+        self.status.showMessage("초기화 완료: WebSocket 수신 시작", 3000)
+        QMessageBox.information(self, "초기화", "초기화 완료: WebSocket 수신 시작")
 
     def on_click_start_condition(self):
         item = self.list_conditions.currentItem()
