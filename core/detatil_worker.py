@@ -1,16 +1,16 @@
 # detail_worker.py
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QObject, Signal, Slot
 from typing import Dict, Any
 
 class DetailWorker(QObject):
-    detailReady = pyqtSignal(dict)     # UI가 받을 이벤트 (payload dict)
-    error = pyqtSignal(str, str)       # (code, message)
+    detailReady = Signal(dict)     # UI가 받을 이벤트 (payload dict)
+    error = Signal(str, str)       # (code, message)
 
     def __init__(self, market_api):
         super().__init__()
         self.api = market_api
 
-    @pyqtSlot(str, str)  # (code, condition_name)
+    @Slot(str, str)  # (code, condition_name)
     def fetch_ka10001(self, code: str, condition_name: str = ""):
         """
         KA10001(주식기본정보)만 호출해서 UI가 바로 쓰는 키로 평탄화 후 이벤트로 전달.

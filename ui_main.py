@@ -8,15 +8,22 @@ import asyncio
 import time
 from collections import deque
 
-from PyQt5.QtCore import (
-    Qt, QSortFilterProxyModel, QTimer, QAbstractTableModel, QModelIndex,
-    pyqtSlot, pyqtSignal, QSettings
-)
-from PyQt5.QtWidgets import (
-    QDialog, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
-    QPushButton, QListWidget, QListWidgetItem, QLabel, QTextEdit, QMessageBox,
-    QLineEdit, QTableView, QToolBar, QAction, QHeaderView, QStatusBar,
-    QCheckBox, QFrame
+# QtCore
+from PySide6.QtCore import (
+    Qt, QTimer, Signal, Slot, QAbstractTableModel, 
+    QModelIndex, QSettings, QSortFilterProxyModel)
+
+
+# QtGui
+from PySide6.QtGui import QAction, QIcon, QKeySequence
+
+# QtWidgets
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QDialog,          
+    QLabel, QPushButton, QComboBox, QVBoxLayout,
+    QHBoxLayout, QStatusBar, QTableWidget, QTableWidgetItem,
+    QLineEdit, QTableView, QToolBar, QHeaderView, QStatusBar,
+    QCheckBox, QFrame, QSplitter, QListWidget, QTextEdit, QListWidgetItem   
 )
 
 # matplotlib (MACD 모달 차트)
@@ -121,7 +128,7 @@ class MainWindow(QMainWindow):
     """
 
     # ✅ 비UI 스레드 → UI 스레드 안전 전환용 시그널 (dict payload)
-    sig_new_stock_detail = pyqtSignal(dict)
+    sig_new_stock_detail = Signal(dict)
 
     def __init__(self, bridge, engine, perform_filtering_cb, project_root: str):
         super().__init__()
@@ -281,14 +288,14 @@ class MainWindow(QMainWindow):
 
         self.bridge.log.connect(self.append_log)
         self.bridge.condition_list_received.connect(self.populate_conditions)
-        self.bridge.new_stock_received.connect(self.on_new_stock)
         self.bridge.macd_data_received.connect(self.on_macd_data)
-        self.bridge.macd_series_ready.connect(self.on_macd_series_ready)
-
+        # self.bridge.macd_series_ready.connect(self.on_macd_series_ready)
+        self.bridge.new_stock_received.connect(self.on_new_stock)
 
         # 상세 정보 (Engine → Bridge → UI)
         if hasattr(self.bridge, "new_stock_detail_received"):
             self.bridge.new_stock_detail_received.connect(self.on_new_stock_detail)
+
 
         # ✅ 어떤 스레드/루프에서 오든 UI 스레드로 안전하게 전환되도록 내부 시그널도 연결
         self.sig_new_stock_detail.connect(self.on_new_stock_detail)
@@ -521,11 +528,11 @@ class MainWindow(QMainWindow):
         self.text_result.append(html)
 
     # -------- 브리지 → UI --------
-    @pyqtSlot(str)
+    @Slot(str)
     def append_log(self, text: str):
         self.text_log.append(str(text))
 
-    @pyqtSlot(list)
+    @Slot(list)
     def populate_conditions(self, conditions: list):
         self.list_conditions.clear()
         normalized = []
@@ -549,7 +556,7 @@ class MainWindow(QMainWindow):
         self._update_cond_info()
         self.append_log(f"✅ 조건식 {len(normalized)}개 로드")
 
-    @pyqtSlot(str)
+    @Slot(str)
     def on_new_stock(self, code: str):
         self.label_new_stock.setText(f"신규 종목: {code}")
         self.append_log(f"🆕 신규 종목: {code}")
@@ -557,56 +564,62 @@ class MainWindow(QMainWindow):
 
 
     def _open_macd_dialog(self, code: str):
-        # 중복 오픈 방지
-        if not hasattr(self, "_macd_dialogs"):
-            self._macd_dialogs = {}
         code6 = str(code)[-6:].zfill(6)
-
         dlg = self._macd_dialogs.get(code6)
         if dlg and dlg.isVisible():
             dlg.raise_()
             dlg.activateWindow()
             return
-
+        
+        # MacdDialog 객체 생성 및 연결
         from core.macd_dialog import MacdDialog
         dlg = MacdDialog(code=code6, bridge=self.bridge, parent=self)
-        # 필요시 초기 데이터 재요청
-        if hasattr(self.bridge, "request_minutes_bars"):
-            try: self.bridge.request_minutes_bars(code6)
-            except Exception: pass
-        if hasattr(self.bridge, "request_daily_bars"):
-            try: self.bridge.request_daily_bars(code6)
-            except Exception: pass
 
-        dlg.show()  # exec_()로 완전 모달도 가능
+        # 다이얼로그가 닫힐 때 딕셔너리에서 제거
+        def on_dialog_closed():
+            if code6 in self._macd_dialogs:
+                del self._macd_dialogs[code6]
+        dlg.finished.connect(on_dialog_closed)
+
+        # ✅ 다이얼로그가 열릴 때만 데이터 요청
+        logger.debug("requesting bars for %s", code6)
+        if hasattr(self.bridge, "request_minutes_bars"):
+            self.bridge.request_minutes_bars(code6)
+        if hasattr(self.bridge, "request_daily_bars"):
+            self.bridge.request_daily_bars(code6)
+
+        dlg.show()
         self._macd_dialogs[code6] = dlg
 
-    @pyqtSlot(str, float, float, float)
+    @Slot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
         """엔진/브릿지에서 올라오는 MACD 실시간 수신 슬롯"""
-        # 상태바에 짧게 표시
-        self.status.showMessage(f"[MACD] {code}  M:{macd:.2f}  S:{signal:.2f}  H:{hist:.2f}", 2500)
+        code6 = str(code)[-6:].zfill(6)
+        self.status.showMessage(f"[MACD] {code6} M:{macd:.2f} S:{signal:.2f} H:{hist:.2f}", 2500)
 
-        # 모달 MACD 다이얼로그가 열린 경우 업데이트 시도
-        dlg = self.macd_dialogs.get(code)
+        dlg = self._macd_dialogs.get(code6)
         if dlg and hasattr(dlg, "push_point"):
             try:
+                # `MacdDialog`에 `push_point` 메서드가 추가되었음.
                 dlg.push_point(macd=macd, signal=signal, hist=hist)
             except Exception as e:
-                self.append_log(f"[MACD dlg] update fail for {code}: {e}")
+                logger.error(f"[MACD dlg] update fail for {code6}: {e}")
+        
+        logger.info(f"[MACD] {code6} | MACD:{macd:.2f} Signal:{signal:.2f} Hist:{hist:.2f}")
 
-        logger.info(f"[MACD] {code} | MACD:{macd:.2f}  Signal:{signal:.2f}  Hist:{hist:.2f}")
-        self.bridge.macd_data_received.connect(self.on_macd_data)
 
-
-    @pyqtSlot(str, str, dict)
+    @Slot(str, str, dict)
     def on_macd_series_ready(self, code: str, tf: str, series: dict):
-        dlg = self._macd_dialogs.get(code)
+        code6 = str(code)[-6:].zfill(6)
+        dlg = self._macd_dialogs.get(code6)
+        
         if not dlg:
-            # 아직 안 열렸다면 자동 오픈
-            self._open_macd_dialog(code)
-            dlg = self._macd_dialogs.get(code)
+            # 다이얼로그가 아직 안 열렸다면, 열고 데이터를 전달
+            self._open_macd_dialog(code6)
+            dlg = self._macd_dialogs.get(code6)
+
         if dlg:
+            # `MacdDialog`에 `update_series` 메서드가 추가되었음.
             dlg.update_series(tf, series)
 
     @staticmethod
@@ -643,11 +656,11 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 self.append_log("⚠️ asyncio 루프 없음: auto-trade 스킵")
 
-    @pyqtSlot(dict)
+    @Slot(dict)
     def on_new_stock_detail(self, payload: dict):
         logger.info("[UI] on_new_stock_detail: code=%s, cond=%s",
                     payload.get("stock_code"), payload.get("condition_name"))
-        logger.debug("[UI] payload keys: %s", list(payload.keys()))
+        #logger.debug("[UI] payload keys: %s", list(payload.keys()))
 
         # ── KA10015 전용: 리스트의 첫 행(row0)을 최상위로 올림 ──
         row0 = None
@@ -662,7 +675,7 @@ class MainWindow(QMainWindow):
             for k, v in row0.items():
                 flat.setdefault(k, v)
 
-        logger.debug("[UI] after flat keys: %s", list(flat.keys()))
+        # logger.debug("[UI] after flat keys: %s", list(flat.keys()))
 
 
         # ── 여기부터는 flat 기준으로 그대로 사용 ──
@@ -730,8 +743,22 @@ class MainWindow(QMainWindow):
             self.label_new_stock.setText(f"신규 종목: {code}")
 
         # ✅ 모달 배지(현재가/등락률) 업데이트
-        dlg = self.macd_windows.get(code)
+        code = (payload.get("stock_code") or "").strip()
+        dlg = self._macd_dialogs.get(code)
+        if not dlg:
+            self._open_macd_dialog(code)
+            # _open_macd_dialog()는 다이얼로그를 생성하고 딕셔너리에 저장합니다.
+            # 따라서 다시 가져올 필요 없이 dlg 변수에 할당받아 바로 사용 가능
+            dlg = self._macd_dialogs.get(code)
+
         if dlg is not None:
+            cur = self._pick(payload, ["cur_prc", "stck_prpr", "price"])
+            rt_val = float(self._pick(payload, ["flu_rt", "prdy_ctrt"]).replace("%", "").replace(",", ""))
+            dlg.update_quote(cur, rt_val)
+
+        # ✅ 다이얼로그가 열려있지 않으면 자동으로 열고, 데이터 요청은 `_open_macd_dialog`에서 처리
+        if code and code not in self._macd_dialogs:
+            self._open_macd_dialog(code)
             dlg.update_quote(cur, rt_val)
 
         if code and code not in self._macd_dialogs:

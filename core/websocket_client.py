@@ -231,7 +231,7 @@ class WebSocketClient:
         try:
             self.websocket = await websockets.connect(self.uri)
             self.connected = True
-            logger.debug("🟢 WebSocket 연결 성공")
+            self.bridge.log.emit("🟢 WebSocket 연결 성공")
 
             await self.send_message({"trnm": "LOGIN", "token": self.token})
 
@@ -243,7 +243,7 @@ class WebSocketClient:
 
             return True
         except Exception as e:
-            logger.error("❌ WebSocket 연결 실패: %s", e, exc_info=True)
+            self.bridge.log.emit("❌ WebSocket 연결 실패: %s", e, exc_info=True)
             self.connected = False
             return False
         finally:
@@ -350,21 +350,21 @@ class WebSocketClient:
                 # 1) 로그인
                 if trnm == "LOGIN":
                     if response.get("return_code") != 0:
-                        logger.debug(f"❌ 로그인 실패: {response.get('return_msg')}")
+                        self.bridge.log.emit(f"❌ 로그인 실패: {response.get('return_msg')}")
                         # (옵션) 토큰 갱신 후 재시도
                         if self.refresh_token_cb:
                             try:
                                 new_token = self.refresh_token_cb()
                                 if new_token:
                                     self.token = new_token
-                                    logger.debug("🔁 토큰 갱신 후 재로그인 시도")
+                                    self.bridge.log.emit("🔁 토큰 갱신 후 재로그인 시도")
                                     await self._send_raw({"trnm": "LOGIN", "token": self.token})
                                     continue
                             except Exception as e:
                                 logger.debug(f"⚠️ 토큰 갱신 실패: {e}")
                         break
                     else:
-                        logger.debug("🔐 로그인 성공")
+                        self.bridge.log.emit("🔐 로그인 성공")
                         await self.request_condition_list()
 
                 # 2) 서버 시스템 메시지

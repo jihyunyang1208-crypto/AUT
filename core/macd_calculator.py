@@ -1,202 +1,102 @@
 # core/macd_calculator.py
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Dict, Any, Tuple
 import pandas as pd
+from datetime import datetime, timezone, timedelta
+from PySide6.QtCore import QObject, Signal
 
-# =============== 공통 유틸 ===============
+KST = timezone(timedelta(hours=9))
 
-def _pick(d: Dict[str, Any], keys: List[str], default=None):
-    for k in keys:
-        v = d.get(k)
-        if v not in (None, "", "-"):
-            return v
-    return default
-
-def _to_float(x) -> Optional[float]:
-    try:
-        s = str(x).replace(",", "")
-        return float(s)
-    except Exception:
-        return None
-
-def _parse_dt_ymd(s: str) -> Optional[pd.Timestamp]:
-    """YYYYMMDD → Timestamp"""
-    try:
-        s = str(s)
-        return pd.to_datetime(s, format="%Y%m%d", errors="coerce")
-    except Exception:
-        return None
-
-def _parse_dt_ymd_hms(d: str, t: str) -> Optional[pd.Timestamp]:
-    """(YYYYMMDD, HHMMSS) → Timestamp"""
-    try:
-        d = str(d); t = str(t).zfill(6)
-        return pd.to_datetime(d + t, format="%Y%m%d%H%M%S", errors="coerce")
-    except Exception:
-        return None
-
-# =============== rows → DataFrame 변환 ===============
-
-def rows_to_df_daily(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+class MacdBus(QObject):
     """
-    일봉 응답 rows를 o/h/l/c/volume 로 정규화하여 DatetimeIndex 로 반환
-    허용 키 예:
-      - 날짜: dt
-      - o/h/l/c: open_pric, high_pric, low_pric, close_pric / (fallback: cur_prc)
-      - volume: trqu, acml_vol, now_trde_qty, trde_qty
+    계산 결과를 UI/다이얼로그로 전달하는 공용 버스(브릿지 대체/보조).
+    외부에서 bridge로 연결하고 싶다면, 이 신호를 bridge에 연결해서
+    bridge가 다시 재발행하는 패턴도 가능.
     """
-    recs: List[Tuple[pd.Timestamp, float, float, float, float, float]] = []
-    for r in rows or []:
-        dt = _parse_dt_ymd(_pick(r, ["dt"]))
-        if dt is None:
-            continue
-        o = _to_float(_pick(r, ["open_pric"]))
-        h = _to_float(_pick(r, ["high_pric"]))
-        l = _to_float(_pick(r, ["low_pric"]))
-        c = _to_float(_pick(r, ["close_pric", "cur_prc"]))
-        v = _to_float(_pick(r, ["trqu", "acml_vol", "now_trde_qty", "trde_qty"]))
-        if None in (o, h, l, c):
-            # 최소 OHLC는 있어야 차트 가능
-            continue
-        recs.append((dt, o, h, l, c, v or 0.0))
+    macd_series_ready = Signal(dict)  # {"code": str, "tf": "5m"/"30m", "series": list[dict]}
 
-    if not recs:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-
-    df = pd.DataFrame(recs, columns=["dt", "open", "high", "low", "close", "volume"])
-    df = df.drop_duplicates(subset=["dt"]).sort_values("dt").set_index("dt")
-    return df
+macd_bus = MacdBus()  # 싱글톤처럼 사용
 
 
-def rows_to_df_minute(rows: List[Dict[str, Any]]) -> pd.DataFrame:
-    """
-    분봉 응답 rows를 o/h/l/c/volume 로 정규화하여 DatetimeIndex 로 반환
-    허용 키 예:
-      - 날짜/시간: dt(YYYYMMDD), cntr_tm(HHMMSS) / (fallback: time)
-      - o/h/l/c: open_pric, high_pric, low_pric, close_pric / (fallback: cur_prc)
-      - volume: trqu, now_trde_qty, trde_qty
-    """
-    recs: List[Tuple[pd.Timestamp, float, float, float, float, float]] = []
-    for r in rows or []:
-        d = _pick(r, ["dt"])
-        t = _pick(r, ["cntr_tm", "time"], "000000")
-        ts = _parse_dt_ymd_hms(d, t)
-        if ts is None:
-            continue
-        o = _to_float(_pick(r, ["open_pric"]))
-        h = _to_float(_pick(r, ["high_pric"]))
-        l = _to_float(_pick(r, ["low_pric"]))
-        c = _to_float(_pick(r, ["close_pric", "cur_prc"]))
-        v = _to_float(_pick(r, ["trqu", "now_trde_qty", "trde_qty"]))
-        if None in (o, h, l, c):
-            continue
-        recs.append((ts, o, h, l, c, v or 0.0))
+class MacdCalculator:
+    """코드+타임프레임별 상태를 내부에 유지하여 증분 MACD를 빠르게 계산"""
+    def __init__(self, fast=12, slow=26, signal=9):
+        self.fast = fast
+        self.slow = slow
+        self.signal = signal
+        # 상태 저장: {(code, tf): {"ema_fast": float, "ema_slow": float, "ema_signal": float, ...}}
+        self._states: Dict[Tuple[str, str], Dict[str, float]] = {}
 
-    if not recs:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    # 외부에 노출되는 단 하나의 진입점 -----------------------------
+    def apply_rows(self, code: str, tf: str, rows: List[Dict[str, Any]], need: int = 120) -> None:
+        """
+        rows(원시 분봉 배열)를 받아 내부에서 DataFrame 변환 → MACD 계산 → series 직렬화 → 신호 emit까지 수행.
+        """
+        df = self._rows_to_df_minute(rows)
+        if df.empty or "close" not in df.columns:
+            return
 
-    df = pd.DataFrame(recs, columns=["ts", "open", "high", "low", "close", "volume"])
-    df = df.drop_duplicates(subset=["ts"]).sort_values("ts").set_index("ts")
-    return df
+        # 과거로 초기화 + full 계산
+        state, macd_df = self._init_state_from_history(df["close"])
+        self._states[(code, tf)] = state
 
-# =============== MACD 계산 (pandas EMA) ===============
+        # 최근 need개 직렬화
+        payload = self._to_series_payload(macd_df.tail(need))
+        macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "series": payload})
 
-def _ema(series: pd.Series, span: int) -> pd.Series:
-    # adjust=False 로 지수평활(지연 덜 생김), min_periods=span 로 안정화
-    return series.ewm(span=span, adjust=False, min_periods=span).mean()
+    # 내부 유틸들 -----------------------------------------------
+    def _rows_to_df_minute(self, rows: List[Dict[str, Any]]) -> pd.DataFrame:
+        """
+        rows 예시: [{"ts":"2025-08-27T14:30:00+09:00","open":..., "high":..., "low":..., "close":..., "vol":...}, ...]
+        API 포맷에 맞게 여기서만 수정하면 외부 호출부는 바꿀 필요 없음.
+        """
+        if not rows:
+            return pd.DataFrame()
 
-def compute_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
-    """
-    close 시리즈로 MACD / signal / hist 계산
-    반환: DataFrame[macd, signal, hist]
-    """
-    close = pd.to_numeric(close, errors="coerce").dropna()
-    if close.empty:
-        return pd.DataFrame(columns=["macd", "signal", "hist"])
+        df = pd.DataFrame(rows)
+        # 타임스탬프 표준화
+        if "ts" in df.columns:
+            df["ts"] = pd.to_datetime(df["ts"])
+            df = df.sort_values("ts").reset_index(drop=True)
+            df = df.set_index("ts")
+        # 필요한 컬럼만 남기기(필요 시 조정)
+        keep = [c for c in ["open", "high", "low", "close", "vol"] if c in df.columns]
+        return df[keep]
 
-    ema_fast = _ema(close, fast)
-    ema_slow = _ema(close, slow)
-    macd = ema_fast - ema_slow
-    signal_line = _ema(macd, signal)
-    hist = macd - signal_line
+    def _init_state_from_history(self, close_series: pd.Series) -> Tuple[Dict[str, float], pd.DataFrame]:
+        ema_fast = close_series.ewm(span=self.fast, adjust=False).mean()
+        ema_slow = close_series.ewm(span=self.slow, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=self.signal, adjust=False).mean()
+        hist = macd_line - signal_line
 
-    out = pd.DataFrame({"macd": macd, "signal": signal_line, "hist": hist})
-    return out
-
-# =============== 증분형 EMA/MACD 갱신 ===============
-
-@dataclass
-class MacdState:
-    fast: float
-    slow: float
-    signal: float
-
-@dataclass
-class MacdParams:
-    fast: int = 12
-    slow: int = 26
-    signal: int = 9
-
-    @property
-    def k_fast(self) -> float:
-        return 2.0 / (self.fast + 1.0)
-
-    @property
-    def k_slow(self) -> float:
-        return 2.0 / (self.slow + 1.0)
-
-    @property
-    def k_signal(self) -> float:
-        return 2.0 / (self.signal + 1.0)
-
-def seed_macd_state(close: pd.Series, p: MacdParams = MacdParams()) -> Optional[MacdState]:
-    """
-    초기 구간으로 EMA들을 계산해 상태를 시드합니다.
-    최소 slow+signal 개수 정도는 있어야 안정적.
-    """
-    if len(close) < max(p.slow, p.signal) + 1:
-        return None
-    ema_fast = _ema(close, p.fast).iloc[-1]
-    ema_slow = _ema(close, p.slow).iloc[-1]
-    macd_last = ema_fast - ema_slow
-    signal_last = _ema(pd.Series(macd_last, index=[close.index[-1]]).reindex(close.index, method="ffill"), p.signal).iloc[-1]
-    # 위 구현은 마지막 macd만으로 signal을 만드는 케이스가 있어 부정확할 수 있음.
-    # 더 정확히는 전체 macd 시리즈로 signal을 계산:
-    macd_series = _ema(close, p.fast) - _ema(close, p.slow)
-    signal_last = _ema(macd_series, p.signal).iloc[-1]
-    return MacdState(fast=float(ema_fast), slow=float(ema_slow), signal=float(signal_last))
-
-def update_macd_incremental(state: MacdState, new_close: float, p: MacdParams = MacdParams()) -> Tuple[MacdState, Dict[str, float]]:
-    """
-    새 종가 1개가 들어올 때 EMA들을 갱신하고 macd/signal/hist를 반환
-    EMA_t = EMA_{t-1} + k * (price_t - EMA_{t-1})
-    """
-    kf, ks, ksiga = p.k_fast, p.k_slow, p.k_signal
-    fast_new = state.fast + kf * (new_close - state.fast)
-    slow_new = state.slow + ks * (new_close - state.slow)
-    macd_new = fast_new - slow_new
-    signal_new = state.signal + ksiga * (macd_new - state.signal)
-    hist_new = macd_new - signal_new
-    return (
-        MacdState(fast=fast_new, slow=slow_new, signal=signal_new),
-        {"macd": macd_new, "signal": signal_new, "hist": hist_new},
-    )
-
-# =============== 직렬화/페이로드 헬퍼 ===============
-
-def to_series_payload(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """
-    MACD DataFrame을 [{t, macd, signal, hist}, ...] 로 직렬화 (UI/브릿지 전달용)
-    """
-    if df is None or df.empty:
-        return []
-    out: List[Dict[str, Any]] = []
-    for ts, row in df.iterrows():
-        out.append({
-            "t": str(pd.Timestamp(ts)),
-            "macd": float(row.get("macd", float("nan"))),
-            "signal": float(row.get("signal", float("nan"))),
-            "hist": float(row.get("hist", float("nan"))),
+        macd_df = pd.DataFrame({
+            "close": close_series,
+            "macd": macd_line,
+            "signal": signal_line,
+            "hist": hist
         })
-    return out
+
+        state = {
+            "ema_fast": float(ema_fast.iloc[-1]),
+            "ema_slow": float(ema_slow.iloc[-1]),
+            "ema_signal": float(signal_line.iloc[-1]),
+            "last_macd": float(macd_line.iloc[-1]),
+            "last_hist": float(hist.iloc[-1]),
+        }
+        return state, macd_df
+
+    def _to_series_payload(self, df: pd.DataFrame) -> list[dict]:
+        """
+        UI/다이얼로그가 바로 쓰기 쉬운 형태로 직렬화
+        [{"t":"2025-08-27T14:35:00+09:00","macd":..., "signal":..., "hist":...}, ...]
+        """
+        out = []
+        for ts, row in df.iterrows():
+            t = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+            out.append({"t": t, "macd": float(row["macd"]), "signal": float(row["signal"]), "hist": float(row["hist"])})
+        return out
+
+
+# 전역(혹은 DI로 주입)
+calculator = MacdCalculator()

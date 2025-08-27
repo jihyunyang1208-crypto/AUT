@@ -72,6 +72,8 @@ class DetailInformationGetter:
 
 	# --- ka10080: 분봉 차트 ---
 	def fetch_minute_chart_ka10080(self, code: str, *, tic_scope=5, upd_stkpc_tp="1", need=350, exchange_prefix="KRX") -> Dict[str,Any]:
+		logger.debug("fetch_minute_chart_ka10080")
+
 		url = f"{self.base_url}/api/dostk/chart"
 		body = {"stk_cd": _stkcd(code, exchange_prefix), "tic_scope": str(tic_scope), "upd_stkpc_tp": str(upd_stkpc_tp)}
 		rows_all: List[Dict[str,Any]] = []
@@ -96,7 +98,60 @@ class DetailInformationGetter:
 		uniq = { key(r): r for r in rows_all }
 		rows = [uniq[k] for k in sorted(uniq.keys())]
 		if need and len(rows)>need: rows = rows[-need:]
+		logger.debug("stock_code: %s, tic_scope: %s", _code6(code),str(tic_scope))
+
 		return {"stock_code": _code6(code), "tic_scope": str(tic_scope), "rows": rows}
+
+	def emit_macd_for_ka10080(
+		self,
+		bridge,				  # AsyncBridge
+		code: str,
+		*,
+		tic_scope: int = 5,
+		upd_stkpc_tp: str = "1",
+		need: int = 350,
+		exchange_prefix: str = "KRX",
+		max_points: int = 200,
+	) -> dict:
+		"""
+		ka10080 분봉 rows -> MACD 계산 -> 브릿지 시그널 emit
+		반환: payload(dict) 그대로 리턴(테스트/로그 용)
+		"""
+		packet = self.fetch_minute_chart_ka10080(
+			code, tic_scope=tic_scope, upd_stkpc_tp=upd_stkpc_tp, need=need, exchange_prefix=exchange_prefix
+		)
+		rows = packet.get("rows", [])
+		code6 = packet.get("stock_code")
+		tic = int(packet.get("tic_scope", tic_scope))
+		if hasattr(bridge, "minute_bars_received"):
+			bridge.minute_bars_received.emit(code6, rows)
+
+		payload = make_macd_payload(code6, tic, rows, max_points=max_points)
+
+		# 전체 MACD 갱신
+		if hasattr(bridge, "macd_updated"):
+			bridge.macd_updated.emit({
+				"code": payload["code"],
+				"tic_scope": payload["tic_scope"],
+				"points": payload["points"],
+			})
+
+		# 트리거 발생 시 알림
+		if payload.get("buy") and hasattr(bridge, "macd_buy_signal"):
+			bridge.macd_buy_signal.emit({
+				"code": payload["code"],
+				"why": payload.get("why_buy", ""),
+				"ts": payload.get("ts"),
+			})
+		if payload.get("sell") and hasattr(bridge, "macd_sell_signal"):
+			bridge.macd_sell_signal.emit({
+				"code": payload["code"],
+				"why": payload.get("why_sell", ""),
+				"ts": payload.get("ts"),
+			})
+
+		logger.debug("[MACD] emitted for %s (%s)", code6, tic)
+		return payload
 
 	# --- ka10081: 일봉 차트 ---
 	def fetch_daily_chart_ka10081(self, code: str, *, base_dt: Optional[str]=None, upd_stkpc_tp: str="1", need: int=400) -> Dict[str,Any]:

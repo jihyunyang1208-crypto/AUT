@@ -4,10 +4,13 @@ import os
 import logging
 import asyncio
 import threading
-from datetime import datetime
+from datetime import datetime, date, timedelta, timezone
+from typing import List, Tuple
 
-from PyQt5.QtCore import QObject, pyqtSignal, QTimer  
-from PyQt5.QtWidgets import QApplication
+
+from PySide6.QtCore import QObject, Signal, Slot, QTimer
+from PySide6.QtWidgets import QApplication
+
 
 from utils.utils import load_api_keys
 from utils.token_manager import get_access_token
@@ -18,19 +21,28 @@ from strategy.filter_2_technical import run_technical_filter
 from core.detail_information_getter import SimpleMarketAPI, DetailInformationGetter
 from typing import Dict, Tuple, List
 import pandas as pd
-from core.macd_calculator import (
-    rows_to_df_minute,
-    rows_to_df_daily,
-    compute_macd,
-    MacdParams,
-    MacdState,
-    seed_macd_state,
-    update_macd_incremental,
-    to_series_payload,
-)
+from core.macd_calculator import calculator, macd_bus  
+import matplotlib
+from matplotlib import rcParams
 
-# ★ UI 모듈
 from ui_main import MainWindow
+
+def _setup_korean_font():
+    import platform
+    sysname = platform.system()
+    if sysname == "Windows":
+        rcParams["font.family"] = "Malgun Gothic"      # ✅ 한글 지원
+    elif sysname == "Darwin":  # macOS
+        rcParams["font.family"] = "AppleGothic"
+    else:  # Linux 등
+        # 설치되어 있다면 아래 중 하나를 선택
+        # sudo apt install fonts-nanum -y  (NanumGothic)
+        rcParams["font.family"] = "NanumGothic"
+
+    rcParams["axes.unicode_minus"] = False   # 마이너스 깨짐 방지
+
+_setup_korean_font()
+
 
 # ─────────────────────────────────────────────────────────
 # 로거 설정
@@ -57,22 +69,28 @@ except NameError:
 # ─────────────────────────────────────────────────────────
 class AsyncBridge(QObject):
     # 로그 문자열
-    log = pyqtSignal(str)
-    # 조건식 목록 수신
-    condition_list_received = pyqtSignal(list)
-    # 신규 종목 코드 수신(선공지)
-    new_stock_received = pyqtSignal(str)
-    # 종목 상세 딕셔너리 수신(후공지)
-    new_stock_detail_received = pyqtSignal(dict)
-    # MACD 데이터 수신
-    macd_data_received = pyqtSignal(str, float, float, float)
+    log = Signal(str)
 
-    macd_series_ready = pyqtSignal(str, str, dict)   # code, tf("5m"/"1d"), series(dict)
-    chart_rows_received = pyqtSignal(str, str, list) # code, tf, rows(list)
+    # 조건식 목록 수신
+    condition_list_received = Signal(list)
+    # 신규 종목 코드 수신(선공지)
+    new_stock_received = Signal(str)
+    # 종목 상세 딕셔너리 수신(후공지)
+    new_stock_detail_received = Signal(dict)
+    # MACD 데이터 수신
+    macd_data_received = Signal(str, float, float, float)
+
+    chart_rows_received = Signal(str, str, list) # code, tf, rows(list)
+    macd_series_ready = Signal(dict)  # {"code","tf","series":[...]}
+
+    macd_updated = Signal(dict)
+    macd_buy_signal = Signal(dict)
+    macd_sell_signal = Signal(dict)
+    minute_bars_received = Signal(str, list)  # code, rows
+
 
     def __init__(self):
         super().__init__()
-
 
 # ─────────────────────────────────────────────────────────
 # Engine: 백그라운드 asyncio 루프 + WS 클라이언트 관리
@@ -83,11 +101,13 @@ class Engine(QObject):
     - WebSocketClient 연결/수신
     - 신규 종목 감지 시 MACD 모니터링 연결
     """
-    initialization_complete = pyqtSignal()
+    initialization_complete = Signal()
 
-    def __init__(self, bridge: AsyncBridge, parent=None):
+    def __init__(self, bridge, getter: DetailInformationGetter, parent=None):
         super().__init__(parent)
         self.bridge = bridge
+        self.getter = getter
+
 
         # asyncio 이벤트 루프 (별도 스레드)
         self.loop = asyncio.new_event_loop()
@@ -173,8 +193,8 @@ class Engine(QObject):
                     market_api=self.market_api,                 
                     socketio=None,
                     on_condition_list=self._on_condition_list,
-                    on_new_stock=self._on_new_stock,
-                    on_new_stock_detail=self._on_new_stock_detail,
+                    #on_new_stock=self._on_new_stock,
+                    #on_new_stock_detail=self._on_new_stock_detail,
                     dedup_ttl_sec=3,
                     detail_timeout_sec=6.0,
                     refresh_token_cb=self._refresh_token_sync,  # (옵션) WS 재로그인용
@@ -215,60 +235,6 @@ class Engine(QObject):
         self.bridge.log.emit("[Engine] 조건식 수신")
         self.bridge.condition_list_received.emit(conditions or [])
 
-    def _on_new_stock_detail(self, payload: dict):
-        # 1) UI로 바로 송신
-        self.bridge.new_stock_detail_received.emit(payload)
-
-        # 2) MACD 모듈에 rows 전달
-        try:
-            rows = payload.get("rows") or []
-            code = payload.get("stock_code")
-            if rows and code:
-                threading.Thread(
-                    target=self._run_macd_from_rows, args=(code, rows), daemon=True
-                ).start()
-        except Exception as e:
-            self.bridge.log.emit(f"❌ MACD rows 전달 실패: {e}")
-
-
-
-    def _on_new_stock(self, stock_code: str):
-        # 신규 종목 선공지 수신
-        self.bridge.log.emit(f"📈 신규 종목 감지: {stock_code}, MACD 모니터링 시작")
-
-
-        try:
-            # 단일 종목 실시간 MACD 모니터링 시작
-            self.start_macd_stream(stock_code, poll_sec=30, need5m=350, need1d=400)
-            # 선공지: 코드만 UI로
-            self.bridge.new_stock_received.emit(stock_code)
-            asyncio.run_coroutine_threadsafe(fetch_and_emit_macd_snapshot(), self.loop)
-
-        except Exception as e:
-            self.bridge.log.emit(f"❌ MACD 모니터링 시작 실패({stock_code}): {e}")
-
-        async def fetch_and_emit_macd_snapshot():
-            try:
-                if not self.detail:
-                    self.bridge.log.emit("[MACD] detail getter not ready")
-                    return
-                # 5분봉 200개 정도 → MACD 안정화
-                js = await self.detail.fetch_minute_chart_ka10080_async(
-                    stock_code, tic_scope="5", upd_stkpc_tp="1", max_bars=200
-                )
-                rows = js.get("rows") or []
-                from core.macd_calculator import rows_to_df_minute, compute_macd_last_from_close
-                df = rows_to_df_minute(rows)
-                m, s, h = compute_macd_last_from_close(df["close"]) if not df.empty else (None, None, None)
-                if m is None:
-                    self.bridge.log.emit(f"[MACD] no minute rows for {stock_code}")
-                    return
-                # UI로 전달
-                self.bridge.macd_data_received.emit(stock_code, m, s, h)
-            except Exception as e:
-                self.bridge.log.emit(f"[MACD] snapshot error {stock_code}: {e}")
-
-
 
     # ---------- 조건검색 제어 ----------
     def send_condition_search_request(self, seq: str):
@@ -295,92 +261,102 @@ class Engine(QObject):
 
     # 조건검색에서 편입(I) 신호를 받으면 engine.start_macd_stream(code)만 호출하면 됩니다.
     # 초기 한 번은 풀 계산으로 시딩하고, 이후는 새 캔들만 증분 반영합니다.
-    def start_macd_stream(self, code: str, *, poll_sec: int = 30, need5m: int = 350, need1d: int = 400):
-        """분봉은 주기 폴링+증분 갱신, 일봉은 초기화만 계산"""
+    def start_macd_stream(self, code: str, poll_sec: int = 30, need5m: int = 350, need1d: int = 400):
+        """
+        분봉은 주기 폴링 + 증분 갱신, 일봉은 초기화만 계산(필요 시 유지)
+        리팩터링: rows_to_df_* / init_state_from_history / to_series_payload / 내부 큐 제거.
+        """
+        logger.debug("111 start_macd_stream")
+
+        # 루프 존재/실행 확인 (필요 시)
+        if not hasattr(self, "loop") or self.loop is None:
+            self.bridge.log.emit("❌ 이벤트 루프가 초기화되지 않았습니다.")
+            return
+        if self.loop.is_closed():
+            self.bridge.log.emit("❌ 이벤트 루프가 이미 종료되었습니다.")
+            return
+
+        # 재진입 방지
+        if not hasattr(self, "_minute_stream_tasks"):
+            self._minute_stream_tasks = {}
         if code in self._minute_stream_tasks:
             self.bridge.log.emit(f"↩️ 이미 스트림 중: {code}")
+            logger.debug("222 start_macd_stream (already running)")
             return
 
         async def job():
             try:
-                # 1) 초기: 5분봉 큰 히스토리 → 상태 시딩
+                logger.debug("333 macd stream job 실행")
+
+                # 1) 초기: 5분봉 대량 → 계산기 내부에서 변환/계산/emit
                 res5 = await asyncio.to_thread(self.detail.fetch_minute_chart_ka10080, code, tic_scope=5, need=need5m)
-                rows5 = res5.get("rows", [])
+                rows5 = res5.get("rows", []) or []
                 self.bridge.chart_rows_received.emit(code, "5m", rows5)
+                calculator.apply_rows(code=code, tf="5m", rows=rows5, need=need5m)
 
-                df5 = rows_to_df_minute(rows5)
-                if not df5.empty:
-                    # 상태 + full MACD 생성
-                    state5, macd_full5 = init_state_from_history(df5["close"])
-                    self._macd_states[(code, "5m")] = state5
-                    payload5 = to_series_payload(macd_full5.tail(need5m))
-                    try: self._macd_queue.put_nowait({"code": code, "tf": "5m", "series": payload5})
-                    except asyncio.QueueFull: pass
-
-                # 2) 초기: 일봉도 계산(증분은 생략해도 무방)
-                end = date.today()
+                # 2) 초기: 일봉 (증분 생략)
                 today = date.today().strftime("%Y%m%d")
-
                 res1d = await asyncio.to_thread(
                     self.detail.fetch_daily_chart_ka10081,
                     code,
-                    base_dt=today,       # 기준일(오늘) 기준으로 과거가 내려오도록
+                    base_dt=today,
                     upd_stkpc_tp="1",
                     need=need1d
                 )
-                rows1d = res1d.get("rows", [])
+                rows1d = res1d.get("rows", []) or []
                 self.bridge.chart_rows_received.emit(code, "1d", rows1d)
+                calculator.apply_rows(code=code, tf="1d", rows=rows1d, need=need1d)
 
-                df1d = rows_to_df_daily(rows1d)
-                if not df1d.empty:
-                    macd1d = compute_macd(df1d["close"]).dropna().tail(need1d)
-                    payload1d = to_series_payload(macd1d)
-                    try: self._macd_queue.put_nowait({"code": code, "tf": "1d", "series": payload1d})
-                    except asyncio.QueueFull: pass
-
-                # 3) 루프: 분봉 증분 업데이트
+                # 3) 루프: 분봉 증분 (최근 60개만 재조회)
                 while True:
                     await asyncio.sleep(poll_sec)
-                    # 최근 n개만 다시 받아서 마지막 ts 이후만 반영
-                    res = await asyncio.to_thread(self.detail.fetch_minute_chart_ka10080, code, tic_scope=5, need=60)
-                    rows = res.get("rows", [])
-                    df = rows_to_df_minute(rows)
+                    try:
+                        res_inc = await asyncio.to_thread(self.detail.fetch_minute_chart_ka10080, code, tic_scope=5, need=60)
+                        rows_inc = res_inc.get("rows", []) or []
+                        if not rows_inc:
+                            continue
+                        self.bridge.chart_rows_received.emit(code, "5m", rows_inc)
+                        calculator.apply_rows(code=code, tf="5m", rows=rows_inc, need=need5m)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as inner_e:
+                        self.bridge.log.emit(f"⚠️ MACD 증분 갱신 오류({code}): {inner_e}")
+                        logger.exception("incremental update failed")
 
-                    state = self._macd_states.get((code, "5m"))
-                    if state is None:
-                        # 드물지만 상태가 사라졌다면 재시딩
-                        if not df.empty:
-                            state, macd_full = init_state_from_history(df["close"])
-                            self._macd_states[(code, "5m")] = state
-                            payload = to_series_payload(macd_full.tail(need5m))
-                            try: self._macd_queue.put_nowait({"code": code, "tf": "5m", "series": payload})
-                            except asyncio.QueueFull: pass
-                        continue
-
-                    if df.empty:
-                        continue
-
-                    # 새 포인트만 추출하여 증분 업데이트
-                    new_points: List[Tuple[pd.Timestamp, float]] = list(df["close"].items())
-                    inc = update_state_with_points(state, new_points)
-                    if not inc.empty:
-                        # 기존 마지막 구간과 이어 붙이는 건 UI단에서 time index를 기준으로 병합 렌더
-                        payload = to_series_payload(inc)
-                        try: self._macd_queue.put_nowait({"code": code, "tf": "5m", "series": payload})
-                        except asyncio.QueueFull: pass
-
+            except asyncio.CancelledError:
+                self.bridge.log.emit(f"⏹️ MACD 스트림 종료: {code}")
+                logger.info("MACD stream cancelled: %s", code)
+                raise
             except Exception as e:
                 self.bridge.log.emit(f"❌ MACD 증분 스트림 실패({code}): {e}")
+                logger.exception("MACD stream failed")
+            finally:
+                # 태스크 테이블 정리
+                try:
+                    if code in self._minute_stream_tasks:
+                        del self._minute_stream_tasks[code]
+                except Exception:
+                    pass
 
+        # ✅ 이 두 줄은 반드시 함수 내부에 있어야 함 (들여쓰기 주의)
         task = asyncio.run_coroutine_threadsafe(job(), self.loop)
         self._minute_stream_tasks[code] = task
 
+
+    def update_macd_once(self, code: str, tic_scope: int = 5):
+        try:
+            self.getter.emit_macd_for_ka10080(
+                self.bridge, code, tic_scope=tic_scope, need=350, exchange_prefix="KRX"
+            )
+        except Exception:
+            logger.exception("update_macd_once failed for %s", code)
+
+
     def stop_macd_stream(self, code: str):
-        t = self._minute_stream_tasks.pop(code, None)
-        if t:
-            # run_coroutine_threadsafe의 Future는 cancel() 가능
-            t.cancel()
-            self.bridge.log.emit(f"⏹ MACD 스트림 중지: {code}")
+        task = self._minute_stream_tasks.get(code)
+        if task:
+            task.cancel()
+            self.bridge.log.emit(f"🛑 MACD 스트림 중지 요청: {code}")
 
     # ---------- 종료 ----------
     def shutdown(self):
@@ -446,7 +422,8 @@ def main():
     bridge = AsyncBridge()
     logger.info("[MAIN] bridge id=%s", id(bridge))
 
-    engine = Engine(bridge)
+    getter = DetailInformationGetter()
+    engine = Engine(bridge, getter)    
 
     # 🌟 수정: main() 함수에서 WebSocketClient를 직접 생성하지 않습니다.
     # 🌟 대신 Engine의 initialize() 메서드에 모든 책임을 위임합니다.
@@ -460,9 +437,10 @@ def main():
         project_root=project_root,
     )
     
-    # 브릿지 → UI 슬롯 연결 (MainWindow 내에서 이미 연결했다면 중복 연결은 생략 가능)
+    bridge.new_stock_received.connect(engine.start_macd_stream)
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
+
 
     ui.show()
 
