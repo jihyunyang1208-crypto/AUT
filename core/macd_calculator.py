@@ -5,6 +5,9 @@ from datetime import timezone, timedelta
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
+import logging
+logger = logging.getLogger(__name__)
+
 KST = timezone(timedelta(hours=9))
 
 class MacdBus(QObject):
@@ -70,7 +73,11 @@ class MacdCalculator:
                     else:
                         ts = pd.to_datetime(d + "090000", format="%Y%m%d%H%M%S", errors="coerce")
                 else:
-                    ts = pd.to_datetime(r.get("ts"), errors="coerce")
+                    # ✅ 여기 추가: d(날짜)가 없더라도 t(=cntr_tm)가 14자리면 그 자체가 YYYYMMDDHHMMSS
+                    if len(t) == 14 and t.isdigit():
+                        ts = pd.to_datetime(t, format="%Y%m%d%H%M%S", errors="coerce")
+                    else:
+                        ts = pd.to_datetime(r.get("ts"), errors="coerce")
             else:
                 ts = pd.to_datetime(ts, errors="coerce")
 
@@ -143,6 +150,16 @@ def _to_float(x) -> float:
     except Exception:
         return float("nan")
 
+def log_macd_result(payload: dict):
+    code = payload["code"]
+    tf = payload["tf"]
+    series = payload["series"]
+    logger.info(f"--- MACD Calculation Result for {code} ({tf}) ---")
+    for data_point in series[-5:]: # 최근 5개만 출력하여 간결하게
+        logger.info(f"Time: {data_point['t']}, MACD: {data_point['macd']:.2f}, Signal: {data_point['signal']:.2f}, Hist: {data_point['hist']:.2f}")
+    logger.info("---------------------------------------------")
+
 
 # 전역(혹은 DI)
 calculator = MacdCalculator()
+macd_bus.macd_series_ready.connect(log_macd_result)
