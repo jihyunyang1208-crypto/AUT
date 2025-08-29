@@ -1,51 +1,31 @@
+# ui/macd_dialog.py
 from __future__ import annotations
 
 import math
-from typing import Dict, Iterable, List, Optional
+from collections import deque
+from dataclasses import dataclass
+from typing import Deque, Dict, Iterable, List, Optional
 
 import pandas as pd
-
-# ---------------- PySide6 ----------------
 from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
+    QTableWidgetItem, QHeaderView, QCheckBox, QAbstractItemView
+)
 
-# ---------------- Matplotlib ----------------
-import matplotlib
-# ✅ 한글/마이너스 표시를 위한 기본 설정
-matplotlib.rcParams["font.family"] = "Malgun Gothic"   # Windows: Malgun Gothic / macOS: AppleGothic / Linux: NanumGothic
-matplotlib.rcParams["axes.unicode_minus"] = False
+# 전역 MACD 버스
+from core.macd_calculator import macd_bus, calculator
 
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from matplotlib.dates import AutoDateLocator, DateFormatter
-
-# ---------------- 프로젝트 내부 ----------------
-from core.macd_calculator import macd_bus
-
-
-# ---------------- MACD (pandas만 사용) ----------------
-def calc_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
-    if close is None or close.empty:
-        return pd.DataFrame(columns=["macd", "signal", "hist"])
-    ema_f = close.ewm(span=fast, adjust=False).mean()
-    ema_s = close.ewm(span=slow, adjust=False).mean()
-    macd = ema_f - ema_s
-    sig = macd.ewm(span=signal, adjust=False).mean()
-    hist = macd - sig
-    return pd.DataFrame({"macd": macd, "signal": sig, "hist": hist})
-
-
-# ---------------- rows → DataFrame 유틸 ----------------
+# ---- (옵션) raw rows를 받아 MACD 내부계산에 사용하고 싶을 때 ----
 def _parse_dt(date_str: Optional[str], time_str: Optional[str]) -> Optional[pd.Timestamp]:
     if not date_str:
         return None
     ds = str(date_str)
-    if len(ds) == 8 and ds.isdigit():  # YYYYMMDD
+    if len(ds) == 8 and ds.isdigit():
         if time_str and len(str(time_str)) == 6 and str(time_str).isdigit():
             return pd.to_datetime(ds + str(time_str), format="%Y%m%d%H%M%S", errors="coerce")
         return pd.to_datetime(ds, format="%Y%m%d", errors="coerce")
     return pd.to_datetime(ds, errors="coerce")
-
 
 def _to_float(x) -> float:
     if x is None or x == "":
@@ -59,28 +39,18 @@ def _to_float(x) -> float:
         return math.nan
     return -v if neg else v
 
-
 def rows_to_df_minutes(rows: Iterable[dict]) -> pd.DataFrame:
     recs = []
     for r in rows or []:
         d = r.get("base_dt") or r.get("trd_dd") or r.get("dt") or r.get("date")
-        t = r.get("trd_tm") or r.get("time") or r.get("tm")
+        t = r.get("trd_tm") or r.get("time") or r.get("tm") or r.get("cntr_tm")
         ts = _parse_dt(d, t)
         if ts is None or pd.isna(ts):
             continue
-        recs.append({
-            "dt": ts,
-            "open": _to_float(r.get("open_pric") or r.get("open") or r.get("o")),
-            "high": _to_float(r.get("high_pric") or r.get("high") or r.get("h")),
-            "low":  _to_float(r.get("low_pric") or r.get("low") or r.get("l")),
-            "close": _to_float(r.get("close_pric") or r.get("close") or r.get("c")),
-            "volume": _to_float(r.get("trde_qty") or r.get("volume") or r.get("v")),
-        })
+        recs.append({"dt": ts, "close": _to_float(r.get("close_pric") or r.get("close") or r.get("c"))})
     if not recs:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-    df = pd.DataFrame(recs).set_index("dt").sort_index()
-    return df
-
+        return pd.DataFrame(columns=["close"])
+    return pd.DataFrame(recs).set_index("dt").sort_index()
 
 def rows_to_df_daily(rows: Iterable[dict]) -> pd.DataFrame:
     recs = []
@@ -89,273 +59,253 @@ def rows_to_df_daily(rows: Iterable[dict]) -> pd.DataFrame:
         ts = _parse_dt(d, None)
         if ts is None or pd.isna(ts):
             continue
-        recs.append({
-            "dt": ts,
-            "open": _to_float(r.get("open_pric") or r.get("open")),
-            "high": _to_float(r.get("high_pric") or r.get("high")),
-            "low":  _to_float(r.get("low_pric") or r.get("low")),
-            "close": _to_float(r.get("close_pric") or r.get("close")),
-            "volume": _to_float(r.get("trde_qty") or r.get("volume")),
-        })
+        recs.append({"dt": ts, "close": _to_float(r.get("close_pric") or r.get("close"))})
     if not recs:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-    df = pd.DataFrame(recs).set_index("dt").sort_index()
-    return df
+        return pd.DataFrame(columns=["close"])
+    return pd.DataFrame(recs).set_index("dt").sort_index()
 
 
-# ---------------- MACD 모달 다이얼로그 (Matplotlib 일원화) ----------------
+# ---------------- 수치 모니터링 ----------------
+@dataclass
+class MacdPoint:
+    t: pd.Timestamp
+    macd: float
+    signal: float
+    hist: float
+
+
 class MacdDialog(QDialog):
     """
-    - code: 감시 종목코드(6자리)
-    - bridge: (선택) 브릿지 객체. 아래 이름의 시그널이 있으면 자동 연결합니다.
-        * minute_bars_received(code: str, rows: list[dict])
-        * daily_bars_received(code: str, rows: list[dict])
-        * macd_updated(code: str, macd: float, signal: float, hist: float)  # 선택
-        * macd_data_received(code: str, macd: float, signal: float, hist: float)  # 선택
-    - macd_bus.macd_series_ready(dict): {"code","tf","series":[{"t", "macd","signal","hist"}]}
+    차트 없이 수치만 모니터링.
+    - TF: 5m / 30m / 1d
+    - 각 TF 행: 최신 시각, 최신값(MACD/Signal/Hist), MACD 최근10개(+방향), HIST 최근10개(+방향)
+    - 입력: macd_bus.macd_series_ready({"code","tf","series":[{"t","macd","signal","hist"}]})
     """
+    HISTORY_N = 10
+
     def __init__(self, code: str, bridge=None, parent=None, title: Optional[str] = None):
         super().__init__(parent)
-
-        # ------------ 상태 ------------
         self.code = str(code)[-6:].zfill(6)
         self.bridge = bridge
-        self._dfs: Dict[str, pd.DataFrame] = {     # OHLCV/가공 데이터 캐시
-            "5m": pd.DataFrame(),
-            "1d": pd.DataFrame(),
-            "macd_5m": pd.DataFrame(),
-            "macd_1d": pd.DataFrame(),
+
+        self.buffers: Dict[str, Deque[MacdPoint]] = {
+            "5m": deque(maxlen=500),
+            "30m": deque(maxlen=500),
+            "1d": deque(maxlen=500),
         }
-        self._current_tf = "5m"
-        self._sig_connected = False
-        self._quotes: Dict[str, str] = {"price": "", "rate": ""}
 
-        # ------------ 윈도우/상단 UI ------------
-        self.setWindowTitle(title or f"MACD 모니터 - {self.code}")
+        self.setWindowTitle(title or f"MACD 모니터(수치) - {self.code}")
         self.setModal(True)
-        self.setMinimumSize(960, 680)
+        self.setMinimumSize(1100, 420)
 
+        # 상단
         top = QHBoxLayout()
         self.lbl_code = QLabel(f"종목: <b>{self.code}</b>")
         self.lbl_quote = QLabel("")
-        self.lbl_quote.setStyleSheet("font-weight: bold; font-size: 14px;")
-
-        self.cmb_tf = QComboBox()
-        self.cmb_tf.addItems(["5분봉", "일봉"])  # 내부적으로 "5m" / "1d" 맵핑
-        self.btn_refresh = QPushButton("새로고침")
-
+        self.btn_clear = QPushButton("초기화")
+        self.chk_autorefresh = QCheckBox("자동갱신")
+        self.chk_autorefresh.setChecked(True)
         top.addWidget(self.lbl_code)
         top.addStretch(1)
         top.addWidget(self.lbl_quote)
-        top.addSpacing(12)
-        top.addWidget(self.cmb_tf)
-        top.addWidget(self.btn_refresh)
+        top.addSpacing(8)
+        top.addWidget(self.chk_autorefresh)
+        top.addWidget(self.btn_clear)
 
-        # ------------ Matplotlib 차트 ------------
-        self.fig = Figure(figsize=(7.5, 5.5), tight_layout=True)
-        self.canvas = FigureCanvas(self.fig)
-        self.ax_price = self.fig.add_subplot(2, 1, 1)
-        self.ax_macd = self.fig.add_subplot(2, 1, 2, sharex=self.ax_price)
+        # 표 컬럼
+        macd_cols = [f"MACD[{i}]" for i in range(self.HISTORY_N, 0, -1)]  # [10] ... [1] (오른쪽이 최신)
+        hist_cols = [f"HIST[{i}]" for i in range(self.HISTORY_N, 0, -1)]
+        self.COLS = ["TF", "Time", "MACD", "Signal", "Hist"] + macd_cols + hist_cols
 
-        # 초기 안내 텍스트
-        self.ax_price.text(0.02, 0.90, "가격 데이터 대기 중...", transform=self.ax_price.transAxes, fontsize=10, alpha=0.7)
-        self.ax_macd.text(0.02, 0.90, "MACD 데이터 대기 중...", transform=self.ax_macd.transAxes, fontsize=10, alpha=0.7)
-        self._style_axes()
-        self._apply_time_formatter(self.ax_price)
-        self._apply_time_formatter(self.ax_macd)
-        self.canvas.draw()
+        self.table = QTableWidget(3, len(self.COLS), self)
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
 
-        # ------------ 레이아웃 ------------
+        for row, tf in enumerate(["5m", "30m", "1d"]):
+            self._set_item(row, 0, tf, align=Qt.AlignCenter)
+
         root = QVBoxLayout(self)
         root.addLayout(top)
-        root.addWidget(self.canvas)
+        root.addWidget(self.table)
 
-        # ------------ 이벤트 연결 ------------
-        self.cmb_tf.currentIndexChanged.connect(self._on_tf_changed)
-        self.btn_refresh.clicked.connect(self._on_refresh_clicked)
+        # 이벤트
+        self.btn_clear.clicked.connect(self._on_clear_clicked)
 
-        # ------------ 외부 시그널 연결 ------------
-        if self.bridge and not self._sig_connected:
+        # 시그널 연결
+        try:
+            macd_bus.macd_series_ready.connect(self.on_macd_series, Qt.UniqueConnection)
+        except Exception:
+            pass
+
+        if self.bridge:
+            # (옵션) raw rows 수신 시 내부 계산 경로
             try:
                 if hasattr(self.bridge, "minute_bars_received"):
                     self.bridge.minute_bars_received.connect(self.on_minute_bars, Qt.UniqueConnection)
                 if hasattr(self.bridge, "daily_bars_received"):
                     self.bridge.daily_bars_received.connect(self.on_daily_bars, Qt.UniqueConnection)
-                if hasattr(self.bridge, "macd_updated"):
-                    self.bridge.macd_updated.connect(self.on_macd_point, Qt.UniqueConnection)
-                elif hasattr(self.bridge, "macd_data_received"):
-                    self.bridge.macd_data_received.connect(self.on_macd_point, Qt.UniqueConnection)
-            except TypeError:
+            except Exception:
                 pass
 
-        try:
-            macd_bus.macd_series_ready.connect(self.on_macd_series, Qt.UniqueConnection)
-        except TypeError:
-            pass
+        self._refresh_all_rows()
 
-        self._sig_connected = True
+    # ---------- 셀 헬퍼 ----------
+    def _set_item(self, row: int, col: int, text: str, *, color: Optional[str] = None,
+                  align: Qt.AlignmentFlag = Qt.AlignRight | Qt.AlignVCenter):
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(align)
+        if color == "red":
+            item.setForeground(Qt.red)
+        elif color == "blue":
+            item.setForeground(Qt.blue)
+        elif color == "green":
+            item.setForeground(Qt.darkGreen)
+        self.table.setItem(row, col, item)
 
-    # ---------- 스타일/포맷 ----------
-    def _style_axes(self):
-        self.ax_price.grid(True, linestyle="--", alpha=0.3)
-        self.ax_macd.grid(True, linestyle="--", alpha=0.3)
-        self.ax_price.set_ylabel("Price")
-        self.ax_macd.set_ylabel("MACD / Signal / Hist")
-        self.ax_macd.set_xlabel("Time")
-
-    def _apply_time_formatter(self, ax):
-        locator = AutoDateLocator(minticks=5, maxticks=10)
-        if self._current_tf == "5m":
-            formatter = DateFormatter("%m-%d %H:%M")
+    def _fmt_val_with_dir(self, prev: Optional[float], cur: float) -> (str, Optional[str]):
+        arrow = "→"
+        if prev is None or pd.isna(prev) or pd.isna(cur):
+            arrow = " "
         else:
-            formatter = DateFormatter("%Y-%m-%d")
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(formatter)
+            if cur > prev:
+                arrow = "↑"
+            elif cur < prev:
+                arrow = "↓"
+            else:
+                arrow = "→"
+        color = "red" if cur > 0 else "blue" if cur < 0 else None
+        return f"{cur:.5f}{arrow}", color
 
-    # ---------- 데이터 수신 슬롯 ----------
+    # ---------- 데이터 수신 ----------
+    @Slot(dict)
+    def on_macd_series(self, data: dict):
+        code = data.get("code")
+        if code and code[-6:] != self.code:
+            return
+        tf = str(data.get("tf", "")).lower()
+        if tf not in ("5m", "30m", "1d"):
+            return
+        series = data.get("series", []) or []
+        if not series:
+            return
+
+        buf = self.buffers[tf]
+        for p in series:
+            try:
+                t = pd.to_datetime(p.get("t"))
+                macd = float(p.get("macd"))
+                sig = float(p.get("signal"))
+                hist = float(p.get("hist"))
+            except Exception:
+                continue
+            buf.append(MacdPoint(t=t, macd=macd, signal=sig, hist=hist))
+
+        if self.chk_autorefresh.isChecked():
+            self._refresh_row(tf)
+
+    # (옵션) raw rows 경로: 내부 계산하여 버퍼에 쌓기
     @Slot(str, list)
     def on_minute_bars(self, code: str, rows: List[dict]):
         if code[-6:] != self.code:
             return
-        df = rows_to_df_minutes(rows)
-        if df.empty:
-            return
-        self._dfs["5m"] = df
-        if self._current_tf == "5m":
-            self._render_price_and_macd()
+        # raw rows를 calculator로 보내 바로 emit되도록 사용 가능
+        calculator.apply_rows(code=self.code, tf="5m", rows=rows, need=120)
 
     @Slot(str, list)
     def on_daily_bars(self, code: str, rows: List[dict]):
         if code[-6:] != self.code:
             return
-        df = rows_to_df_daily(rows)
-        if df.empty:
+        calculator.apply_rows(code=self.code, tf="1d", rows=rows, need=120)
+
+    # ---------- 표 갱신 ----------
+    def _refresh_all_rows(self):
+        for tf in ("5m", "30m", "1d"):
+            self._refresh_row(tf)
+
+    def _refresh_row(self, tf: str):
+        row = 0 if tf == "5m" else 1 if tf == "30m" else 2
+        buf = self.buffers[tf]
+        self._set_item(row, 0, tf, align=Qt.AlignCenter)
+
+        if not buf:
+            for c in range(1, len(self.COLS)):
+                self._set_item(row, c, "-", align=Qt.AlignCenter)
             return
-        self._dfs["1d"] = df
-        if self._current_tf == "1d":
-            self._render_price_and_macd()
 
-    @Slot(dict)
-    def on_macd_series(self, data: dict):
-        # data: {"code": str, "tf": "5m"|"1d", "series": [{"t": iso, "macd": f, "signal": f, "hist": f}, ...]}
-        code = data.get("code")
-        tf = (data.get("tf") or "").lower()
-        series = data.get("series", [])
-        if code and code[-6:] != self.code:
-            return
-        if not series:
-            return
+        last = buf[-1]
 
-        df = pd.DataFrame(series)
-        if "t" in df.columns:
-            df["t"] = pd.to_datetime(df["t"])
-            df = df.sort_values("t").set_index("t")
+        # 최신 시각
+        self._set_item(row, 1, last.t.strftime("%Y-%m-%d %H:%M"), align=Qt.AlignCenter)
 
-        key = "5m" if tf == "5m" else "1d"
-        self._dfs[f"macd_{key}"] = df
+        # 최신 값 3종
+        macd_color = "red" if last.macd > 0 else "blue" if last.macd < 0 else None
+        sig_color = "red" if last.signal > 0 else "blue" if last.signal < 0 else None
+        hist_color = "red" if last.hist > 0 else "blue" if last.hist < 0 else None
 
-        # 현재 TF가 일치하면 하단 MACD만/혹은 전체 재렌더
-        if self._current_tf == key:
-            self._render_price_and_macd()
+        self._set_item(row, 2, f"{last.macd:.5f}", color=macd_color)
+        self._set_item(row, 3, f"{last.signal:.5f}", color=sig_color)
+        self._set_item(row, 4, f"{last.hist:.5f}", color=hist_color)
 
-    @Slot(str, float, float, float)
-    def on_macd_point(self, code: str, macd: float, signal: float, hist: float):
-        if code[-6:] != self.code:
-            return
-        self.setWindowTitle(f"MACD 모니터 - {self.code}  |  MACD:{macd:.2f}  SIG:{signal:.2f}  HIST:{hist:.2f}")
+        # 최근 10개 MACD/HIST + 방향(직전 대비)
+        macd_vals = [p.macd for p in list(buf)[-self.HISTORY_N:]]
+        hist_vals = [p.hist for p in list(buf)[-self.HISTORY_N:]]
 
-    # ---------- 상단 시세 ----------
+        macd_start_col = 5
+        hist_start_col = macd_start_col + self.HISTORY_N
+
+        for i, v in enumerate(macd_vals):
+            prev_v = macd_vals[i-1] if i > 0 else None
+            text, c = self._fmt_val_with_dir(prev_v, v)
+            self._set_item(row, macd_start_col + i, text, color=c, align=Qt.AlignCenter)
+
+        for i, v in enumerate(hist_vals):
+            prev_v = hist_vals[i-1] if i > 0 else None
+            text, c = self._fmt_val_with_dir(prev_v, v)
+            self._set_item(row, hist_start_col + i, text, color=c, align=Qt.AlignCenter)
+
+    # ---------- 시세(옵션) ----------
     def update_quote(self, price: str, rate):
-        """UI 상단 호가/등락률 레이블 갱신 (float/str 모두 안전 처리)"""
-        self._quotes["price"] = "" if price is None else str(price)
+        price_str = "" if price is None else str(price)
         if rate is None:
             rate_str = ""
         elif isinstance(rate, (int, float)):
             rate_str = f"{rate:+.2f}%"
         else:
             rate_str = str(rate)
-        self._quotes["rate"] = rate_str
 
         color = "#bdbdbd"
         if rate_str.startswith("+"):
-            color = "#d32f2f"  # 상승(빨강)
+            color = "#d32f2f"
         elif rate_str.startswith("-"):
-            color = "#1976d2"  # 하락(파랑)
+            color = "#1976d2"
 
-        self.lbl_quote.setText(f"{self._quotes['price']}  ({rate_str})".strip())
-        self.lbl_quote.setStyleSheet(f"font-weight:bold; font-size:14px; color:{color};")
+        self.lbl_quote.setText(f"{price_str} ({rate_str})".strip())
+        self.lbl_quote.setStyleSheet(f"font-weight:bold; color:{color};")
 
-    # ---------- 차트 렌더 ----------
-    def _render_price_and_macd(self):
-        """현재 타임프레임(self._current_tf)의 가격 + MACD를 한 번에 렌더링"""
-        df_price = self._dfs.get(self._current_tf, pd.DataFrame())
-        if df_price is None or df_price.empty or "close" not in df_price.columns:
-            return
+    # ---------- 초기화 ----------
+    def _on_clear_clicked(self):
+        for tf in self.buffers:
+            self.buffers[tf].clear()
+        self._refresh_all_rows()
 
-        # MACD 원본(실시간) 시리즈가 들어온 경우 우선 사용, 없으면 계산
-        df_macd = self._dfs.get(f"macd_{self._current_tf}", pd.DataFrame())
-        if df_macd is None or df_macd.empty or not set(["macd", "signal", "hist"]).issubset(df_macd.columns):
-            df_macd = calc_macd(df_price["close"])
-
-        # 가격/지표 축 초기화
-        self.ax_price.clear()
-        self.ax_macd.clear()
-        self._style_axes()
-
-        # 가격
-        self.ax_price.plot(df_price.index, df_price["close"], label="Close")
-        self.ax_price.set_title(f"{self.code} - {('5분봉' if self._current_tf=='5m' else '일봉')}")
-        self.ax_price.legend(loc="upper left")
-
-        # MACD
-        if not df_macd.empty:
-            self.ax_macd.plot(df_macd.index, df_macd["macd"], label="MACD")
-            self.ax_macd.plot(df_macd.index, df_macd["signal"], label="Signal")
-            self.ax_macd.bar(df_macd.index, df_macd["hist"], alpha=0.4)
-            self.ax_macd.axhline(0, linestyle="--", linewidth=1)
-            self.ax_macd.legend(loc="upper left")
-
-        # 시간 포맷(매 렌더마다 재부착)
-        self._apply_time_formatter(self.ax_price)
-        self._apply_time_formatter(self.ax_macd)
-        self.fig.autofmt_xdate()
-
-        self.canvas.draw_idle()
-
-    # ---------- UI 이벤트 ----------
-    def _on_tf_changed(self, idx: int):
-        self._current_tf = "5m" if idx == 0 else "1d"
-        self._render_price_and_macd()
-
-    def _on_refresh_clicked(self):
-        if not self.bridge:
-            return
-        try:
-            if self._current_tf == "5m" and hasattr(self.bridge, "request_minutes_bars"):
-                self.bridge.request_minutes_bars(self.code)
-            elif self._current_tf == "1d" and hasattr(self.bridge, "request_daily_bars"):
-                self.bridge.request_daily_bars(self.code)
-        except Exception:
-            pass
-
-    # ---------- 안전한 해제 ----------
+    # ---------- 종료 ----------
     def closeEvent(self, e):
-        # macd_bus 해제
         try:
             macd_bus.macd_series_ready.disconnect(self.on_macd_series)
         except Exception:
             pass
-        # bridge 시그널 해제
         if self.bridge:
-            for name, slot in [
-                ("minute_bars_received", self.on_minute_bars),
-                ("daily_bars_received", self.on_daily_bars),
-                ("macd_updated", self.on_macd_point),
-                ("macd_data_received", self.on_macd_point),
-            ]:
-                try:
-                    if hasattr(self.bridge, name):
-                        getattr(self.bridge, name).disconnect(slot)
-                except Exception:
-                    pass
+            try:
+                if hasattr(self.bridge, "minute_bars_received"):
+                    self.bridge.minute_bars_received.disconnect(self.on_minute_bars)
+            except Exception:
+                pass
+            try:
+                if hasattr(self.bridge, "daily_bars_received"):
+                    self.bridge.daily_bars_received.disconnect(self.on_daily_bars)
+            except Exception:
+                pass
         super().closeEvent(e)

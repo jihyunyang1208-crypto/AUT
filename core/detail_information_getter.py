@@ -1,211 +1,164 @@
-# detail_information_getter.py
+# detail_information_getter.py (핵심부만; 그대로 교체 권장)
 from __future__ import annotations
 
-import os
-import json
-import time
-import logging
-import re
-import asyncio
-from dataclasses import dataclass
-from time import perf_counter
-from typing import Any, Dict, List, Optional, Callable, Union
-
+import os, json, logging
+from typing import Any, Dict, List, Optional
 import pandas as pd
-
 import requests
-from utils.token_manager import get_access_token
-from utils.utils import load_api_keys
 from datetime import datetime as dt
 try:
-	from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo
 except Exception:
-	ZoneInfo = None
-	
+    ZoneInfo = None
+
+from core.macd_calculator import calculator  # apply_rows → macd_bus.emit
+
 logger = logging.getLogger(__name__)
 if not logger.handlers:
-	logging.basicConfig(
-		level=os.getenv("LOG_LEVEL", "INFO"),
-		format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-	)
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logging.getLogger("urllib3").setLevel(logging.INFO)
-logging.getLogger("matplotlib").setLevel(logging.WARNING)
-logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
-
 
 def _redact(token: str) -> str:
-	if not token:
-		return ""
-	t = str(token)
-	return (t[:6] + "..." + t[-4:]) if len(t) > 12 else "***"
+    if not token: return ""
+    t = str(token);  return (t[:6] + "..." + t[-4:]) if len(t) > 12 else "***"
 
 def _code6(s: str) -> str:
-	d = "".join([c for c in str(s) if c.isdigit()])
-	return d[-6:].zfill(6)
-
-def _stkcd(code: str, ex="KRX") -> str:
-	return f"{ex}:{_code6(code)}"
+    d = "".join([c for c in str(s) if c.isdigit()])
+    return d[-6:].zfill(6)
 
 class DetailInformationGetter:
-	"""
-	- 5분봉 차트 데이터 수집 : ka10080
-	- 일봉 차트 데이터 수집 : ka10081
-	- 설계: 가이드와 동일한 raw 메서드 + 얇은 JSON 래퍼 제공
-	"""
-	def __init__(self, base_url: Optional[str]=None, token: Optional[str]=None, timeout: float=7.0):
-		self.base_url = (base_url or os.getenv("HTTP_API_BASE") or "https://api.kiwoom.com").rstrip("/")
-		self.token = token or os.getenv("ACCESS_TOKEN") or ""
-		self.timeout = timeout
-		logger.info("[DetailInfo] base_url=%s", self.base_url)
+    def __init__(self, base_url: Optional[str]=None, token: Optional[str]=None, timeout: float=7.0):
+        self.base_url = (base_url or os.getenv("HTTP_API_BASE") or "https://api.kiwoom.com").rstrip("/")
+        self.token = token or os.getenv("ACCESS_TOKEN") or ""
+        self.timeout = timeout
+        logger.info("[DetailInfo] base_url=%s", self.base_url)
 
+    def _headers(self, api_id: str, cont_yn: Optional[str]=None, next_key: Optional[str]=None) -> Dict[str,str]:
+        h = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "authorization": f"Bearer {self.token}",
+            "api-id": api_id,
+            "accept": "application/json",
+        }
+        if cont_yn:  h["cont-yn"]  = cont_yn
+        if next_key: h["next-key"] = next_key
+        return h
 
-	def _headers(self, api_id: str, cont_yn: Optional[str]=None, next_key: Optional[str]=None) -> Dict[str,str]:
-		h = {
-			"Content-Type": "application/json;charset=UTF-8",
-			"authorization": f"Bearer {self.token}",
-			"api-id": api_id,
-			"accept": "application/json",
-		}
-		if cont_yn:  h["cont-yn"]  = cont_yn
-		if next_key: h["next-key"] = next_key
-		return h
+    # -------- KA10080: 분봉 수집 + 클린업 --------
+    def fetch_minute_chart_ka10080(self, code: str, *, tic_scope=5, upd_stkpc_tp="1", need=350) -> Dict[str,Any]:
+        logger.debug("fetch_minute_chart_ka10080")
+        url = f"{self.base_url}/api/dostk/chart"
+        code6 = _code6(code)
+        body = {"stk_cd": code6, "tic_scope": str(tic_scope), "upd_stkpc_tp": str(upd_stkpc_tp)}
 
-	# --- ka10080: 분봉 차트 ---
-	def fetch_minute_chart_ka10080(self, code: str, *, tic_scope=5, upd_stkpc_tp="1", need=350, exchange_prefix="KRX") -> Dict[str,Any]:
-		logger.debug("fetch_minute_chart_ka10080")
+        rows_all: List[Dict[str,Any]] = []
+        cont_yn, next_key = None, None
 
-		url = f"{self.base_url}/api/dostk/chart"
-		body = {"stk_cd": _stkcd(code, exchange_prefix), "tic_scope": str(tic_scope), "upd_stkpc_tp": str(upd_stkpc_tp)}
-		rows_all: List[Dict[str,Any]] = []
-		cont_yn, next_key = None, None
-		while True:
-			resp = requests.post(url, headers=self._headers("ka10080", "Y" if next_key else None, next_key),
-								 json=body, timeout=self.timeout)
-			resp.raise_for_status()
-			try: js = resp.json() or {}
-			except: js = {}
-			rows = (js.get("stk_min_pole_chart_qry")
-					or js.get("stk_min_chart_qry")
-					or js.get("body",{}).get("stk_min_pole_chart_qry")
-					or js.get("data",{}).get("stk_min_pole_chart_qry")
-					or [])
-			if isinstance(rows, list): rows_all.extend(rows)
-			cont_yn = resp.headers.get("cont-yn", "N"); next_key = resp.headers.get("next-key", "")
-			if (need and len(rows_all)>=need) or cont_yn!="Y" or not next_key: break
+        while True:
+            resp = requests.post(url, headers=self._headers("ka10080", "Y" if next_key else "N", next_key),
+                                 json=body, timeout=self.timeout)
+            logger.debug("Code: %s", resp.status_code)
+            logger.debug("Header: %s", json.dumps(
+                {k: resp.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}, ensure_ascii=False, indent=2))
+            try:
+                logger.debug("Body: %s", json.dumps(resp.json(), ensure_ascii=False, indent=2))
+            except Exception:
+                logger.debug("Body(raw): %s", resp.text)
 
-		# 시간키 기준 중복 제거/정렬 + need tail
-		key = lambda r: f"{r.get('dt','')}{r.get('cntr_tm','')}"
-		uniq = { key(r): r for r in rows_all }
-		rows = [uniq[k] for k in sorted(uniq.keys())]
-		if need and len(rows)>need: rows = rows[-need:]
-		logger.debug("stock_code: %s, tic_scope: %s", _code6(code),str(tic_scope))
+            resp.raise_for_status()
+            try: js = resp.json() or {}
+            except Exception: js = {}
 
-		return {"stock_code": _code6(code), "tic_scope": str(tic_scope), "rows": rows}
+            rows = (js.get("stk_min_pole_chart_qry")
+                    or js.get("stk_min_chart_qry")
+                    or js.get("body",{}).get("stk_min_pole_chart_qry")
+                    or js.get("data",{}).get("stk_min_pole_chart_qry")
+                    or [])
+            if isinstance(rows, list):
+                # 모든 값이 빈 문자열/None인 더미행 제거
+                cleaned = [r for r in rows if any(v not in ("", None) for v in r.values())]
+                rows_all.extend(cleaned)
 
-	def emit_macd_for_ka10080(
-		self,
-		bridge,				  # AsyncBridge
-		code: str,
-		*,
-		tic_scope: int = 5,
-		upd_stkpc_tp: str = "1",
-		need: int = 350,
-		exchange_prefix: str = "KRX",
-		max_points: int = 200,
-	) -> dict:
-		"""
-		ka10080 분봉 rows -> MACD 계산 -> 브릿지 시그널 emit
-		반환: payload(dict) 그대로 리턴(테스트/로그 용)
-		"""
-		packet = self.fetch_minute_chart_ka10080(
-			code, tic_scope=tic_scope, upd_stkpc_tp=upd_stkpc_tp, need=need, exchange_prefix=exchange_prefix
-		)
-		rows = packet.get("rows", [])
-		code6 = packet.get("stock_code")
-		tic = int(packet.get("tic_scope", tic_scope))
-		if hasattr(bridge, "minute_bars_received"):
-			bridge.minute_bars_received.emit(code6, rows)
+            cont_yn = resp.headers.get("cont-yn", "N")
+            next_key = resp.headers.get("next-key", "")
+            if (need and len(rows_all) >= need) or cont_yn != "Y" or not next_key:
+                break
 
-		payload = make_macd_payload(code6, tic, rows, max_points=max_points)
+        # 키 표준화(파서/계산기 호환): dt→base_dt, cntr_tm→trd_tm
+        for r in rows_all:
+            if "dt" in r and "base_dt" not in r: r["base_dt"] = r["dt"]
+            if "cntr_tm" in r and "trd_tm" not in r: r["trd_tm"] = r["cntr_tm"]
 
-		# 전체 MACD 갱신
-		if hasattr(bridge, "macd_updated"):
-			bridge.macd_updated.emit({
-				"code": payload["code"],
-				"tic_scope": payload["tic_scope"],
-				"points": payload["points"],
-			})
+        # 시간키 기준 중복 제거 + 정렬 + tail
+        key = lambda r: f"{r.get('base_dt', r.get('dt',''))}{r.get('trd_tm', r.get('cntr_tm',''))}"
+        uniq = { key(r): r for r in rows_all if (r.get('trd_tm') or r.get('cntr_tm')) }
+        rows = [uniq[k] for k in sorted(uniq.keys())]
+        if need and len(rows) > need: rows = rows[-need:]
 
-		# 트리거 발생 시 알림
-		if payload.get("buy") and hasattr(bridge, "macd_buy_signal"):
-			bridge.macd_buy_signal.emit({
-				"code": payload["code"],
-				"why": payload.get("why_buy", ""),
-				"ts": payload.get("ts"),
-			})
-		if payload.get("sell") and hasattr(bridge, "macd_sell_signal"):
-			bridge.macd_sell_signal.emit({
-				"code": payload["code"],
-				"why": payload.get("why_sell", ""),
-				"ts": payload.get("ts"),
-			})
+        logger.debug("[KA10080] rows(after clean)=%d", len(rows))
+        return {"stock_code": code6, "tic_scope": str(tic_scope), "rows": rows}
 
-		logger.debug("[MACD] emitted for %s (%s)", code6, tic)
-		return payload
+    # --------- 한 방에 MACD 버스까지 ---------
+    def emit_macd_for_ka10080(
+        self,
+        bridge,
+        code: str,
+        *,
+        tic_scope: int = 5,
+        upd_stkpc_tp: str = "1",
+        need: int = 350,
+        max_points: int = 200,
+    ) -> dict:
+        packet = self.fetch_minute_chart_ka10080(
+            code, tic_scope=tic_scope, upd_stkpc_tp=upd_stkpc_tp, need=need
+        )
+        rows = packet.get("rows", [])
+        code6 = packet.get("stock_code")
+        tic = int(packet.get("tic_scope", tic_scope))
 
-	# --- ka10081: 일봉 차트 ---
-	def fetch_daily_chart_ka10081(self, code: str, *, base_dt: Optional[str]=None, upd_stkpc_tp: str="1", need: int=400) -> Dict[str,Any]:
-		"""
-		- URL: /api/dostk/chart
-		- api-id: ka10081
-		- body 예시: {'stk_cd':'005930', 'base_dt':'20241108', 'upd_stkpc_tp':'1'}
-		- 페이지네이션: 헤더 cont-yn/next-key 사용
-		- 반환 rows 키가 환경에 따라 다를 수 있어 여러 키를 시도
-		"""
-		url = f"{self.base_url}/api/dostk/chart"
-		code6 = _code6(code)
+        # (선택) 원본 rows도 UI로
+        if hasattr(bridge, "minute_bars_received"):
+            bridge.minute_bars_received.emit(code6, rows)
 
-		body = {"stk_cd": code6, "upd_stkpc_tp": str(upd_stkpc_tp)}
-		if base_dt:  # 기준일 지정(YYYYMMDD). 미지정시 서버 기본값 사용
-			body["base_dt"] = base_dt
+        # ✅ 계산기 호출 → macd_bus.emit → 다이얼로그 반영
+        tf = "5m" if tic == 5 else "30m" if tic == 30 else f"{tic}m"
+        calculator.apply_rows(code=code6, tf=("5m" if tf not in ("5m","30m","1d") else tf),
+                              rows=rows, need=max_points)
 
-		rows_all: List[Dict[str,Any]] = []
-		cont_yn, next_key = None, None
+        return {"code": code6, "tf": tf, "count": min(max_points, len(rows))}
 
-		while True:
-			resp = requests.post(url, headers=self._headers("ka10081", "Y" if next_key else None, next_key),
-								 json=body, timeout=self.timeout)
-			resp.raise_for_status()
-			try:
-				js = resp.json() or {}
-			except:
-				js = {}
+    # -------- KA10081: 일봉 --------
+    def fetch_daily_chart_ka10081(self, code: str, *, base_dt: Optional[str]=None,
+                                  upd_stkpc_tp: str="1", need: int=400) -> Dict[str,Any]:
+        url = f"{self.base_url}/api/dostk/chart"
+        code6 = _code6(code)
+        body = {"stk_cd": code6, "upd_stkpc_tp": str(upd_stkpc_tp)}
+        if base_dt: body["base_dt"] = base_dt
 
-			# 가능한 키들 순차 시도 (환경별 명칭 차이 흡수)
-			rows = (js.get("stk_day_pole_chart_qry")
-					or js.get("stk_day_chart_qry")
-					or js.get("day_chart")  # 일부 샘플/문서에서
-					or js.get("body",{}).get("stk_day_pole_chart_qry")
-					or js.get("data",{}).get("stk_day_pole_chart_qry")
-					or js.get("open_pric_pre_flu_rt")  # 구(ka10015) 호환 키, 혹시 통일된 응답인 경우
-					or [])
-			if isinstance(rows, list):
-				rows_all.extend(rows)
+        rows_all: List[Dict[str,Any]] = []
+        cont_yn, next_key = None, None
+        while True:
+            resp = requests.post(url, headers=self._headers("ka10081", "Y" if next_key else "N", next_key),
+                                 json=body, timeout=self.timeout)
+            resp.raise_for_status()
+            try: js = resp.json() or {}
+            except Exception: js = {}
+            rows = (js.get("stk_day_pole_chart_qry")
+                    or js.get("stk_day_chart_qry")
+                    or js.get("day_chart")
+                    or js.get("body",{}).get("stk_day_pole_chart_qry")
+                    or js.get("data",{}).get("stk_day_pole_chart_qry")
+                    or [])
+            if isinstance(rows, list): rows_all.extend(rows)
+            cont_yn = resp.headers.get("cont-yn", "N"); next_key = resp.headers.get("next-key", "")
+            if (need and len(rows_all) >= need) or cont_yn != "Y" or not next_key: break
 
-			cont_yn = resp.headers.get("cont-yn", "N")
-			next_key = resp.headers.get("next-key", "")
-			# 충분히 모았거나 마지막 페이지면 종료
-			if (need and len(rows_all) >= need) or cont_yn != "Y" or not next_key:
-				break
-
-		# 날짜 키 기준 정렬 + tail need
-		key = lambda r: str(r.get("dt",""))
-		uniq = { key(r): r for r in rows_all if r.get("dt") }
-		rows = [uniq[k] for k in sorted(uniq.keys())]
-		if need and len(rows) > need:
-			rows = rows[-need:]
-
-		return {"stock_code": code6, "rows": rows, "base_dt": base_dt or ""}
+        key = lambda r: str(r.get("dt",""))
+        uniq = { key(r): r for r in rows_all if r.get("dt") }
+        rows = [uniq[k] for k in sorted(uniq.keys())]
+        if need and len(rows)>need: rows = rows[-need:]
+        return {"stock_code": code6, "rows": rows, "base_dt": base_dt or ""}
 
 
 class SimpleMarketAPI:
@@ -289,68 +242,6 @@ class SimpleMarketAPI:
 			logger.debug("Body: %s", resp.text)
 		
 		return resp
-
-	# ---------------------------------------------------------------------
-	# KA10015: 일별거래상세 json
-	# ---------------------------------------------------------------------
-
-	def fetch_daily_detail_ka10015(
-		self,
-		code: str,
-		*,
-		strt_dt: str,
-		end_dt: Optional[str] = None,
-		cont_yn: str = "N",
-		next_key: str = "",
-		timeout: Optional[float] = None,
-	) -> Dict[str, Any]:
-		"""
-		JSON 래퍼: raw 호출을 반복해 모든 페이지 rows를 합쳐 반환.
-		반환:
-		{
-			"stock_code": "005930",
-			"strt_dt": "YYYYMMDD",
-			"end_dt": "YYYYMMDD"(옵션),
-			"rows": [ ...모든 페이지 합본... ],
-		}
-		"""
-		code6 = str(code).strip()[:6].zfill(6)
-		rows_all: List[Dict[str, Any]] = []
-
-		# 최대 페이지 가드(무한루프 방지)
-		max_pages = 50
-		page_count = 0
-
-		while True:
-			page_count += 1
-			if page_count > max_pages:
-				break
-
-			resp = self.fetch_daily_detail_ka10015_raw(
-				code,
-				strt_dt=strt_dt,
-				end_dt=end_dt,
-				cont_yn=cont_yn,
-				next_key=next_key,
-				timeout=timeout,
-			)
-			try:
-				js = resp.json()
-			except Exception:
-				js = {}
-			
-			cont_yn = resp.headers.get("cont-yn", "N")
-			next_key = resp.headers.get("next-key", "")
-			if cont_yn != "Y" or not next_key:
-				break
-
-		logger.debug("code information received")
-		return {
-			"stock_code": code6,
-			"strt_dt": strt_dt,
-			**({"end_dt": end_dt} if end_dt else {}),
-			"rows": rows_all,
-		}
 
 
 	# ---------------------------------------------------------------------
@@ -447,9 +338,9 @@ class SimpleMarketAPI:
 				dstr = str(date_str)
 			else:
 				if ZoneInfo:
-					now = datetime.now(ZoneInfo("Asia/Seoul"))
+					now = dt.now(ZoneInfo("Asia/Seoul"))
 				else:
-					now = datetime.now()
+					now = dt.now()
 				dstr = now.strftime("%Y%m%d")
 
 			# 디렉토리 결정
@@ -556,22 +447,9 @@ class SimpleMarketAPI:
 		next_key: str = "",
 		timeout: Optional[float] = None,
 	) -> Dict[str, Any]:
-		"""
-		JSON 래퍼: raw 호출을 반복해 모든 페이지 rows를 합쳐 반환.
-		반환:
-		{
-			"stock_code": "005930",
-			"strt_dt": "YYYYMMDD",
-			"end_dt": "YYYYMMDD"(옵션),
-			"rows": [ ...모든 페이지 합본... ],
-		}
-		"""
 		code6 = str(code).strip()[:6].zfill(6)
 		rows_all: List[Dict[str, Any]] = []
-
-		# 무한루프 방지
-		max_pages = 50
-		page_count = 0
+		max_pages, page_count = 50, 0
 
 		while True:
 			page_count += 1
@@ -580,20 +458,13 @@ class SimpleMarketAPI:
 				break
 
 			resp = self.fetch_daily_detail_ka10015_raw(
-				code,
-				strt_dt=strt_dt,
-				end_dt=end_dt,
-				cont_yn=cont_yn,
-				next_key=next_key,
-				timeout=timeout,
+				code, strt_dt=strt_dt, end_dt=end_dt, cont_yn=cont_yn, next_key=next_key, timeout=timeout
 			)
-
 			try:
 				js = resp.json() or {}
 			except Exception:
 				js = {}
 
-			# rows 안전 추출 (환경별 키 차이 흡수)
 			rows = (
 				js.get("open_pric_pre_flu_rt")
 				or js.get("body", {}).get("open_pric_pre_flu_rt")
@@ -604,46 +475,28 @@ class SimpleMarketAPI:
 			if isinstance(rows, list) and rows:
 				rows_all.extend(rows)
 
-			# 다음 페이지 여부
 			cont_yn = resp.headers.get("cont-yn", "N")
 			next_key = resp.headers.get("next-key", "")
 			if cont_yn != "Y" or not next_key:
 				break
 
-		logger.debug("code information received")
-		return {
-			"stock_code": code6,
-			"strt_dt": strt_dt,
-			**({"end_dt": end_dt} if end_dt else {}),
-			"rows": rows_all,
-		}
-	
+		logger.debug("[KA10015] rows: %d", len(rows_all))
+		return {"stock_code": code6, "strt_dt": strt_dt, **({"end_dt": end_dt} if end_dt else {}), "rows": rows_all}
+		
 
 
 
 
 
-# (옵션) 단독 실행 예시
-if __name__ == "__main__":
-	appkey, secretkey = load_api_keys()
-	access_token = get_access_token(appkey, secretkey)
+	# (옵션) 단독 실행 예시
+	if __name__ == "__main__":
+		appkey, secretkey = load_api_keys()
+		access_token = get_access_token(appkey, secretkey)
 
-	api = SimpleMarketAPI(token=access_token)
+		api = SimpleMarketAPI(token=access_token)
 
-	# KA10015 — 가이드 순정 호출
-	logger.debug("\n=== KA10015 (raw) ===")
-	_ = api.fetch_daily_detail_ka10015_raw("005930", strt_dt="20250819")
 
-	# KA10015 — JSON 래퍼
-	logger.debug("\n=== KA10015 (json) ===")
-	daily_json = api.fetch_daily_detail_ka10015("005930", strt_dt="20250819")
-	logger.debug(json.dumps(daily_json, indent=2, ensure_ascii=False))
+		# KA10080 — JSON 래퍼
+		logger.debug("\n=== KA10080 (json) ===")
+		api.fetch_minute_chart_ka10080("005930", tic_scope="5", upd_stkpc_tp="1")
 
-	# KA10080 — 가이드 순정 호출
-	logger.debug("\n=== KA10080 (raw) ===")
-	params = {"stk_cd": "005930", "tic_scope": "5", "upd_stkpc_tp": "1"}
-	_ = api.fetch_intraday_chart_ka10080_raw(params)
-
-	# KA10080 — JSON 래퍼
-	logger.debug("\n=== KA10080 (json) ===")
-	chart_json = api.fetch_intraday_chart("005930", tic_scope="5", upd_stkpc_tp="1")
