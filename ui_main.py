@@ -19,7 +19,7 @@ from PySide6.QtGui import QAction, QIcon, QKeySequence
 
 # QtWidgets
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog,          
+    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,          
     QLabel, QPushButton, QComboBox, QVBoxLayout,
     QHBoxLayout, QStatusBar, QTableWidget, QTableWidgetItem,
     QLineEdit, QTableView, QToolBar, QHeaderView, QStatusBar,
@@ -289,8 +289,9 @@ class MainWindow(QMainWindow):
         self.bridge.log.connect(self.append_log)
         self.bridge.condition_list_received.connect(self.populate_conditions)
         self.bridge.macd_data_received.connect(self.on_macd_data)
-        # self.bridge.macd_series_ready.connect(self.on_macd_series_ready)
+        self.bridge.macd_series_ready.connect(self.on_macd_series_ready)
         self.bridge.new_stock_received.connect(self.on_new_stock)
+        self.bridge.token_ready.connect(self._on_token_ready)
 
         # 상세 정보 (Engine → Bridge → UI)
         if hasattr(self.bridge, "new_stock_detail_received"):
@@ -362,6 +363,21 @@ class MainWindow(QMainWindow):
         self.macd_windows: dict[str, MacdDialog] = {}
         self.auto_open_macd_modal = True  # 신규 종목 감지 시 자동 오픈
         self.setup_signals()
+
+    def _on_token_ready(self, token: str):
+        try:
+            # UI 내부에서 쓰는 getter/market_api가 있다면 여기서 갱신
+            if not hasattr(self, "getter") or self.getter is None:
+                self.getter = DetailInformationGetter(token=self.access_token)
+            else:
+                self.getter.token = self.access_token
+
+            if not hasattr(self, "market_api") or self.market_api is None:
+                self.market_api = SimpleMarketAPI(token=self.access_token)
+            else:
+                self.market_api.set_token(self.access_token)
+        except Exception:
+            pass
 
 
     def setup_signals(self):
@@ -591,6 +607,11 @@ class MainWindow(QMainWindow):
         dlg.show()
         self._macd_dialogs[code6] = dlg
 
+    @Slot(dict)
+    def on_macd_series_dict(self, payload: dict):
+        # 필요한 경우 여기서 테이블/라벨 갱신
+        pass
+
     @Slot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
         """엔진/브릿지에서 올라오는 MACD 실시간 수신 슬롯"""
@@ -608,8 +629,17 @@ class MainWindow(QMainWindow):
         logger.info(f"[MACD] {code6} | MACD:{macd:.2f} Signal:{signal:.2f} Hist:{hist:.2f}")
 
 
-    @Slot(str, str, dict)
-    def on_macd_series_ready(self, code: str, tf: str, series: dict):
+    @Slot(dict)
+    def on_macd_series_ready(self, data: dict):
+        tf = data.get('tf')
+        series = data.get('series')
+        code = data.get("code")
+
+
+        if tf is None or series is None:
+            # Handle the case where the data is incomplete
+            return
+        
         code6 = str(code)[-6:].zfill(6)
         dlg = self._macd_dialogs.get(code6)
         
@@ -620,7 +650,24 @@ class MainWindow(QMainWindow):
 
         if dlg:
             # `MacdDialog`에 `update_series` 메서드가 추가되었음.
-            dlg.update_series(tf, series)
+            payload = {"tf": tf, "series": series}
+            dlg.on_macd_series(payload)
+
+    @staticmethod
+    def _to_float_loose(x):
+        if x is None:
+            return None
+        s = str(x).strip()
+        if s in ("", "-"):
+            return None
+        s = s.replace("%", "").replace(",", "")
+        neg = s.startswith("-")
+        s = s.lstrip("+-")
+        try:
+            v = float(s)
+            return -v if neg else v
+        except Exception:
+            return None
 
     @staticmethod
     def _pick(payload, keys, default="-"):
@@ -753,7 +800,12 @@ class MainWindow(QMainWindow):
 
         if dlg is not None:
             cur = self._pick(payload, ["cur_prc", "stck_prpr", "price"])
-            rt_val = float(self._pick(payload, ["flu_rt", "prdy_ctrt"]).replace("%", "").replace(",", ""))
+            raw_rt = self._pick(payload, ["flu_rt", "prdy_ctrt"])
+            rt_val = self._to_float_loose(raw_rt)
+            if rt_val is None:
+                rate_str = "-"
+            else:
+                rate_str = f"{rt_val:+.2f}%"
             dlg.update_quote(cur, rt_val)
 
         # ✅ 다이얼로그가 열려있지 않으면 자동으로 열고, 데이터 요청은 `_open_macd_dialog`에서 처리

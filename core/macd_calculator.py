@@ -4,30 +4,34 @@ from typing import List, Dict, Any, Tuple
 from datetime import timezone, timedelta
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
-
 import logging
-logger = logging.getLogger(__name__)
+file_handler = logging.FileHandler('log.txt', encoding='utf-8')
 
 KST = timezone(timedelta(hours=9))
+logger = logging.getLogger(__name__)
 
 class MacdBus(QObject):
     """
     계산 결과를 UI/다이얼로그로 전달하는 공용 버스.
-    페이로드:
-      {"code": str, "tf": "5m"/"30m"/"1d", "series": [{"t": iso, "macd": float, "signal": float, "hist": float}, ...]}
+    payload 예:
+      {"code": "014940", "tf": "5m"/"30m"/"1d",
+       "series": [{"t": iso8601, "macd": float, "signal": float, "hist": float}, ...]}
     """
     macd_series_ready = Signal(dict)
+
 
 macd_bus = MacdBus()  # 싱글톤처럼 사용
 
 
+
+
 class MacdCalculator:
-    """코드+타임프레임별 상태를 내부에 유지하여 MACD 계산을 수행"""
+    """코드+타임프레임별 상태를 내부에 유지하여 MACD(full 또는 증분) 계산"""
     def __init__(self, fast=12, slow=26, signal=9):
         self.fast = fast
         self.slow = slow
         self.signal = signal
-        # 상태 저장 (필요 시 증분계산 확장 가능)
+        # (선택) 상태 저장: {(code, tf): {"ema_fast": float, ...}} — 현재는 full 계산 위주로 사용
         self._states: Dict[Tuple[str, str], Dict[str, float]] = {}
 
     # ---------------- 외부 엔트리 포인트 ----------------
@@ -38,13 +42,18 @@ class MacdCalculator:
           2) MACD(full) 계산
           3) 최근 need개 직렬화하여 버스로 emit
         rows 예:
-          - {"ts":"2025-08-27T14:30:00+09:00", "open":..,"high":..,"low":..,"close":..,"vol":..}
-          - 또는 {"base_dt":"20250827","trd_tm":"143000", "close":..} / {"dt":"20250827","cntr_tm":"143000", ...}
-          - 일봉은 time이 없으면 09:00:00을 기본으로 부여함
+          - {"ts":"2025-08-27T14:30:00+09:00","open":..,"high":..,"low":..,"close":..,"vol":..}
+          - 또는 {"base_dt":"20250827","trd_tm":"143000","close":..} / {"dt":"20250827","cntr_tm":"143000", ...}
+          - 일봉은 time이 없으면 09:00:00을 기본으로 부여
         """
         tf = str(tf).lower()
         if tf not in ("5m", "30m", "1d"):
             return
+        
+        logger.debug("[MACD] apply_rows: code=%s tf=%s rows_in=%d need=%d",
+                                      code, tf, len(rows or []), need)
+
+
 
         df = self._rows_to_df(rows, tf)
         if df.empty or "close" not in df.columns:
@@ -54,7 +63,15 @@ class MacdCalculator:
         self._states[(code, tf)] = state
 
         payload = self._to_series_payload(macd_df.tail(need))
+
+        logger.debug("[MACD] emit: code=%s tf=%s points=%d last_t=%s",
+                                      code, tf, len(payload), (payload[-1]["t"] if payload else None))
+
         macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "series": payload})
+
+    # 구버전 코드(혹시 남아있다면) 호환용 별칭
+    def apply(self, code: str, tf: str, rows: List[Dict[str, Any]], need: int = 120) -> None:
+        self.apply_rows(code, tf, rows, need)
 
     # ---------------- 내부 유틸 ----------------
     def _rows_to_df(self, rows: List[Dict[str, Any]], tf: str) -> pd.DataFrame:
@@ -65,15 +82,16 @@ class MacdCalculator:
         for r in rows:
             ts = r.get("ts")
             if not ts:
+                # dt/date + tm(time) 조합을 ISO로 변환
                 d = str(r.get("base_dt") or r.get("trd_dd") or r.get("dt") or r.get("date") or "")
                 t = str(r.get("trd_tm") or r.get("cntr_tm") or r.get("time") or r.get("tm") or "")
                 if len(d) == 8 and d.isdigit():
                     if len(t) == 6 and t.isdigit():
                         ts = pd.to_datetime(d + t, format="%Y%m%d%H%M%S", errors="coerce")
                     else:
+                        # 일봉 등 시간 미제공 → 09:00 부여
                         ts = pd.to_datetime(d + "090000", format="%Y%m%d%H%M%S", errors="coerce")
                 else:
-                    # ✅ 여기 추가: d(날짜)가 없더라도 t(=cntr_tm)가 14자리면 그 자체가 YYYYMMDDHHMMSS
                     if len(t) == 14 and t.isdigit():
                         ts = pd.to_datetime(t, format="%Y%m%d%H%M%S", errors="coerce")
                     else:
@@ -84,22 +102,20 @@ class MacdCalculator:
             if ts is None or pd.isna(ts):
                 continue
 
-            # ✅ close: close/close_pric 가 없으면 cur_prc 사용 (KA10080 실 응답 커버)
-            close_val = (r.get("close") or r.get("close_pric") or r.get("cur_prc"))
-
             recs.append({
                 "ts": ts,
-                "open": _to_float(r.get("open") or r.get("open_pric")),
-                "high": _to_float(r.get("high") or r.get("high_pric")),
-                "low":  _to_float(r.get("low")  or r.get("low_pric")),
-                "close": _to_float(close_val),
-                "vol": _to_float(r.get("vol") or r.get("trde_qty") or r.get("volume") or r.get("v")),
+                "open":  _to_float(r.get("open")  or r.get("open_pric")),
+                "high":  _to_float(r.get("high")  or r.get("high_pric")),
+                "low":   _to_float(r.get("low")   or r.get("low_pric")),
+                "close": _to_float(r.get("close") or r.get("close_pric") or r.get("cur_prc")),
+                "vol":   _to_float(r.get("vol")   or r.get("trde_qty")   or r.get("volume") or r.get("v")),
             })
 
         if not recs:
             return pd.DataFrame()
 
         df = pd.DataFrame(recs).set_index("ts").sort_index()
+
         return df
 
     def _init_state_from_history(self, close_series: pd.Series) -> Tuple[Dict[str, float], pd.DataFrame]:
