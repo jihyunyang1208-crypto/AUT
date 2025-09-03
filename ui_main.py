@@ -575,7 +575,6 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def on_new_stock(self, code: str):
         self.label_new_stock.setText(f"신규 종목: {code}")
-        self.append_log(f"🆕 신규 종목: {code}")
         self.status.showMessage(f"신규 종목: {code}", 3000)
 
 
@@ -791,30 +790,37 @@ class MainWindow(QMainWindow):
 
         # ✅ 모달 배지(현재가/등락률) 업데이트
         code = (payload.get("stock_code") or "").strip()
+        if not code:
+            logger.warning("No stock code found in payload; cannot open/update MACD dialog.")
+            return
+
         dlg = self._macd_dialogs.get(code)
         if not dlg:
             self._open_macd_dialog(code)
             # _open_macd_dialog()는 다이얼로그를 생성하고 딕셔너리에 저장합니다.
             # 따라서 다시 가져올 필요 없이 dlg 변수에 할당받아 바로 사용 가능
             dlg = self._macd_dialogs.get(code)
+            if not dlg:
+                logger.error("Failed to open MACD dialog for code: %s", code)
+                return
 
-        if dlg is not None:
-            cur = self._pick(payload, ["cur_prc", "stck_prpr", "price"])
-            raw_rt = self._pick(payload, ["flu_rt", "prdy_ctrt"])
-            rt_val = self._to_float_loose(raw_rt)
-            if rt_val is None:
-                rate_str = "-"
-            else:
-                rate_str = f"{rt_val:+.2f}%"
-            dlg.update_quote(cur, rt_val)
 
-        # ✅ 다이얼로그가 열려있지 않으면 자동으로 열고, 데이터 요청은 `_open_macd_dialog`에서 처리
-        if code and code not in self._macd_dialogs:
-            self._open_macd_dialog(code)
-            dlg.update_quote(cur, rt_val)
+        # At this point, `dlg` is guaranteed to be a valid MacdDialog instance.
+        # Now, update the quote information.
+        cur = self._pick(flat, ["cur_prc", "stck_prpr", "price"])
+        raw_rt = self._pick(flat, ["flu_rt", "prdy_ctrt"])
 
-        if code and code not in self._macd_dialogs:
-            self._open_macd_dialog(code)
+        try:
+            rt_val = float(str(raw_rt).replace("%", "").replace(",", ""))
+        except (ValueError, TypeError):
+            rt_val = None
+
+        if rt_val is None:
+            rate_str = "-"
+        else:
+            rate_str = f"{rt_val:+.2f}%"
+
+        dlg.update_quote(cur, rt_val)
 
         # ✅ 자동매매 트리거 (체크박스 켜진 경우에만 내부에서 실행)
         self._trigger_auto_trade(payload)

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor, QFont
 
 from core.macd_calculator import macd_bus, calculator
-
+from core.symbol_cache import symbol_name_cache
 
 # ---- (옵션) raw rows를 받아 MACD 내부계산에 사용하고 싶을 때 ----
 def _parse_dt(date_str: Optional[str], time_str: Optional[str]) -> Optional[pd.Timestamp]:
@@ -70,9 +70,9 @@ def rows_to_df_daily(rows: Iterable[dict]) -> pd.DataFrame:
 @dataclass
 class MacdPoint:
     t: pd.Timestamp
-    macd: float
-    signal: float
-    hist: float
+    macd: int
+    signal: int
+    hist: int
 
 
 class MacdDialog(QDialog):
@@ -98,13 +98,23 @@ class MacdDialog(QDialog):
             "1d": deque(maxlen=500),
         }
 
+        self.setWindowFlags(
+            Qt.Window |  # Treat as a top-level window
+            Qt.WindowMinMaxButtonsHint | # Add min/max buttons
+            Qt.WindowCloseButtonHint | # Add a close button
+            Qt.WindowSystemMenuHint | # Add a system menu
+            Qt.WindowMaximizeButtonHint | # Ensure maximize button is present
+            Qt.WindowMinimizeButtonHint # Ensure minimize button is present
+        )
+
         self.setWindowTitle(title or f"MACD 모니터(수치) - {self.code}")
-        self.setModal(True)
-        self.setMinimumSize(1200, 460)
+        self.setModal(False)
+        self.setMinimumSize(1200, 250)
 
         # 상단 바
         top = QHBoxLayout()
-        self.lbl_code = QLabel(f"종목: <b>{self.code}</b>")
+        name = symbol_name_cache.get(self.code) or "종목명 없음"
+        self.lbl_code = QLabel(f"종목: <b>{self.code}</b> <span style='color:#9e9e9e'>({name})</span>")
         self.lbl_quote = QLabel("")
         self.lbl_updated = QLabel("—")
         self.btn_export = QPushButton("CSV 내보내기")
@@ -121,7 +131,7 @@ class MacdDialog(QDialog):
 
         # 테이블
         # 컬럼: TF | Time | MACD | Signal | Hist | ΔMACD | ΔHist | Cross | Trend(10) | Hist(10)
-        self.COLS = ["TF", "Time", "MACD", "Signal", "Hist", "ΔMACD", "ΔHist", "Cross", "Trend(10)", "Hist(10)"]
+        self.COLS = ["TF", "Time", "MACD", "Signal", "Hist", "ΔMACD", "ΔHist", "Cross", "MACD(10)", "Hist(10)"]
 
         self.table = QTableWidget(3, len(self.COLS), self)
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -176,6 +186,8 @@ class MacdDialog(QDialog):
         # (옵션) 브릿지가 raw rows를 주면 → 계산기로 전달해 버스 emit
         if self.bridge:
             try:
+                self.bridge.symbol_name_updated.connect(self._on_symbol_name_updated, Qt.UniqueConnection)
+
                 if hasattr(self.bridge, "minute_bars_received"):
                     self.bridge.minute_bars_received.connect(self.on_minute_bars, Qt.UniqueConnection)
                 if hasattr(self.bridge, "daily_bars_received"):
@@ -209,18 +221,38 @@ class MacdDialog(QDialog):
         self.table.setItem(row, col, item)
 
     @staticmethod
-    def _sparkline(vals: List[float]) -> str:
-        # -1~+1 범위 대충 정규화 (값이 큰 경우도 모양만 보자)
-        if not vals: 
+    def _sparkline(vals: List[float], power: float = 1.0) -> str:
+        if not vals:
             return "-"
-        blocks = "▁▂▃▄▅▆▇█"
-        vmin, vmax = float(min(vals)), float(max(vals))
+        
+        blocks = " ▂▃▄▅▆▇█"
+        
+        # 1. Normalize values to a -1 to +1 range
+        # Find the average to serve as the zero point
+        v_avg = sum(vals) / len(vals)
+        
+        # Calculate the maximum absolute deviation from the average
+        v_span = max(abs(v - v_avg) for v in vals) or 1.0
+        
+        normalized_vals = [(v - v_avg) / v_span for v in vals]
+        
+        # 2. Apply a power function to increase visual variance
+        if power > 1.0:
+            normalized_vals = [
+                (abs(v) ** power) * (1 if v >= 0 else -1)
+                for v in normalized_vals
+            ]
+
+        # 3. Scale the transformed values to fit the character blocks
+        vmin, vmax = float(min(normalized_vals)), float(max(normalized_vals))
         span = (vmax - vmin) or 1.0
+        
         out = []
-        for v in vals:
+        for v in normalized_vals:
             z = (v - vmin) / span
-            idx = min(len(blocks)-1, max(0, int(round(z * (len(blocks)-1)))))
+            idx = min(len(blocks) - 1, max(0, int(round(z * (len(blocks) - 1)))))
             out.append(blocks[idx])
+            
         return "".join(out)
 
     def _fmt_val_with_dir(self, prev: Optional[float], cur: float) -> (str, Optional[str]):
@@ -265,9 +297,9 @@ class MacdDialog(QDialog):
                     continue
                 buf.append(MacdPoint(
                     t=t,
-                    macd=float(p.get("macd")),
-                    signal=float(p.get("signal")),
-                    hist=float(p.get("hist")),
+                    macd=int(p.get("macd")),
+                    signal=int(p.get("signal")),
+                    hist=int(p.get("hist")),
                 ))
         else:  # append
             # 마지막 1개만 온다는 가정. 안전하게 여러 개도 처리
@@ -360,13 +392,6 @@ class MacdDialog(QDialog):
             cross_color = "blue"
         self._set_item(row, 7, cross_text, color=cross_color, align=Qt.AlignCenter, bold=True)
         
-        # Trend(10) (8열) & Hist(10) (9열)
-        macd_vals = [p.macd for p in list(buf)[-self.HISTORY_N:]]
-        hist_vals = [p.hist for p in list(buf)[-self.HISTORY_N:]]
-
-        self._trend_cols(row, 8, macd_vals, "MACD")
-        self._trend_cols(row, 9, hist_vals, "Hist")
-
 
         # 최근 10개 MACD, HIST 값 추출
         macd_vals = [p.macd for p in list(buf)[-self.HISTORY_N:]]

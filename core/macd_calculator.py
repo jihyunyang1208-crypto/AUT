@@ -26,6 +26,11 @@ macd_bus = MacdBus()  # 싱글톤처럼 사용
 
 
 class MacdCalculator:
+    """
+    - 최초엔 apply_rows_full(...)로 전체 계산
+    - 이후엔 apply_append(...)로 새 봉만 증분 갱신
+    상태 저장: {(code, tf): {"last_ts": pd.Timestamp, "ema_fast": float, "ema_slow": float, "ema_signal": float}}
+    """
     """코드+타임프레임별 상태를 내부에 유지하여 MACD(full 또는 증분) 계산"""
     def __init__(self, fast=12, slow=26, signal=9):
         self.fast = fast
@@ -34,44 +39,118 @@ class MacdCalculator:
         # (선택) 상태 저장: {(code, tf): {"ema_fast": float, ...}} — 현재는 full 계산 위주로 사용
         self._states: Dict[Tuple[str, str], Dict[str, float]] = {}
 
+        self._alpha_fast = 2.0 / (self.fast + 1)
+        self._alpha_slow = 2.0 / (self.slow + 1)
+        self._alpha_sig  = 2.0 / (self.signal + 1)
+
     # ---------------- 외부 엔트리 포인트 ----------------
-    def apply_rows(self, code: str, tf: str, rows: List[Dict[str, Any]], need: int = 120) -> None:
+    # ---------- public: FULL ----------
+    def apply_rows_full(self, code: str, tf: str, rows: List[Dict[str, Any]], need: int = 120) -> None:
+        tf = str(tf).lower()
+        if tf not in ("5m", "30m", "1d"):
+            return
+
+        logger.debug("[MACD] FULL start: code=%s tf=%s rows_in=%d need=%d", code, tf, len(rows or []), need)
+        df = self._rows_to_df(rows, tf)
+        if df.empty or "close" not in df.columns:
+            logger.debug("[MACD] FULL abort: empty/invalid df")
+            return
+
+        # --- full calc via pandas EWM ---
+        ema_fast = df["close"].ewm(span=self.fast, adjust=False).mean()
+        ema_slow = df["close"].ewm(span=self.slow, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=self.signal, adjust=False).mean()
+        hist = macd_line - signal_line
+
+        macd_df = pd.DataFrame({"macd": macd_line, "signal": signal_line, "hist": hist})
+
+        # --- save state (last point) ---
+        last_ts = macd_df.index[-1]
+        state = {
+            "last_ts": last_ts,
+            "ema_fast": float(ema_fast.iloc[-1]),
+            "ema_slow": float(ema_slow.iloc[-1]),
+            "ema_signal": float(signal_line.iloc[-1]),
+        }
+        self._states[(code, tf)] = state
+
+        payload = self._to_series_payload(macd_df.tail(need))
+        logger.debug("[MACD] FULL emit: code=%s tf=%s points=%d last_t=%s",
+                     code, tf, len(payload), (payload[-1]["t"] if payload else None))
+        macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "mode": "full", "series": payload})
+
+    # ---------- public: APPEND ----------
+    def apply_append(self, code: str, tf: str, rows: List[Dict[str, Any]]) -> None:
         """
-        rows(원시 분/일봉 배열)를 받아:
-          1) 시계열 DataFrame 변환
-          2) MACD(full) 계산
-          3) 최근 need개 직렬화하여 버스로 emit
-        rows 예:
-          - {"ts":"2025-08-27T14:30:00+09:00","open":..,"high":..,"low":..,"close":..,"vol":..}
-          - 또는 {"base_dt":"20250827","trd_tm":"143000","close":..} / {"dt":"20250827","cntr_tm":"143000", ...}
-          - 일봉은 time이 없으면 09:00:00을 기본으로 부여
+        새로 들어온 분봉/일봉 rows를 받아, 마지막 시각 이후의 캔들만 증분 계산.
+        - state 없으면 FULL로 전환(보수적)
+        - 여러 캔들이 한 번에 들어오면 시간 오름차순으로 순차 갱신
+        - 모든 업데이트된 데이터를 emit하여 UI의 sparkline 갱신을 보장
         """
         tf = str(tf).lower()
         if tf not in ("5m", "30m", "1d"):
             return
-        
-        logger.debug("[MACD] apply_rows: code=%s tf=%s rows_in=%d need=%d",
-                                      code, tf, len(rows or []), need)
 
-
-
+        key = (code, tf)
+        state = self._states.get(key)
         df = self._rows_to_df(rows, tf)
         if df.empty or "close" not in df.columns:
             return
 
-        state, macd_df = self._init_state_from_history(df["close"])
-        self._states[(code, tf)] = state
+        if not state:
+            # 시드가 없으면 full 계산로 변경
+            logger.debug("[MACD] APPEND fallback to FULL (no state): code=%s tf=%s", code, tf)
+            self.apply_rows_full(code, tf, rows, need=120)
+            return
 
-        payload = self._to_series_payload(macd_df.tail(need))
+        last_ts = state.get("last_ts")
+        # last_ts 이후의 새 캔들만
+        inc = df[df.index > last_ts]
+        if inc.empty:
+            return
 
-        logger.debug("[MACD] emit: code=%s tf=%s points=%d last_t=%s",
-                                      code, tf, len(payload), (payload[-1]["t"] if payload else None))
+        ema_fast = state["ema_fast"]
+        ema_slow = state["ema_slow"]
+        ema_sig  = state["ema_signal"]
 
-        macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "series": payload})
+        current_payload = self._to_series_payload(self._rows_to_df(code, tf))
 
+        for ts, row in inc.iterrows():
+            c = float(row["close"])
+            # EMA 증분
+            ema_fast = ema_fast + self._alpha_fast * (c - ema_fast)
+            ema_slow = ema_slow + self._alpha_slow * (c - ema_slow)
+            macd = ema_fast - ema_slow
+            ema_sig = ema_sig + self._alpha_sig * (macd - ema_sig)
+            hist = macd - ema_sig
+
+            current_payload.append({
+                "t": ts.isoformat(),
+                "macd": float(macd),
+                "signal": float(ema_sig),
+                "hist": float(hist),
+            })
+            last_ts = ts
+
+        # 상태 갱신
+        self._states[key] = {
+            "last_ts": last_ts,
+            "ema_fast": float(ema_fast),
+            "ema_slow": float(ema_slow),
+            "ema_signal": float(ema_sig),
+        }
+
+        # 마지막 1개만 append emit
+        logger.debug("[MACD] APPEND (full-series) emit: code=%s tf=%s points=%d last_t=%s",
+                    code, tf, len(current_payload), current_payload[-1]["t"])
+        macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "mode": "full", "series": current_payload})
+
+    
     # 구버전 코드(혹시 남아있다면) 호환용 별칭
-    def apply(self, code: str, tf: str, rows: List[Dict[str, Any]], need: int = 120) -> None:
-        self.apply_rows(code, tf, rows, need)
+    def apply_rows(self, code: str, tf: str, rows: List[Dict[str, Any]], need: int = 120) -> None:
+        # 기존 호출이 있다면 FULL로 동작
+        self.apply_rows_full(code, tf, rows, need)
 
     # ---------------- 내부 유틸 ----------------
     def _rows_to_df(self, rows: List[Dict[str, Any]], tf: str) -> pd.DataFrame:

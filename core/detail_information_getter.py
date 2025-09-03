@@ -255,48 +255,113 @@ class DetailInformationGetter:
         """
         - URL: /api/dostk/chart
         - api-id: ka10081
-        - body: {"stk_cd":"005930", (opt) "base_dt":"YYYYMMDD", "upd_stkpc_tp":"1"}
+        - body: {"stk_cd":"005930", "base_dt":"YYYYMMDD", "upd_stkpc_tp":"1"}
+        
+        Refined function to fetch daily chart data with proper logging and
+        handling of continuation keys for paginated results.
         """
         url = f"{self.base_url}/api/dostk/chart"
         code6 = _code6(code)
+        
+        # 💡 DEBUG LOG: Start of the function call
+        logger.debug(
+            "ka10081: Fetching daily chart for %s (base_dt: %s, need: %d)",
+            code6, base_dt, need
+        )
 
         body = {"stk_cd": code6, "upd_stkpc_tp": str(upd_stkpc_tp)}
         if base_dt:
             body["base_dt"] = base_dt
 
         rows_all: List[Dict[str,Any]] = []
-        cont_yn, next_key = None, None
+        cont_yn, next_key = "N", ""
+        page_count = 0
 
         while True:
-            resp = requests.post(url, headers=self._headers("ka10081", "Y" if next_key else "N", next_key),
-                                 json=body, timeout=self.timeout)
-            resp.raise_for_status()
+            page_count += 1
+            
+            # 💡 DEBUG LOG: Before sending the request
+            logger.debug(
+                "ka10081: Requesting page %d for %s. (cont_yn: %s, next_key: %s)",
+                page_count, code6, cont_yn, next_key
+            )
+            
+            headers = self._headers("ka10081", cont_yn, next_key)
+            
             try:
+                resp = requests.post(url, headers=headers, json=body, timeout=self.timeout)
+                resp.raise_for_status()
+                
                 js = resp.json() or {}
-            except Exception:
-                js = {}
-
-            rows = (js.get("stk_day_pole_chart_qry")
-                    or js.get("stk_day_chart_qry")
-                    or js.get("day_chart")
-                    or js.get("body",{}).get("stk_day_pole_chart_qry")
-                    or js.get("data",{}).get("stk_day_pole_chart_qry")
-                    or [])
+                
+                # 💡 DEBUG LOG: Response status
+                logger.debug(
+                    "ka10081: Received response for %s. data: %d",
+                    code6, js
+                )
+            except requests.exceptions.RequestException as e:
+                # 💡 ERROR LOG: Request failure
+                logger.error("ka10081: Request failed for %s: %s", code6, e)
+                return {"stock_code": code6, "rows": [], "base_dt": base_dt or ""}
+            
+            # Extract data from various possible keys
+            rows = (
+                js.get("stk_dt_pole_chart_qry")  # Added this key
+                or js.get("stk_day_pole_chart_qry")
+                or js.get("stk_day_chart_qry")
+                or js.get("day_chart")
+                or js.get("body",{}).get("stk_day_pole_chart_qry")
+                or js.get("data",{}).get("stk_day_pole_chart_qry")
+                or []
+            )
+            
             if isinstance(rows, list):
                 rows_all.extend(rows)
+                # 💡 DEBUG LOG: Number of rows received in this page
+                logger.debug(
+                    "ka10081: Page %d for %s contains %d rows. Total rows so far: %d",
+                    page_count, code6, len(rows), len(rows_all)
+                )
+            else:
+                logger.warning("ka10081: Unexpected data format for %s. No 'rows' list found.", code6)
 
             cont_yn = resp.headers.get("cont-yn", "N")
             next_key = resp.headers.get("next-key", "")
+            
+            # 💡 DEBUG LOG: Pagination info from headers
+            logger.debug(
+                "ka10081: Headers for %s: cont_yn=%s, next_key=%s",
+                code6, cont_yn, next_key
+            )
+            
+            # Termination conditions
             if (need and len(rows_all) >= need) or cont_yn != "Y" or not next_key:
+                # 💡 DEBUG LOG: Loop termination
+                logger.debug(
+                    "ka10081: Loop for %s terminated. Reached 'need' (%d) or no more pages.",
+                    code6, need
+                )
                 break
 
-        key = lambda r: str(r.get("dt",""))
-        uniq = { key(r): r for r in rows_all if r.get("dt") }
-        rows = [uniq[k] for k in sorted(uniq.keys())]
-        if need and len(rows) > need:
-            rows = rows[-need:]
+        # Process and deduplicate data
+        unique_rows_by_date = {r.get("dt"): r for r in rows_all if r.get("dt")}
+        sorted_unique_rows = [unique_rows_by_date[k] for k in sorted(unique_rows_by_date.keys())]
+        
+        # Trim to the required number of items if needed
+        if need and len(sorted_unique_rows) > need:
+            final_rows = sorted_unique_rows[-need:]
+            logger.debug(
+                "ka10081: Trimmed rows for %s. Final count: %d", code6, len(final_rows)
+            )
+        else:
+            final_rows = sorted_unique_rows
 
-        return {"stock_code": code6, "rows": rows, "base_dt": base_dt or ""}
+        # 💡 DEBUG LOG: End of the function
+        logger.debug(
+            "ka10081: Finished fetching data for %s. Total rows: %d", code6, len(final_rows)
+        )
+        
+        return {"stock_code": code6, "rows": final_rows, "base_dt": base_dt or ""}
 
 
 # ------------------------------- 보조 API -------------------------------
@@ -526,6 +591,7 @@ class SimpleMarketAPI:
         resp = requests.post(url, headers=headers, json=data, timeout=timeout)
 
         logger.debug("Code: %s", resp.status_code)
+        """    
         logger.debug(
             "Header:: %s",
             json.dumps(
@@ -534,6 +600,7 @@ class SimpleMarketAPI:
                 ensure_ascii=False,
             ),
         )
+        """        
         try:
             logger.debug("Body: %s", json.dumps(resp.json(), indent=4, ensure_ascii=False))
         except Exception:

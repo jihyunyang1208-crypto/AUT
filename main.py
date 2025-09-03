@@ -111,6 +111,8 @@ class AsyncBridge(QObject):
 
     # (옵션) 5m 원시 rows
     minute_bars_received = Signal(str, list)
+    symbol_name_updated = Signal(str, str)  # (code6, name)
+
 
     def __init__(self):
         super().__init__()
@@ -242,8 +244,10 @@ class Engine(QObject):
 
     # ── 조건검색 콜백/제어 ─────────────────────
     def _on_condition_list(self, conditions: list):
-        self.bridge.log.emit("[Engine] 조건식 수신")
-        self.bridge.condition_list_received.emit(conditions or [])
+        # self.bridge.log.emit("[Engine] 조건식 수신")
+        # 저장된 list 를 프로그램 실행 초기에 load하는 것으로 대체
+        # self.bridge.condition_list_received.emit(conditions or [])
+        pass
 
     def send_condition_search_request(self, seq: str):
         if not self.websocket_client:
@@ -286,9 +290,9 @@ class Engine(QObject):
             try:
                 # 초기 FULL (5m)
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=need_5m)
-                rows = res.get("rows", []) or []
-                self.bridge.chart_rows_received.emit(code, "5m", rows)
-                calculator.apply_rows(code=code, tf="5m", rows=rows, need=need_5m)
+                rows5 = res.get("rows", []) or []
+                self.bridge.chart_rows_received.emit(code, "5m", rows5)
+                calculator.apply_rows_full(code=code, tf="5m", rows=rows5, need=need_5m)
 
                 # 분(5) 경계에 맞춘 증분 루프
                 while True:
@@ -297,7 +301,7 @@ class Engine(QObject):
                     rows_inc = inc.get("rows", []) or []
                     if rows_inc:
                         self.bridge.chart_rows_received.emit(code, "5m", rows_inc)
-                        calculator.apply_rows(code=code, tf="5m", rows=rows_inc, need=need_5m)
+                        calculator.apply_append(code=code, tf="5m", rows=rows_inc)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -307,9 +311,9 @@ class Engine(QObject):
             try:
                 # 초기 FULL (30m)
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=need_30m)
-                rows = res.get("rows", []) or []
-                self.bridge.chart_rows_received.emit(code, "30m", rows)
-                calculator.apply_rows(code=code, tf="30m", rows=rows, need=need_30m)
+                rows30 = res.get("rows", []) or []
+                self.bridge.chart_rows_received.emit(code, "30m", rows30)
+                calculator.apply_rows_full(code=code, tf="30m", rows=rows30, need=need_30m)
 
                 # 분(30) 경계 증분
                 while True:
@@ -318,7 +322,7 @@ class Engine(QObject):
                     rows_inc = inc.get("rows", []) or []
                     if rows_inc:
                         self.bridge.chart_rows_received.emit(code, "30m", rows_inc)
-                        calculator.apply_rows(code=code, tf="30m", rows=rows_inc, need=need_30m)
+                        calculator.apply_append(code=code, tf="30m", rows=rows_inc)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -328,9 +332,9 @@ class Engine(QObject):
             try:
                 today = date.today().strftime("%Y%m%d")
                 res = await asyncio.to_thread(self.getter.fetch_daily_chart_ka10081, code, base_dt=today, need=need_1d)
-                rows = res.get("rows", []) or []
-                self.bridge.chart_rows_received.emit(code, "1d", rows)
-                calculator.apply_rows(code=code, tf="1d", rows=rows, need=need_1d)
+                rows1d = res.get("rows", []) or []
+                self.bridge.chart_rows_received.emit(code, "1d", rows1d)
+                calculator.apply_rows_full(code=code, tf="1d", rows=rows1d, need=need_1d)
                 # 일봉은 장 종료 이후 1회 갱신이면 충분. 필요 시 다음날 재호출.
             except asyncio.CancelledError:
                 raise
@@ -364,6 +368,7 @@ class Engine(QObject):
     def update_macd_once(self, code: str, tic_scope: int = 5):
         try:
             self.getter.emit_macd_for_ka10080(self.bridge, code, tic_scope=tic_scope, need=200, exchange_prefix="KRX")
+            calculator.apply_rows_full(code=code, tf="5m", rows=rows, need=200)
         except Exception:
             logger.exception("update_macd_once failed for %s", code)
 

@@ -8,7 +8,7 @@ from typing import Optional, Any, Dict, List, Callable
 from core.detail_information_getter import SimpleMarketAPI
 import logging
 import threading
-
+from core.symbol_cache import symbol_name_cache
 logger = logging.getLogger(__name__)
 
 
@@ -49,8 +49,8 @@ class WebSocketClient:
         market_api: SimpleMarketAPI,                              # ← 의존성 주입
         socketio: Optional[SocketIO] = None,
         on_condition_list: Optional[Callable[[List[Any]], None]] = None,
-        on_new_stock: Optional[Callable[[str], None]] = None,     # 문자열 code 콜백
-        on_new_stock_detail: Optional[Callable[[Dict[str, Any]], None]] = None,  # 상세 dict 콜백
+        #on_new_stock: Optional[Callable[[str], None]] = None,     # 문자열 code 콜백
+        #on_new_stock_detail: Optional[Callable[[Dict[str, Any]], None]] = None,  # 상세 dict 콜백
         dedup_ttl_sec: int = 3,
         detail_timeout_sec: float = 6.0,
         refresh_token_cb: Optional[Callable[[], str]] = None,    
@@ -578,6 +578,15 @@ class WebSocketClient:
                     or (res01.get("body") or {}).get("stk_nm")
                     or "종목명 없음"
                 )
+
+            # 1) 캐시에 넣고
+            symbol_name_cache.set(code, name01)
+            # 2) 브리지로 이벤트 발행 (UI가 바로 라벨 갱신할 수 있도록)
+            if self.bridge:
+                try:
+                    self.bridge.symbol_name_updated.emit(code, name01)
+                except Exception:
+                    logger.warning("bridge emit failed for %s: %s", code, e)
 
             # UI로 넘길 최소 정보 구성
             detail = {
