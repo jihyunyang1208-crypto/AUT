@@ -244,9 +244,9 @@ class Engine(QObject):
 
     # ── 조건검색 콜백/제어 ─────────────────────
     def _on_condition_list(self, conditions: list):
-        # self.bridge.log.emit("[Engine] 조건식 수신")
+        self.bridge.log.emit("[Engine] 조건식 수신")
         # 저장된 list 를 프로그램 실행 초기에 load하는 것으로 대체
-        # self.bridge.condition_list_received.emit(conditions or [])
+        self.bridge.condition_list_received.emit(conditions or [])
         pass
 
     def send_condition_search_request(self, seq: str):
@@ -439,7 +439,6 @@ def main():
     )
 
     # 이벤트 배선
-    bridge.new_stock_received.connect(engine.start_macd_stream)
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
 

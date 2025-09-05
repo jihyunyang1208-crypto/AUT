@@ -70,9 +70,9 @@ def rows_to_df_daily(rows: Iterable[dict]) -> pd.DataFrame:
 @dataclass
 class MacdPoint:
     t: pd.Timestamp
-    macd: int
-    signal: int
-    hist: int
+    macd: float
+    signal: float
+    hist: float
 
 
 class MacdDialog(QDialog):
@@ -107,6 +107,8 @@ class MacdDialog(QDialog):
             Qt.WindowMinimizeButtonHint # Ensure minimize button is present
         )
 
+        self.setAttribute(Qt.WA_DeleteOnClose, True)
+
         self.setWindowTitle(title or f"MACD 모니터(수치) - {self.code}")
         self.setModal(False)
         self.setMinimumSize(1200, 250)
@@ -119,7 +121,9 @@ class MacdDialog(QDialog):
         self.lbl_updated = QLabel("—")
         self.btn_export = QPushButton("CSV 내보내기")
 
-        self.btn_clear = QPushButton("초기화")
+        self.btn_refresh = QPushButton("최신화")
+        self.btn_refresh.setToolTip("분/일봉 데이터 재요청 (F5)")
+
         self.chk_autorefresh = QCheckBox("자동갱신")
         self.chk_autorefresh.setChecked(True)
         top.addWidget(self.lbl_code)
@@ -127,7 +131,9 @@ class MacdDialog(QDialog):
         top.addWidget(self.lbl_quote)
         top.addSpacing(8)
         top.addWidget(self.chk_autorefresh)
-        top.addWidget(self.btn_clear)
+        top.addWidget(self.btn_export)  
+        top.addWidget(self.btn_refresh)
+
 
         # 테이블
         # 컬럼: TF | Time | MACD | Signal | Hist | ΔMACD | ΔHist | Cross | Trend(10) | Hist(10)
@@ -174,22 +180,23 @@ class MacdDialog(QDialog):
         root.addWidget(self.table)
 
         # 이벤트
-        self.btn_clear.clicked.connect(self._on_clear_clicked)
         self.btn_export.clicked.connect(self._on_export_clicked)
+        self.btn_refresh.clicked.connect(self._on_refresh_clicked)
 
         # MACD 버스 연결
         try:
-            macd_bus.macd_series_ready.connect(self.on_macd_series, Qt.UniqueConnection)
+            if self.bridge and hasattr(self.bridge, "macd_series_ready"):
+                self.bridge.macd_series_ready.connect(self.on_macd_series, Qt.UniqueConnection)
         except Exception:
             pass
 
-        # (옵션) 브릿지가 raw rows를 주면 → 계산기로 전달해 버스 emit
+        # (옵션) 분/일봉 raw rows 시그널 명칭 호환
         if self.bridge:
             try:
-                self.bridge.symbol_name_updated.connect(self._on_symbol_name_updated, Qt.UniqueConnection)
-
                 if hasattr(self.bridge, "minute_bars_received"):
                     self.bridge.minute_bars_received.connect(self.on_minute_bars, Qt.UniqueConnection)
+                if hasattr(self.bridge, "minutes_bars_received"):   # ✅ 복수형도 지원
+                    self.bridge.minutes_bars_received.connect(self.on_minute_bars, Qt.UniqueConnection)
                 if hasattr(self.bridge, "daily_bars_received"):
                     self.bridge.daily_bars_received.connect(self.on_daily_bars, Qt.UniqueConnection)
             except Exception:
@@ -272,54 +279,87 @@ class MacdDialog(QDialog):
     def _row_index(self, tf: str) -> int:
         return 0 if tf == "5m" else 1 if tf == "30m" else 2
 
+    def _norm_series(self, series_in) -> list[dict]:
+        """payload['series']를 표준 포맷으로 정규화
+           반환: [{'t': pd.Timestamp, 'macd': float, 'signal': float, 'hist': float}, ...] (시각 오름차순, 중복 제거)"""
+        out = []
+        for p in (series_in or []):
+            # 시간 키 다양성 흡수
+            t_raw = p.get("t") or p.get("time") or p.get("ts") or p.get("dt")
+            ts = pd.to_datetime(t_raw, errors="coerce")
+            if ts is None or pd.isna(ts):
+                continue
+            try:
+                macd = float(p.get("macd"))
+                signal = float(p.get("signal"))
+                hist = float(p.get("hist"))
+            except (TypeError, ValueError):
+                continue
+            out.append({"t": ts, "macd": macd, "signal": signal, "hist": hist})
+
+        # 시간 오름차순 + 중복 시각 제거
+        out.sort(key=lambda x: x["t"])
+        dedup, seen = [], set()
+        for q in out:
+            if q["t"] in seen:
+                continue
+            seen.add(q["t"])
+            dedup.append(q)
+        return dedup
+
+
+    def _norm_tf(self, v) -> str:
+        s = str(v).strip().lower()
+        # 허용 패턴 폭넓게
+        if s in {"5", "5m", "05m", "5min", "5분", "5분봉"}:
+            return "5m"
+        if s in {"30", "30m", "30min", "30분", "30분봉"}:
+            return "30m"
+        if s in {"1d", "d", "1day", "day", "일", "일봉"}:
+            return "1d"
+        return s
+
+
     # ------------ 버스 수신 ------------
     @Slot(dict)
     def on_macd_series(self, data: dict):
+        # 코드 체크 (있을 때만 필터)
         code = data.get("code")
-        if code and code[-6:] != self.code:
+        if code and str(code)[-6:].zfill(6) != self.code:
             return
-        tf = str(data.get("tf", "")).lower()
+
+        tf = self._norm_tf(data.get("tf", ""))
         if tf not in ("5m", "30m", "1d"):
             return
 
         mode = str(data.get("mode") or "full").lower()
-        series = data.get("series") or []
+        series_in = data.get("series") or data.get("rows") or []
+        series = self._norm_series(series_in)
         if not series:
             return
 
         buf = self.buffers[tf]
-
         if mode == "full":
             buf.clear()
-            for p in series:
-                t = pd.to_datetime(p.get("t"), errors="coerce")
-                if pd.isna(t):
-                    continue
-                buf.append(MacdPoint(
-                    t=t,
-                    macd=int(p.get("macd")),
-                    signal=int(p.get("signal")),
-                    hist=int(p.get("hist")),
-                ))
-        else:  # append
-            # 마지막 1개만 온다는 가정. 안전하게 여러 개도 처리
-            last_ts = buf[-1].t if buf else None
-            for p in series:
-                t = pd.to_datetime(p.get("t"), errors="coerce")
-                if pd.isna(t):
-                    continue
-                if last_ts is not None and not (t > last_ts):
-                    # 과거/중복은 무시
-                    continue
-                buf.append(MacdPoint(
-                    t=t,
-                    macd=float(p.get("macd")),
-                    signal=float(p.get("signal")),
-                    hist=float(p.get("hist")),
-                ))
 
-        if self.chk_autorefresh.isChecked():
+        last_ts = buf[-1].t if buf else None
+        appended = 0
+        for p in series:
+            t = pd.to_datetime(p.get("t"), errors="coerce")
+            if pd.isna(t):
+                continue
+            if mode != "full" and last_ts is not None and not (t > last_ts):
+                # append 모드에서는 과거/동일 시간 무시
+                continue
+            buf.append(MacdPoint(t=t,
+                                macd=float(p.get("macd", 0.0)),
+                                signal=float(p.get("signal", 0.0)),
+                                hist=float(p.get("hist", 0.0))))
+            appended += 1
+
+        if appended and self.chk_autorefresh.isChecked():
             self._refresh_row(tf)
+            self._touch_updated()
 
     # ------------ raw rows 경로(옵션) ------------
     @Slot(str, list)
@@ -337,6 +377,23 @@ class MacdDialog(QDialog):
         calculator.apply_rows_full(code=self.code, tf="1d", rows=rows, need=120)
 
     # ------------ 표 갱신 ------------
+
+    def _on_refresh_clicked(self):
+        if not self.bridge:
+            return
+        code6 = self.code
+        try:
+            # 분봉 5/30 두 종류 요청 (시그니처가 다를 수 있어 방어적으로 처리)
+            if hasattr(self.bridge, "request_minutes_bars"):
+                try:
+                    self.bridge.request_minutes_bars(code6, tic_scope=5)
+                    self.bridge.request_minutes_bars(code6, tic_scope=30)
+                except TypeError:
+                    self.bridge.request_minutes_bars(code6)
+            if hasattr(self.bridge, "request_daily_bars"):
+                self.bridge.request_daily_bars(code6)
+        except Exception as e:
+            print(f"[MacdDialog] refresh failed: {e}")
 
     def _refresh_all_rows(self):
         for tf in ("5m", "30m", "1d"):
@@ -468,19 +525,4 @@ class MacdDialog(QDialog):
 
     # ------------ 종료 ------------
     def closeEvent(self, e):
-        try:
-            macd_bus.macd_series_ready.disconnect(self.on_macd_series)
-        except Exception:
-            pass
-        if self.bridge:
-            try:
-                if hasattr(self.bridge, "minute_bars_received"):
-                    self.bridge.minute_bars_received.disconnect(self.on_minute_bars)
-            except Exception:
-                pass
-            try:
-                if hasattr(self.bridge, "daily_bars_received"):
-                    self.bridge.daily_bars_received.disconnect(self.on_daily_bars)
-            except Exception:
-                pass
-        super().closeEvent(e)
+        super().closeEvent(e)  # 굳이 disconnect 안 함 (자동으로 해제됨)

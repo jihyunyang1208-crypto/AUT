@@ -647,11 +647,6 @@ class WebSocketClient:
                 "cur_prc", "flu_rt", "open_pric", "high_pric",
                 "low_pric", "now_trde_qty", "cntr_str", "open_pric_pre"
             ]
-            logger.info(
-                "detail summary for %s → %s",
-                detail.get("stock_code"),
-                {k: detail.get(k) for k in summary_keys if k in detail}
-            )
 
             # 2) 상세 emit
             try:

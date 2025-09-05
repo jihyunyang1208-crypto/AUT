@@ -156,10 +156,12 @@ class DetailInformationGetter:
             logger.debug("Header: %s", json.dumps(
                 {k: resp.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}, ensure_ascii=False, indent=2
             ))
+            
             try:
                 logger.debug("Body: %s", json.dumps(resp.json(), ensure_ascii=False, indent=2))
             except Exception:
                 logger.debug("Body(raw): %s", resp.text)
+            
 
             resp.raise_for_status()
             try:
@@ -205,8 +207,7 @@ class DetailInformationGetter:
         if need and len(rows) > need:
             rows = rows[-need:]
 
-        logger.debug("[KA10080] gathered rows(after-clean)=%d", len(rows))
-        logger.debug("stock_code: %s, tic_scope: %s", code6, str(tic_scope))
+        logger.debug("[KA10080] stock_code: %s, tic_scope: %s", code6, str(tic_scope))
         return {"stock_code": code6, "tic_scope": str(tic_scope), "rows": rows}
 
     def emit_macd_for_ka10080(
@@ -294,11 +295,7 @@ class DetailInformationGetter:
                 
                 js = resp.json() or {}
                 
-                # 💡 DEBUG LOG: Response status
-                logger.debug(
-                    "ka10081: Received response for %s. data: %d",
-                    code6, js
-                )
+
             except requests.exceptions.RequestException as e:
                 # 💡 ERROR LOG: Request failure
                 logger.error("ka10081: Request failed for %s: %s", code6, e)
@@ -422,10 +419,12 @@ class SimpleMarketAPI:
             {k: resp.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]},
             indent=4, ensure_ascii=False
         ))
+        '''
         try:
             logger.debug("Body: %s", json.dumps(resp.json(), indent=4, ensure_ascii=False))
         except Exception:
             logger.debug("Body: %s", resp.text)
+        '''
         return resp
 
     # KA10015 wrapper
@@ -503,10 +502,12 @@ class SimpleMarketAPI:
             {k: resp.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]},
             indent=4, ensure_ascii=False
         ))
+        
         try:
             logger.debug("Body: %s", json.dumps(resp.json(), indent=4, ensure_ascii=False))
         except Exception:
             logger.debug("Body: %s", resp.text)
+        
         return resp
 
     # KA10080 wrapper (단독 사용시)
@@ -600,12 +601,13 @@ class SimpleMarketAPI:
                 ensure_ascii=False,
             ),
         )
-        """        
+        """       
+                 
         try:
             logger.debug("Body: %s", json.dumps(resp.json(), indent=4, ensure_ascii=False))
         except Exception:
             logger.debug("Body: %s", resp.text)
-
+        
         return resp
 
     def fetch_basic_info_ka10001(
