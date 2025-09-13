@@ -146,6 +146,9 @@ class MainWindow(QMainWindow):
         self.project_root = project_root
         self._macd_dialogs: dict[str, QDialog] = {}
 
+        self._active_macd_streams: set[str] = set()        # 이미 시작한 종목 track
+        self._last_stream_req_ts: dict[str, pd.Timestamp] = {}  # (선택) 디바운스용
+        self._stream_debounce_sec: int = 15                # 같은 종목 연속 요청 간 최소 간격
 
 
         # 상단 툴바
@@ -613,23 +616,23 @@ class MainWindow(QMainWindow):
         def on_dialog_closed():
             if code6 in self._macd_dialogs:
                 del self._macd_dialogs[code6]
-            # 🔻 다이얼로그가 닫히면 실시간 스트림 중지
-            try:
-                if hasattr(self.engine, "stop_macd_stream"):
-                    self.engine.stop_macd_stream(code6)
-            except Exception as e:
-                logger.warning("stop_macd_stream failed for %s: %s", code6, e)
+            # 🔻 다이얼로그가 닫혀도 실시간 스트림 유지
+            # 기존: self.engine.stop_macd_stream(code6) 제거
+            pass  # 아무것도 하지 않음
+
         dlg.finished.connect(on_dialog_closed)
 
         dlg.show()
         self._macd_dialogs[code6] = dlg
 
+        '''
         # 🔺 다이얼로그가 보이는 동안만 실시간 스트림 시작
         try:
             if hasattr(self.engine, "start_macd_stream"):
                 self.engine.start_macd_stream(code6)
         except Exception as e:
             logger.warning("start_macd_stream failed for %s: %s", code6, e)
+        '''
 
     @Slot(dict)
     def on_macd_series_dict(self, payload: dict):
@@ -723,6 +726,33 @@ class MainWindow(QMainWindow):
                 except RuntimeError:
                     self.append_log("⚠️ asyncio 루프 없음: auto-trade 스킵")
 
+    def _ensure_macd_stream(self, code6: str):
+        """신규 종목 감지될 때 MACD 스트림을 안전하게 시작한다.
+        - 중복 시작 방지
+        - 짧은 시간 내 연속 호출 디바운스
+        """
+        try:
+            # (선택) 디바운스
+            now = pd.Timestamp.now(tz="Asia/Seoul")
+            last = self._last_stream_req_ts.get(code6)
+            if last is not None and (now - last).total_seconds() < getattr(self, "_stream_debounce_sec", 15):
+                logger.debug("debounce: skip start_macd_stream for %s", code6)
+                return
+            self._last_stream_req_ts[code6] = now
+
+            # 이미 활성화된 스트림이면 skip
+            if code6 in self._active_macd_streams:
+                logger.debug("start_macd_stream: already active for %s", code6)
+                return
+
+            if hasattr(self.engine, "start_macd_stream"):
+                self.engine.start_macd_stream(code6)
+                self._active_macd_streams.add(code6)
+                logger.info("✅ started MACD stream for %s (trigger=new_stock_detail)", code6)
+            else:
+                logger.warning("engine has no start_macd_stream")
+        except Exception as e:
+            logger.warning("start_macd_stream failed for %s: %s", code6, e)
 
     @Slot(dict)
     def on_new_stock_detail(self, payload: dict):
@@ -819,7 +849,7 @@ class MainWindow(QMainWindow):
             logger.warning("No stock code found in payload; cannot update MACD dialog.")
             return
         code6 = str(raw_code)[-6:].zfill(6)
-
+        self._ensure_macd_stream(code6) 
         dlg = self._macd_dialogs.get(code6)
         if not dlg:
             return  # 열려있지 않으면 아무 것도 안 함 (더블클릭으로만 띄움)
@@ -831,6 +861,7 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             rt_val = None
         dlg.update_quote(cur, rt_val)
+
 
         # ✅ 자동매매 트리거 (체크박스 켜진 경우에만 내부에서 실행)
         self._trigger_auto_trade(payload)

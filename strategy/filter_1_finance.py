@@ -17,6 +17,8 @@ import logging
 import argparse
 import re
 import os # 파일 경로 처리를 위해 os 모듈 임포트
+from dotenv import load_dotenv
+load_dotenv()
 
 
 # ───────────────────────────────
@@ -27,13 +29,6 @@ def setup_logger(log_level_str):
     if not isinstance(numeric_level, int):
         raise ValueError(f"유효하지 않은 로그 레벨: {log_level_str}")
     
-    # 기본 핸들러가 없는 경우에만 설정 (메인 스크립트에서 이미 설정했을 경우 중복 방지)
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=numeric_level,
-            format="%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%H:%M:%S"
-        )
     # filter_1_finance 모듈의 로거를 가져옵니다.
     return logging.getLogger(__name__)
 
@@ -324,24 +319,19 @@ def run_finance_filter(input_csv="상장법인목록.csv", output_csv="stock_cod
 # Script Entry Point (개발/테스트를 위해 이 파일 단독 실행 시 사용)
 # ───────────────────────────────
 if __name__ == "__main__":
+    # 단독 실행 시 로거 설정
+    logger = setup_logger("info") # 전역 로거 변수 초기화
+    
+
     # 단독 실행 시 .env 파일이 로드되지 않았을 수 있으므로 여기서 로드 시도
     try:
-        from dotenv import load_dotenv
-        load_dotenv()
         logger.debug("💡 .env 파일 로드 완료 (단독 실행 모드).")
     except ImportError:
         logger.debug("⚠️ python-dotenv 라이브러리가 설치되지 않았습니다. 'pip install python-dotenv'로 설치하세요.")
     except Exception as e:
         logger.debug(f"⚠️ .env 파일 로드 중 오류 발생: {e}")
 
-    # Argument 파싱
-    parser = argparse.ArgumentParser(description="재무 데이터를 기반으로 주식 종목을 필터링합니다.")
-    parser.add_argument("--log", default="INFO", help="로그 레벨 (DEBUG, INFO, WARNING, ERROR). 기본값: INFO")
-    args = parser.parse_args()
 
-    # 단독 실행 시 로거 설정
-    logger = setup_logger(args.log) # 전역 로거 변수 초기화
-    
     logger.info("--- filter_1_finance.py 단독 실행 시작 ---")
     
     # 입력 CSV 파일 경로를 현재 스크립트 위치 기준으로 설정 (프로젝트 루트에 '상장법인목록.csv' 있다고 가정)

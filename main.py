@@ -16,12 +16,16 @@ from core.websocket_client import WebSocketClient
 
 from strategy.filter_1_finance import run_finance_filter
 from strategy.filter_2_technical import run_technical_filter
-
-from core.detail_information_getter import DetailInformationGetter, SimpleMarketAPI
+from core.detail_information_getter import DetailInformationGetter, SimpleMarketAPI, normalize_ka10080_rows
 from core.macd_calculator import calculator, macd_bus
 from ui_main import MainWindow
 
 from matplotlib import rcParams
+
+from exitpro.adapters.candle_cache import CandleCache
+from exitpro.adapters.detail_getter_from_cache import DetailGetterFromCache
+from exitpro.adapters.macd_dialog_feed_adapter import MacdDialogFeedAdapter
+from exitpro.exit_monitor import ExitEntryMonitor, TradeSettings, TradeSignal
 
 
 # ─────────────────────────────────────────────────────────
@@ -46,13 +50,23 @@ _setup_korean_font()
 # 로거 설정
 # ─────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-        force=True,
-    )
+
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, datetime.now().strftime("app_%Y%m%d.log"))
+
+# 기본 로거 설정
+logging.basicConfig(
+    filename=LOG_FILE,  # 로그 파일 경로
+    level=logging.DEBUG, # 기록할 로그 레벨 (INFO, DEBUG, WARNING 등)
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    encoding='utf-8' ,   # 인코딩 설정 (한글 깨짐 방지)
+    force=True
+)
+
+# 이제부터 모든 로거는 이 설정에 따라 동작합니다.
+logger = logging.getLogger(__name__)
+
 
 try:
     project_root  # noqa: F823
@@ -193,10 +207,7 @@ class Engine(QObject):
             self.bridge.log.emit("🌐 WebSocket 클라이언트 시작")
 
             # 4) macd_bus → bridge 패스스루 (중복연결 방지)
-            try:
-                macd_bus.macd_series_ready.disconnect(self._on_bus_macd_series)
-            except Exception:
-                pass
+            # Simply connect the signal. PySide6 handles duplicate connections gracefully.
             macd_bus.macd_series_ready.connect(self._on_bus_macd_series)
 
             # 5) UI 통보
@@ -286,22 +297,74 @@ class Engine(QObject):
             self.bridge.log.emit(f"↩️ 이미 스트림 중: {code}")
             return
 
+        def _safe_rows(rows_any) -> list[dict]:
+            """
+            rows_any 가
+            - list[dict] 이면 그대로
+            - list[str(JSON)] 이면 json.loads 로 파싱
+            - str(JSON) 이면 json.loads 해서 rows 키를 찾거나 dict 한 개로 감쌈
+            - 그 외는 빈 리스트
+            """
+            try:
+                # ✅ case 1: 이미 list[dict]
+                if isinstance(rows_any, list) and rows_any:
+                    if isinstance(rows_any[0], dict):
+                        return rows_any
+
+                    # ✅ case 2: list[str(JSON)]
+                    if isinstance(rows_any[0], str):
+                        out = []
+                        for s in rows_any:
+                            try:
+                                obj = json.loads(s)
+                                if isinstance(obj, dict):
+                                    out.append(obj)
+                            except Exception:
+                                # 비-JSON 문자열이면 스킵
+                                continue
+                        return out
+
+                    # list인데 dict/str 아니면 빈 리스트
+                    return []
+
+                # ✅ case 3: rows 자체가 JSON 문자열
+                if isinstance(rows_any, str):
+                    try:
+                        obj = json.loads(rows_any)
+                    except Exception:
+                        return []
+                    if isinstance(obj, dict):
+                        if "rows" in obj and isinstance(obj["rows"], list):
+                            return _safe_rows(obj["rows"])
+                        return [obj]
+                    if isinstance(obj, list):
+                        return _safe_rows(obj)
+
+            except Exception:
+                pass
+            return []
+
         async def job_5m():
             try:
                 # 초기 FULL (5m)
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=need_5m)
-                rows5 = res.get("rows", []) or []
-                self.bridge.chart_rows_received.emit(code, "5m", rows5)
-                calculator.apply_rows_full(code=code, tf="5m", rows=rows5, need=need_5m)
+                rows5_raw = res.get("rows", []) or []
+                rows5 = normalize_ka10080_rows(_safe_rows(rows5_raw))
 
-                # 분(5) 경계에 맞춘 증분 루프
+                self.bridge.chart_rows_received.emit(code, "5m", rows5_raw)
+                if rows5:
+                    calculator.apply_rows_full(code=code, tf="5m", rows=rows5, need=need_5m)
+
+                # 증분 루프
                 while True:
                     await asyncio.sleep(_seconds_to_next_boundary(datetime.now(), poll_5m_step))
                     inc = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=60)
-                    rows_inc = inc.get("rows", []) or []
-                    if rows_inc:
-                        self.bridge.chart_rows_received.emit(code, "5m", rows_inc)
-                        calculator.apply_append(code=code, tf="5m", rows=rows_inc)
+                    rows_inc_raw = inc.get("rows", []) or []
+                    if rows_inc_raw:
+                        self.bridge.chart_rows_received.emit(code, "5m", rows_inc_raw)
+                        rows_inc = normalize_ka10080_rows(_safe_rows(rows_inc_raw))  # ✅ 여기서도 반드시 safe
+                        if rows_inc:
+                            calculator.apply_append(code=code, tf="5m", rows=rows_inc)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -311,18 +374,23 @@ class Engine(QObject):
             try:
                 # 초기 FULL (30m)
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=need_30m)
-                rows30 = res.get("rows", []) or []
-                self.bridge.chart_rows_received.emit(code, "30m", rows30)
-                calculator.apply_rows_full(code=code, tf="30m", rows=rows30, need=need_30m)
+                rows30_raw = res.get("rows", []) or []
+                rows30 = normalize_ka10080_rows(_safe_rows(rows30_raw))
 
-                # 분(30) 경계 증분
+                self.bridge.chart_rows_received.emit(code, "30m", rows30_raw)
+                if rows30:
+                    calculator.apply_rows_full(code=code, tf="30m", rows=rows30, need=need_30m)
+
+                # 증분
                 while True:
                     await asyncio.sleep(_seconds_to_next_boundary(datetime.now(), poll_30m_step))
                     inc = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=60)
-                    rows_inc = inc.get("rows", []) or []
-                    if rows_inc:
-                        self.bridge.chart_rows_received.emit(code, "30m", rows_inc)
-                        calculator.apply_append(code=code, tf="30m", rows=rows_inc)
+                    rows_inc_raw = inc.get("rows", []) or []
+                    if rows_inc_raw:
+                        self.bridge.chart_rows_received.emit(code, "30m", rows_inc_raw)
+                        rows_inc = normalize_ka10080_rows(_safe_rows(rows_inc_raw))  # ✅ safe 추가
+                        if rows_inc:
+                            calculator.apply_append(code=code, tf="30m", rows=rows_inc)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -352,6 +420,7 @@ class Engine(QObject):
         self._minute_stream_tasks[code] = tasks
         self.bridge.log.emit(f"▶️ MACD 스트림 시작: {code} (5m/30m/1d)")
 
+
     def stop_macd_stream(self, code: str):
         tasks = self._minute_stream_tasks.get(code)
         if not tasks:
@@ -380,6 +449,88 @@ class Engine(QObject):
                 self.loop.call_soon_threadsafe(self.loop.stop)
         except Exception as e:
             self.bridge.log.emit(f"❌ 루프 종료 오류: {e}")
+
+ 
+# ─────────────────────────────────────────────────────────
+# ExitPro: 모니터/캐시/어댑터 배선 함수
+# ─────────────────────────────────────────────────────────
+def wire_exit_monitor(engine: Engine, bridge: AsyncBridge):
+    """
+    - 5/30/1d rows → CandleCache 에 적재
+    - macd_bus → MacdDialogFeedAdapter 로 30m 최신 MACD 제공
+    - ExitEntryMonitor 시작(5분봉 마감 근사시에 룰 평가)
+    - 신규 종목 디테일 수신 시: 스트림 시작 + 모니터 심볼 추가
+    """
+    logger.info("[WIRING] ExitEntryMonitor wiring...")
+
+    # 1) 캔들 캐시
+    candle_cache = CandleCache(maxlen=4000, tz="Asia/Seoul")
+
+    def _on_chart_rows(code: str, tf: str, rows: list):
+        # Engine.start_macd_stream 에서 초기/증분 rows가 들어옴
+        logger.debug(f"[MAIN] chart_rows_received code={code} tf={tf} rows={len(rows)}")
+        candle_cache.upsert_rows(code, tf, rows)
+
+    bridge.chart_rows_received.connect(_on_chart_rows)
+
+    # 2) 모니터가 읽을 getter (캐시 기반)
+    detail_getter = DetailGetterFromCache(candle_cache)
+
+    # 3) 30분 MACD 최신값 피드(버스 구독)
+    macd_feed = MacdDialogFeedAdapter(tz="Asia/Seoul")
+    macd_bus.macd_series_ready.connect(macd_feed.on_bus_series_ready)
+    # (원하면) bridge.macd_series_ready도 연결 가능:
+    # bridge.macd_series_ready.connect(macd_feed.on_bus_series_ready)
+
+    # 4) 시그널 콜백(여기에 주문/알림 연결 가능)
+    def on_signal(sig: TradeSignal):
+        logger.info("📣 %s | %s | %s | %.2f | %s",
+                    sig.side, sig.symbol, sig.ts, sig.price, sig.reason)
+
+    # 5) 모니터 생성 및 루프 시작
+    settings = TradeSettings(master_enable=True, auto_buy=False, auto_sell=True)
+    monitor = ExitEntryMonitor(
+        detail_getter=detail_getter,
+        macd_feed=macd_feed,
+        symbols=[],                        # 신규 종목 수신 시 동적으로 추가
+        settings=settings,
+        use_macd30_filter=True,            # 30분 MACD hist ≥ 0 필터
+        macd30_timeframe="30m",
+        macd30_max_age_sec=1800,
+        tz="Asia/Seoul",
+        poll_interval_sec=10,
+        on_signal=on_signal,
+    )
+    asyncio.run_coroutine_threadsafe(monitor.start(), engine.loop)
+
+    # 6) 신규 종목 디테일 수신 시 스트림 확보 + 모니터 등록
+    _active_streams: set[str] = set()
+
+    def _ensure_macd_stream(code6: str):
+        if code6 in _active_streams:
+            logger.debug("start_macd_stream: already active for %s", code6)
+            return
+        try:
+            engine.start_macd_stream(code6)
+            _active_streams.add(code6)
+            logger.info("✅ started MACD stream for %s (trigger=new_stock_detail)", code6)
+        except Exception as e:
+            logger.warning("start_macd_stream failed for %s: %s", code6, e)
+
+    def _on_new_stock_detail(payload: dict):
+        raw_code = (payload.get("stock_code") or "").strip()
+        if not raw_code:
+            return
+        code6 = raw_code[-6:].zfill(6)
+        _ensure_macd_stream(code6)
+        if code6 not in monitor.symbols:
+            monitor.symbols.append(code6)
+            logger.info("[monitor] add symbol %s", code6)
+
+    bridge.new_stock_detail_received.connect(_on_new_stock_detail)
+
+    logger.info("[WIRING] ExitEntryMonitor ready.")
+    return monitor
 
 
 # ─────────────────────────────────────────────────────────
@@ -444,9 +595,19 @@ def main():
 
     ui.show()
 
-    # 루프 시작 및 초기화 트리거
+    # 1) 루프 시작 + 초기화
     engine.start_loop()
-    QTimer.singleShot(0, ui.on_click_init)  # on_click_init → engine.initialize() 호출 흐름이면 OK
+    QTimer.singleShot(0, ui.on_click_init)
+
+    # 2) 어댑터 
+    # ── Engine 초기화 완료 후 ExitPro 배선 ──
+    def _after_init():
+        try:
+            wire_exit_monitor(engine, bridge)
+        except Exception as e:
+            logger.exception("[WIRING] ExitEntryMonitor wiring failed: %s", e)
+
+    engine.initialization_complete.connect(_after_init)
 
     sys.exit(app.exec())
 

@@ -315,17 +315,10 @@ if __name__ == "__main__":
         LOG_LEVEL_STANDALONE = getattr(logging, LOG_LEVEL_STR_STANDALONE, logging.INFO)
         LOG_TO_FILE_STANDALONE = os.getenv("LOG_TO_FILE", "false").lower() == "true"
 
-        standalone_handlers = [logging.StreamHandler()]
         if LOG_TO_FILE_STANDALONE:
             os.makedirs("logs", exist_ok=True) # 로그 디렉토리 생성
             standalone_file_handler = logging.FileHandler("logs/filter_2_technical_standalone.log", encoding="utf-8")
-            standalone_handlers.append(standalone_file_handler)
 
-        logging.basicConfig(
-            level=LOG_LEVEL_STANDALONE,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=standalone_handlers
-        )
         # basicConfig 호출 후 로거를 다시 가져와 새 핸들러가 적용되도록 합니다.
         logger = logging.getLogger(__name__)
         logger.info("--- filter_2_technical.py (단독 실행) 로깅 초기화 완료 ---")
