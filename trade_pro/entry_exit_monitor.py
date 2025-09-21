@@ -1,25 +1,107 @@
-# exit_monitor.py
+# core/exit_monitor.py
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Protocol
 
 import pandas as pd
+import json
+from pathlib import Path
 
 # ──────────────────────────────
 # Logger
 # ──────────────────────────────
 logger = logging.getLogger(__name__)
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-        encoding="utf-8",   
-    )
 
-# ========== 인터페이스(존재 클래스 재사용 전제) ==========
+# ===== 결과 집계 & 저장 유틸 =====
+class DailyResultsRecorder:
+    """
+    - on_signal 콜백에 연결해서 BUY/SELL 신호를 수집
+    - 날짜별 파일(data/system_results_YYYY-MM-DD.json)로 저장
+    - 프로그램 종료/일자 변경 시에도 안전하게 flush 가능
+    - JSON 스키마:
+      {
+        "date": "YYYY-MM-DD",
+        "app": "ExitPro",
+        "generated_at": "YYYY-MM-DD HH:MM:SS",
+        "summary": {"buys":int, "sells":int, "pnl_estimate": null},
+        "signals": [
+          {"side":"BUY|SELL","symbol":"005930","ts":"ISO8601","price":float,"reason":"..."}
+        ],
+        "meta": {"timezone":"Asia/Seoul"}
+      }
+    """
+    def __init__(self, out_dir: str = "data", tz: str = "Asia/Seoul", app_name: str = "ExitPro"):
+        self.out_dir = Path(out_dir)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.tz = tz
+        self.app_name = app_name
+        self._today = self._today_str()
+        self._data = self._new_day_blob()
 
+    def _today_str(self) -> str:
+        return pd.Timestamp.now(tz=self.tz).strftime("%Y-%m-%d")
+
+    def _new_day_blob(self) -> dict:
+        return {
+            "date": self._today,
+            "app": self.app_name,
+            "generated_at": pd.Timestamp.now(tz=self.tz).strftime("%Y-%m-%d %H:%M:%S"),
+            "summary": {
+                "buys": 0,
+                "sells": 0,
+                "pnl_estimate": None,
+            },
+            "signals": [],
+            "meta": {"timezone": self.tz}
+        }
+
+    def _rollover_if_new_day(self):
+        now = self._today_str()
+        if now != self._today:
+            self.flush()
+            self._today = now
+            self._data = self._new_day_blob()
+
+    def record_signal(self, sig) -> None:
+        """
+        sig: TradeSignal dataclass
+        """
+        self._rollover_if_new_day()
+        # tz-aware ISO8601로 정규화
+        ts = sig.ts
+        if ts.tzinfo is None:
+            ts = ts.tz_localize(self.tz)
+        else:
+            ts = ts.tz_convert(self.tz)
+
+        item = {
+            "side": str(sig.side).upper(),
+            "symbol": str(sig.symbol),
+            "ts": ts.isoformat(),
+            "price": float(sig.price),
+            "reason": str(sig.reason),
+        }
+        self._data["signals"].append(item)
+
+        if item["side"] == "BUY":
+            self._data["summary"]["buys"] += 1
+        elif item["side"] == "SELL":
+            self._data["summary"]["sells"] += 1
+
+        # 안전하게 즉시 저장 (원하면 배치 저장으로 변경 가능)
+        self.flush()
+
+    def flush(self):
+        out = self.out_dir / f"system_results_{self._today}.json"
+        self._data["generated_at"] = pd.Timestamp.now(tz=self.tz).strftime("%Y-%m-%d %H:%M:%S")
+        out.write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"[DailyResultsRecorder] 💾 Saved: {out}")
+
+
+# ===== 외부 프로토콜 =====
 class DetailInformationGetter(Protocol):
     async def get_bars(self, code: str, interval: str, count: int) -> pd.DataFrame:
         """
@@ -28,22 +110,24 @@ class DetailInformationGetter(Protocol):
         """
         ...
 
-class IMacdFeed(Protocol):
-    def get_latest(self, symbol: str, timeframe: str) -> Optional[dict]:
+
+class IMacdPointsFeed(Protocol):
+    def get_points(self, symbol: str, timeframe: str, n: int = 1) -> List[dict]:
         """
-        반환 예:
-        {"ts": pd.Timestamp, "macd": float, "signal": float, "hist": float}
-        timeframe: "30m" 등
+        최근 n개 MACD 포인트 반환 (오름차순 보장 권장)
+        각 포인트 dict 예:
+          {"ts": pd.Timestamp, "macd": float, "signal": float, "hist": float}
         """
         ...
 
-# ========== 설정 & 모델 ==========
 
+# ========== 설정 & 모델 ==========
 @dataclass
 class TradeSettings:
     master_enable: bool = True
     auto_buy: bool = False
     auto_sell: bool = True
+
 
 @dataclass
 class TradeSignal:
@@ -53,8 +137,8 @@ class TradeSignal:
     price: float        # 기준가격(보통 종가)
     reason: str         # 신호 사유 텍스트
 
-# ========== 룰 ==========
 
+# ========== 룰 ==========
 class BuyRules:
     @staticmethod
     def buy_if_5m_break_prev_bear_high(df5: pd.DataFrame) -> pd.Series:
@@ -73,6 +157,7 @@ class BuyRules:
             cond.iloc[0] = False
         return cond
 
+
 class SellRules:
     @staticmethod
     def sell_if_close_below_prev_open(df5: pd.DataFrame) -> pd.Series:
@@ -85,29 +170,30 @@ class SellRules:
             cond.iloc[0] = False
         return cond
 
+
 class TimeRules:
     @staticmethod
     def is_5m_bar_close_window(now_kst: pd.Timestamp) -> bool:
         """
         5분봉 마감 근사 판단:
         - 분 % 5 == 0 이고, 5~30초 사이(수신/체결 지연 버퍼)
-        필요 시 운영 환경에 맞춰 조정
         """
         return (now_kst.minute % 5 == 0) and (5 <= now_kst.second <= 30)
 
-# ========== 모니터러 본체 ==========
 
+# ========== 모니터러 본체 ==========
 class ExitEntryMonitor:
     """
     - 5분봉 종가 기준으로 매수/매도 신호 판단
-    - 선택적으로 30분 MACD 히스토그램 >= 0 필터 사용(재계산 없음, MacdDialog/Calculator 값을 그대로 사용)
+    - (옵션) 30분 MACD 히스토그램 >= 0 필터 (get_points 단일 API 사용)
     - 동일 봉 중복 트리거 방지
     - 봉 마감 구간에서만 평가
+    - 'report_daily_md.py' 실행 트리거 없이 JSON만 기록합니다.
     """
     def __init__(
         self,
         detail_getter: DetailInformationGetter,
-        macd_feed: IMacdFeed,
+        macd_feed: IMacdPointsFeed,             # ✅ 단일 API(get_points)
         symbols: List[str],
         settings: TradeSettings,
         *,
@@ -117,12 +203,14 @@ class ExitEntryMonitor:
         tz: str = "Asia/Seoul",
         poll_interval_sec: int = 20,
         on_signal: Optional[Callable[[TradeSignal], None]] = None,
+        results_recorder: Optional[DailyResultsRecorder] = None,
+        bridge: Optional[object] = None,
     ):
         self.detail_getter = detail_getter
         self.macd_feed = macd_feed
         self.symbols = symbols
         self.settings = settings
-
+        self.bridge = bridge
         self.use_macd30_filter = use_macd30_filter
         self.macd30_timeframe = macd30_timeframe
         self.macd30_max_age_sec = macd30_max_age_sec
@@ -130,8 +218,9 @@ class ExitEntryMonitor:
         self.tz = tz
         self.poll_interval_sec = poll_interval_sec
         self.on_signal = on_signal or (lambda sig: logger.info(f"[SIGNAL] {sig}"))
+        self.results_recorder = results_recorder
 
-        # 중복 트리거 방지: (symbol, side) → 마지막 트리거된 봉 ts
+        # (symbol, side) → 마지막 트리거된 봉 ts
         self._last_trig: Dict[tuple[str, str], pd.Timestamp] = {}
 
         logger.info(
@@ -141,7 +230,6 @@ class ExitEntryMonitor:
         )
 
     # -------- 내부 유틸 --------
-
     async def _get_5m(self, symbol: str, count: int = 200) -> Optional[pd.DataFrame]:
         logger.debug(f"[ExitEntryMonitor] 5m 데이터 요청: {symbol} (count={count})")
         df = await self.detail_getter.get_bars(code=symbol, interval="5m", count=count)
@@ -159,13 +247,20 @@ class ExitEntryMonitor:
         if not self.use_macd30_filter:
             return True
 
-        info = self.macd_feed.get_latest(symbol, self.macd30_timeframe)
-        if not info:
+        try:
+            pts = self.macd_feed.get_points(symbol, self.macd30_timeframe, n=1) or []
+        except Exception as e:
+            logger.error(f"[ExitEntryMonitor] get_points 에러: {symbol} {self.macd30_timeframe}: {e}")
+            return False
+
+        if not pts:
             logger.debug(f"[ExitEntryMonitor] {symbol} NO MACD30 → failed filtering")
             return False
 
+        info = pts[-1]
         hist = info.get("hist")
         ts: pd.Timestamp = info.get("ts")
+
         if hist is None or ts is None:
             logger.debug(f"[ExitEntryMonitor] {symbol} MACD30 불완전(hist/ts None) → failed")
             return False
@@ -191,11 +286,27 @@ class ExitEntryMonitor:
             logger.debug(f"[ExitEntryMonitor] {symbol} {side} 신호 중복(ts={ts}) → 무시")
             return
         self._last_trig[key] = ts
-        logger.info(f"[ExitEntryMonitor] 📣 신호 발생 {side} {symbol} {price:.2f} @ {ts} | {reason}")
-        self.on_signal(TradeSignal(side, symbol, ts, price, reason))
+
+        # bridge 로그 안전 호출
+        try:
+            if self.bridge and hasattr(self.bridge, "log"):
+                self.bridge.log.emit(f"[ExitEntryMonitor] 📣 신호 발생 {side} {symbol} {price:.2f} @ {ts} | {reason}")
+        except Exception:
+            pass
+
+        sig_obj = TradeSignal(side, symbol, ts, price, reason)
+
+        # 1) 외부 콜백 호출
+        self.on_signal(sig_obj)
+
+        # 2) JSON 기록 (리포트 트리거 없음)
+        if self.results_recorder:
+            try:
+                self.results_recorder.record_signal(sig_obj)
+            except Exception as e:
+                logger.exception(f"[ExitEntryMonitor] 기록 실패: {e}")
 
     # -------- 심볼별 평가 --------
-
     async def _check_symbol(self, symbol: str):
         df5 = await self._get_5m(symbol)
         if df5 is None:
@@ -209,7 +320,7 @@ class ExitEntryMonitor:
         if self.use_macd30_filter and not self._macd30_pass(symbol, ref_ts):
             return
 
-        # ✅ 매도: 현재 5분봉 종가 < 직전 5분봉 시가
+        # 매도: 현재 5분봉 종가 < 직전 5분봉 시가
         if self.settings.master_enable and self.settings.auto_sell:
             if last_close < prev_open:
                 reason = f"SELL: Close<{prev_open:.2f} (prev open)" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
@@ -218,12 +329,11 @@ class ExitEntryMonitor:
         # (선택) 예시 매수 룰
         if self.settings.master_enable and self.settings.auto_buy:
             buy = BuyRules.buy_if_5m_break_prev_bear_high(df5).iloc[-1]
-            if bool(buy) and self._macd30_pass(symbol, ref_ts):
+            if bool(buy) and (not self.use_macd30_filter or self._macd30_pass(symbol, ref_ts)):
                 reason = "BUY: Bull breaks prev bear high" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
                 self._emit("BUY", symbol, ref_ts, last_close, reason)
 
     # -------- 루프 시작 --------
-
     async def start(self):
         logger.info("[ExitEntryMonitor] 모니터링 시작")
         while True:

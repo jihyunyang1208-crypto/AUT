@@ -3,7 +3,7 @@
 
 DetailInformationGetter: KA10081 5분봉 캔들을 가져옵니다. (이미 보유한 클래스를 그대로 주입)
 
-IMacdFeed: MacdDialog가 계산/보유한 30분 MACD (macd, signal, hist, ts) 최신값을 그대로 제공합니다. (재계산 없음)
+IMacdDialogFeedAdapter: MacdDialog가 계산/보유한 30분 MACD (macd, signal, hist, ts) 최신값을 그대로 제공합니다. (재계산 없음)
 
 2) 평가 타이밍
 
@@ -20,7 +20,7 @@ IMacdFeed: MacdDialog가 계산/보유한 30분 MACD (macd, signal, hist, ts) �
 
 설정 use_macd30_filter=True일 때만 적용.
 
-IMacdFeed.get_latest(symbol, "30m")로 MACD 최신값을 받아 hist ≥ 0인지 확인.
+IMacdDialogFeedAdapter.get_latest(symbol, "30m")로 MACD 최신값을 받아 hist ≥ 0인지 확인.
 
 값이 없거나 **신선도(기본 120초)**를 초과하면 보수적으로 통과 실패로 처리 → 신호 차단.
 

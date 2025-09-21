@@ -1,0 +1,17 @@
+[
+    {
+      "ticker": "005930",
+      "entry_time": "09:17",
+      "exit_time": "10:05",
+      "pl_pct": 1.8,
+      "notes": "돌파/거래량 2.1x"
+    },
+    {
+      "ticker": "035420",
+      "entry_time": "10:12",
+      "exit_time": "10:48",
+      "pl_pct": -0.7,
+      "notes": "전고점 저항 후 손절"
+    }
+  ]
+  

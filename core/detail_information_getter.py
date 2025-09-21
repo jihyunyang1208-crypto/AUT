@@ -16,13 +16,8 @@ except Exception:
 
 # ✅ MACD 계산기 (버스 emit 포함)
 from core.macd_calculator import calculator  # apply_rows(code, tf, rows, need)
-
 logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO"),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+
 logging.getLogger("urllib3").setLevel(logging.INFO)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
 logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
@@ -62,44 +57,56 @@ def _to_float_signed(s) -> float:
 
 def normalize_ka10080_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    KA10080 rows → 표준 시계열로 정규화.
-    입력 예:
-      {"cur_prc":"7500","trde_qty":"5023","cntr_tm":"20250813120000",
-       "open_pric":"-7490","high_pric":"+7510","low_pric":"-7480", ...}
-    출력:
-      {"ts": Timestamp, "open": float, "high": float, "low": float, "close": float, "vol": float}
+    KA10080 rows를 표준 시계열로 정규화하는 최적화된 메서드.
+    Pandas의 벡터화된 연산을 활용하여 성능을 향상시킵니다.
     """
-    out: List[Dict[str, Any]] = []
-    for r in rows or []:
-        # 시간: cntr_tm(YYYYMMDDHHMMSS) 최우선, 없으면 trd_tm → dt 조합이 있을 때만 확장 가능
-        cntr = str(r.get("cntr_tm") or "")
-        if len(cntr) != 14 or not cntr.isdigit():
-            # 필요 시 확장: trd_tm/dt 조합 지원하고 싶다면 여기에 추가
-            continue
-        ts = pd.to_datetime(cntr, format="%Y%m%d%H%M%S", errors="coerce")
-        if ts is None or pd.isna(ts):
-            continue
-
-        close = _to_float_signed(r.get("cur_prc"))
-        opn   = _to_float_signed(r.get("open_pric"))
-        high  = _to_float_signed(r.get("high_pric"))
-        low   = _to_float_signed(r.get("low_pric"))
-        vol   = _to_float_signed(r.get("trde_qty"))
-
-        # 완전 더미행(전부 빈값/None) 제거
-        if all(map(pd.isna, [close, opn, high, low])) and (pd.isna(vol) or vol == 0):
-            continue
-
-        out.append({"ts": ts, "open": opn, "high": high, "low": low, "close": close, "vol": vol})
-
-    if not out:
+    if not rows:
         return []
 
-    # 정렬 & 중복 제거(같은 ts는 마지막 값 채택)
-    df = pd.DataFrame(out).dropna(subset=["ts"]).sort_values("ts")
-    df = df.drop_duplicates(subset=["ts"], keep="last")
+    # 1. DataFrame으로 일괄 변환
+    df = pd.DataFrame(rows)
+
+    # 2. 필요한 컬럼만 추출하고, 누락된 키는 NaN으로 처리
+    df = df.reindex(columns=["cntr_tm", "cur_prc", "open_pric", "high_pric", "low_pric", "trde_qty"])
+
+    # 3. 데이터 타입 변환 및 정규화 (벡터화)
+    # _to_float_signed 함수가 pandas Series에 적용 가능하다고 가정
+    df["ts"] = pd.to_datetime(df["cntr_tm"], format="%Y%m%d%H%M%S", errors="coerce")
+    df["close"] = df["cur_prc"].apply(_to_float_signed)
+    df["open"] = df["open_pric"].apply(_to_float_signed)
+    df["high"] = df["high_pric"].apply(_to_float_signed)
+    df["low"] = df["low_pric"].apply(_to_float_signed)
+    df["vol"] = df["trde_qty"].apply(_to_float_signed)
+
+    # 4. 불필요한 컬럼 제거
+    df = df[["ts", "open", "high", "low", "close", "vol"]]
+
+    # 5. 유효성 검사 및 데이터 정리
+    # 유효한 타임스탬프가 없는 행 제거
+    df = df.dropna(subset=["ts"])
+    
+    # 완전 더미행(OHLCV가 모두 NaN) 제거
+    dummy_filter = df[["open", "high", "low", "close", "vol"]].isna().all(axis=1)
+    df = df[~dummy_filter]
+    
+    # 6. 정렬 및 중복 제거
+    df = df.sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+    
+    # 7. 딕셔너리 리스트로 변환하여 반환
     return df.to_dict(orient="records")
 
+def _to_float_signed(val: Any) -> float:
+    """부호가 포함된 문자열을 float으로 변환하는 헬퍼 함수"""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if not isinstance(val, str):
+        return pd.NA
+    try:
+        if val.startswith(('+', '-')):
+            return float(val)
+        return float(val)
+    except (ValueError, TypeError):
+        return pd.NA
 
 # ------------------------------- 본체 -------------------------------
 
