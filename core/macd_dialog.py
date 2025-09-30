@@ -39,8 +39,11 @@ class BullishAnalysisWorker(QObject):
             response_text = self._client.run_briefing(extra_context=extra_context)
             self.analysis_ready.emit(response_text)
         except Exception as e:
-            logger.exception("Gemini API call failed.")
-            self.analysis_ready.emit(f"호재 분석 중 오류 발생: {str(e)}")
+            logger.error("Gemini API call failed (model=%s): %s", self._client.model_name, e)
+            # 사용자에게 보일 UI 메시지도 개선
+            self._show_error_toast(
+                f"AI 브리핑 실패: 모델 접근 불가 또는 퇴역. 설정에서 모델을 '{self._client.model_name}' 로 전환했습니다."
+            )
 
 
 class MacdDialog(QDialog):
@@ -60,7 +63,7 @@ class MacdDialog(QDialog):
 
         self.setWindowTitle(f"MACD 상세 - {self.code}")
         self.setModal(False)
-        self.setMinimumSize(980, 500)
+        self.setMinimumSize(980, 700)
 
         # UI 요소 초기화
         self.lbl = QLabel(f"종목: <b>{stock_name} ({self.code})</b>")
@@ -70,10 +73,10 @@ class MacdDialog(QDialog):
         self._is_analysis_visible = False
 
         self.gemini_client = GeminiClient(prompt_file="resources/bullish_analysis_prompt.md")
-        self.bullish_analysis_btn = QPushButton("호재 분석")
+        self.bullish_analysis_btn = QPushButton("종목 분석")
         self.bullish_analysis_btn.clicked.connect(self._on_bullish_analysis_clicked)
 
-        self.analysis_btn = QPushButton("호재 분석 결과 ▶")
+        self.analysis_btn = QPushButton("종목 분석 결과 ▶")
         self.analysis_btn.clicked.connect(self._on_analysis_toggle)
 
 

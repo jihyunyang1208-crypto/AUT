@@ -3,8 +3,30 @@ import os
 from pathlib import Path
 import google.generativeai as genai
 import logging
+from google.api_core import exceptions as gax_exceptions
 
 logger = logging.getLogger(__name__)
+
+
+# 1) 안전한 기본값과 폴백 맵
+PREFERRED_MODELS = [
+    "gemini-2.5-flash-lite",  # 가장 저렴/고속 (가용 시)
+    "gemini-2.0-flash",       # 범용 고속
+    "gemini-2.0-pro",         # 정교함/긴맥락
+]
+
+# 기존: "gemini-1.5-flash-002" → 삭제
+def _get_first_available_model():
+    # 모델 리스트 조회로 실제 가용 모델 확인
+    try:
+        available = {m.name for m in genai.list_models()}
+        for m in PREFERRED_MODELS:
+            if m in available:
+                return m
+    except Exception:
+        pass
+    # 조회 실패 시에도 무난한 기본값
+    return "gemini-2.0-flash"
 
 # ===== Gemini 클라이언트 =====
 class GeminiClient:
@@ -18,9 +40,9 @@ class GeminiClient:
             raise RuntimeError("환경변수 GEMINI_API_KEY 가 설정되어 있지 않습니다.")
         
         genai.configure(api_key=api_key)
+        self.model_name = _get_first_available_model()
+        self.model = genai.GenerativeModel(self.model_name)
 
-        # 모델 초기화 (필요시 모델명 교체)
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
 
     def _load_prompt(self) -> str:
         if not self.prompt_file.exists():
@@ -44,5 +66,10 @@ class GeminiClient:
             return response.text.strip() if hasattr(response, "text") else str(response)
         except Exception as e:
             # 🔹 API 호출 중 발생한 예외를 로그하고 다시 발생시킴
+            if "gemini-1.5" in str(e) or "Publisher Model" in str(e):
+                self.model_name = _get_first_available_model()
+                self.model = genai.GenerativeModel(self.model_name)
+                return self.model.generate_content(full_prompt).text
             logger.exception("Gemini content generation failed.")
+
             raise e

@@ -32,8 +32,8 @@ from core.macd_calculator import calculator, macd_bus
 from ui_main import MainWindow
 
 # ---- trade_pro 모듈 ----
-from trade_pro.entry_exit_monitor import ExitEntryMonitor, DailyResultsRecorder, TradeSettings
-
+from trade_pro.entry_exit_monitor import ExitEntryMonitor
+from trade_pro.auto_trader import AutoTrader
 
 # ─────────────────────────────────────────────────────────
 # 한글 폰트 설정
@@ -112,6 +112,15 @@ def _seconds_to_next_boundary(now: datetime, minutes_step: int) -> float:
     else:
         target = base.replace(minute=next_min)
     return max(1.0, (target - now).total_seconds())
+
+# 모니터 스레드 기동 헬퍼
+def start_monitor_on_thread(monitor: ExitEntryMonitor):
+    def _runner():
+        asyncio.run(monitor.start())
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    return t
+
 
 
 # ─────────────────────────────────────────────────────────
@@ -472,15 +481,6 @@ class Engine(QObject):
             self.bridge.log.emit(f"❌ 루프 종료 오류: {e}")
 
 
-# ─────────────────────────────────────────────────────────
-# 배선 결과를 담아 UI 쪽으로 넘겨줄 컨테이너
-# ─────────────────────────────────────────────────────────
-@dataclass
-class TradeProWiring:
-    monitor: ExitEntryMonitor
-    detail_getter: DetailGetterFromCache
-
-
 
 # ─────────────────────────────────────────────────────────
 # 필터 파이프라인
@@ -525,7 +525,6 @@ def main():
 
     # Bridge/Engine
     bridge = AsyncBridge()
-    logger.info("[MAIN] bridge id=%s", id(bridge))
 
     getter = DetailInformationGetter()
     engine = Engine(bridge, getter)
@@ -538,6 +537,22 @@ def main():
         project_root=os.getcwd(),
     )
 
+    # 매수/매도 monitor
+
+
+    trader = AutoTrader(token_provider=get_access_token, use_mock=False)
+    trader.settings.master_enable = True
+    trader.settings.auto_buy = True
+    trader.settings.auto_sell = True
+
+    monitor = ExitEntryMonitor(
+        detail_getter=getter,
+        use_macd30_filter=True,
+        bar_close_window_start_sec=0,   # 예: 디버그용으로 0~59 전부 허용
+        bar_close_window_end_sec=59,
+        on_signal=trader.make_on_signal(bridge),
+    )
+
     # 이벤트 배선
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
@@ -548,15 +563,8 @@ def main():
     engine.start_loop()
     QTimer.singleShot(0, ui.on_click_init)
 
-    # 2) Engine 초기화 완료 후 trade_pro 배선
-    def _after_init():
-        try:
-            wire_entry_exit_monitor(engine, bridge)
-        except Exception as e:
-            logger.exception("[WIRING] ExitEntryMonitor wiring failed: %s", e)
 
-    engine.initialization_complete.connect(_after_init)
-    
+    QTimer.singleShot(0, lambda: start_monitor_on_thread(monitor))
     sys.exit(app.exec())
 
 

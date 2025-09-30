@@ -5,7 +5,7 @@ import os
 import json
 import logging
 from typing import Any, Dict, List, Optional
-
+import asyncio
 import pandas as pd
 import requests
 from datetime import datetime as dt
@@ -35,6 +35,22 @@ def _code6(s: str) -> str:
 
 
 # ------------------------------- 파싱 유틸 -------------------------------
+
+
+def _rows_to_df_ohlcv(rows: list[dict], tz: str="Asia/Seoul") -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(columns=["Open","High","Low","Close","Volume"])
+    df = pd.DataFrame(rows)
+    need = {"ts","open","high","low","close","vol"}
+    if not need.issubset(df.columns):
+        return pd.DataFrame(columns=["Open","High","Low","Close","Volume"])
+    df = df[["ts","open","high","low","close","vol"]].copy()
+    df.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","vol":"Volume"}, inplace=True)
+    df.set_index("ts", inplace=True)
+    df.sort_index(inplace=True)
+    if df.index.tz is None:
+        df.index = df.index.tz_localize(tz)
+    return df
 
 def _to_float_signed(s) -> float:
     """
@@ -95,18 +111,6 @@ def normalize_ka10080_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # 7. 딕셔너리 리스트로 변환하여 반환
     return df.to_dict(orient="records")
 
-def _to_float_signed(val: Any) -> float:
-    """부호가 포함된 문자열을 float으로 변환하는 헬퍼 함수"""
-    if isinstance(val, (int, float)):
-        return float(val)
-    if not isinstance(val, str):
-        return pd.NA
-    try:
-        if val.startswith(('+', '-')):
-            return float(val)
-        return float(val)
-    except (ValueError, TypeError):
-        return pd.NA
 
 # ------------------------------- 본체 -------------------------------
 
@@ -132,6 +136,42 @@ class DetailInformationGetter:
         if cont_yn:  h["cont-yn"]  = cont_yn
         if next_key: h["next-key"] = next_key
         return h
+
+    async def get_bars(self, code: str, interval: str, count: int) -> pd.DataFrame:
+        """
+        ExitEntryMonitor 가 요구하는 표준 인터페이스:
+          반환: index = tz-aware datetime(Asia/Seoul),
+               columns = ['Open','High','Low','Close','Volume']
+        interval: '5m' | '30m' (필요시 '1d' 확장)
+        """
+        iv = str(interval).lower()
+        if iv in ("5", "5m", "m5"):
+            tic = 5
+        elif iv in ("30", "30m", "m30"):
+            tic = 30
+        else:
+            logger.warning("[DetailInfo.get_bars] unsupported interval: %s", interval)
+            return pd.DataFrame(columns=["Open","High","Low","Close","Volume"])
+
+        need_rows = max(count, 200)  # 여유분 확보
+        logger.debug("[DetailInfo.get_bars] pull %s %s need=%d", code, iv, need_rows)
+
+        def _work() -> pd.DataFrame:
+            try:
+                pkt = self.fetch_minute_chart_ka10080(
+                    code, tic_scope=tic, upd_stkpc_tp="1", need=need_rows
+                )
+                norm = normalize_ka10080_rows(pkt.get("rows", []))
+                df = _rows_to_df_ohlcv(norm, tz="Asia/Seoul")
+                if df.empty:
+                    return df
+                return df.tail(count)
+            except Exception as e:
+                logger.exception("[DetailInfo.get_bars] fetch/normalize failed: %s", e)
+                return pd.DataFrame(columns=["Open","High","Low","Close","Volume"])
+
+        # 동기 I/O를 백그라운드 스레드에서 실행
+        return await asyncio.to_thread(_work)
 
     # --- ka10080: 분봉 차트 ---
     def fetch_minute_chart_ka10080(
@@ -217,6 +257,8 @@ class DetailInformationGetter:
         logger.debug("[KA10080] stock_code: %s, tic_scope: %s", code6, str(tic_scope))
         return {"stock_code": code6, "tic_scope": str(tic_scope), "rows": rows}
 
+
+
     def emit_macd_for_ka10080(
         self,
         bridge,
@@ -226,6 +268,7 @@ class DetailInformationGetter:
         upd_stkpc_tp: str = "1",
         need: int = 350,
         max_points: int = 200,
+        monitor=None,
     ) -> dict:
         """
         분봉 rows 수집 → 정규화 → MACD 계산기로 전달(tf='5m'/'30m' 등) → 버스 emit → UI 갱신
@@ -252,6 +295,14 @@ class DetailInformationGetter:
         tail = norm[-max_points:]
         tf = "5m" if tic == 5 else "30m" if tic == 30 else f"{tic}m"
         calculator.apply_rows(code=code6, tf=("5m" if tf not in ("5m", "30m", "1d") else tf), rows=tail, need=max_points)
+
+        # ② ✅ 매매 모니터로 5분봉 DF 푸시
+        if monitor is not None:
+            try:
+                df_push = _rows_to_df_ohlcv(tail, tz="Asia/Seoul")
+                monitor.ingest_bars(code6, tf, df_push)
+            except Exception:
+                logger.warning("[KA10080] push to monitor failed: %s %s", code6, tf, exc_info=True)
 
         logger.debug("[MACD] emitted to bus for %s (%s), points=%d", code6, tf, len(tail))
         return {"code": code6, "tf": tf, "count": len(tail)}
@@ -639,61 +690,4 @@ class SimpleMarketAPI:
         except Exception:
             return {}
 
-    # ---------------------------------------------------------------------
-    # KA10001: 주식기본정보요청 (얇은 JSON 래퍼)
-    # ---------------------------------------------------------------------
-    def fetch_daily_detail_ka10015(
-        self,
-        code: str,
-        *,
-        strt_dt: str,
-        end_dt: Optional[str] = None,
-        cont_yn: str = "N",
-        next_key: str = "",
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        code6 = str(code).strip()[:6].zfill(6)
-        rows_all: List[Dict[str, Any]] = []
-        max_pages, page_count = 50, 0
 
-        while True:
-            page_count += 1
-            if page_count > max_pages:
-                logger.warning("[KA10015] page limit exceeded (%d) for %s", max_pages, code6)
-                break
-
-            resp = self.fetch_daily_detail_ka10015_raw(
-                code, strt_dt=strt_dt, end_dt=end_dt, cont_yn=cont_yn, next_key=next_key, timeout=timeout
-            )
-            try:
-                js = resp.json() or {}
-            except Exception:
-                js = {}
-
-            rows = (
-                js.get("open_pric_pre_flu_rt")
-                or js.get("body", {}).get("open_pric_pre_flu_rt")
-                or js.get("data", {}).get("open_pric_pre_flu_rt")
-                or js.get("rows")
-                or []
-            )
-            if isinstance(rows, list) and rows:
-                rows_all.extend(rows)
-
-            cont_yn = resp.headers.get("cont-yn", "N")
-            next_key = resp.headers.get("next-key", "")
-            if cont_yn != "Y" or not next_key:
-                break
-
-        logger.debug("[KA10015] rows: %d", len(rows_all))
-        return {"stock_code": code6, "strt_dt": strt_dt, **({"end_dt": end_dt} if end_dt else {}), "rows": rows_all}
-        
-
-
-
-
-
-    # (옵션) 단독 실행 예시
-    if __name__ == "__main__":
-        appkey, secretkey = load_api_keys()
-        access_token = get_access_token(appkey, secretkey)

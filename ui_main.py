@@ -709,7 +709,6 @@ class MainWindow(QMainWindow):
             rt_val = float(str(raw_rt).replace("%", "").replace(",", ""))
         except Exception:
             rt_val = None
-        dlg.update_quote(cur, rt_val)
 
         # (선택) 자동매매 트리거 → 필요시 구현
         # self._trigger_auto_trade(payload)
