@@ -6,7 +6,6 @@ import json
 import logging
 import asyncio
 from datetime import datetime
-from collections import OrderedDict
 from typing import Dict, Any, Optional
 
 import pandas as pd
@@ -22,52 +21,20 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStatusBar,
     QTableView, QHeaderView, QLineEdit, QToolBar, QListWidget,
-    QTextEdit, QListWidgetItem, QTextBrowser, QSplitter, QCheckBox
+    QTextEdit, QListWidgetItem, QTextBrowser, QSplitter, QCheckBox,
+    QComboBox,
 )
 
 from core.detail_information_getter import DetailInformationGetter, SimpleMarketAPI
 from core.macd_calculator import macd_bus
 from core.macd_dialog import MacdDialog
 
+# ✅ 설정/와이어링
+from setting.settings_manager import SettingsStore, SettingsDialog, AppSettings
+from setting.wiring import AppWiring
 
 logger = logging.getLogger("ui_main")
 logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
-
-# ---- 간단 토스트 다이얼로그 ----
-class _Toast(QDialog):
-    def __init__(self, parent, text: str, timeout_ms: int = 2500):
-        super().__init__(parent)
-        self.setWindowFlags(
-            Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint | Qt.ToolTip
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
-
-        self._label = QLabel(text, self)
-        self._label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._label.setStyleSheet("""
-            QLabel {
-                background: rgba(30, 30, 35, 220);
-                color: #ffffff;
-                padding: 10px 14px;
-                border-radius: 10px;
-                border: 1px solid rgba(255,255,255,0.08);
-                font-size: 13px;
-            }
-        """)
-        self._label.adjustSize()
-        self.resize(self._label.sizeHint())
-
-        QTimer.singleShot(timeout_ms, self.close)
-
-    def show_at_bottom_right(self, margin: int = 16):
-        if not self.parent():
-            self.show()
-            return
-        parent_geom = self.parent().geometry()
-        x = parent_geom.x() + parent_geom.width() - self.width() - margin
-        y = parent_geom.y() + parent_geom.height() - self.height() - margin - 40
-        self.move(x, y)
-        self.show()
 
 
 # ----------------------------
@@ -105,12 +72,6 @@ class DataFrameModel(QAbstractTableModel):
                 return ""
         return ""  # 세로 헤더는 숨김 처리
 
-    def set_value(self, row: int, col: int, value):
-        if 0 <= row < len(self._df) and 0 <= col < len(self._df.columns):
-            self._df.iat[row, col] = value
-            idx = self.index(row, col)
-            self.dataChanged.emit(idx, idx, [Qt.DisplayRole, Qt.ToolTipRole])
-
 
 # ----------------------------
 # 고도화 UI MainWindow
@@ -122,12 +83,13 @@ class MainWindow(QMainWindow):
       - engine: Engine 인스턴스 (start_loop/initialize 등 보유)
       - perform_filtering_cb: callable -> 필터 실행 후 출력 경로(str) 반환 가능
       - project_root: str
+      - wiring: AppWiring (선택)
     """
 
     # 비UI → UI 스레드 안전 전환용 시그널
     sig_new_stock_detail = Signal(dict)
 
-    def __init__(self, bridge, engine, perform_filtering_cb, project_root: str):
+    def __init__(self, bridge, engine, perform_filtering_cb, project_root: str, wiring: AppWiring | None = None):
         super().__init__()
         self.setWindowTitle("조건검색 & MACD 모니터")
         self.resize(1180, 760)
@@ -136,7 +98,11 @@ class MainWindow(QMainWindow):
         self.engine = engine
         self.perform_filtering_cb = perform_filtering_cb
         self.project_root = project_root
+        self.wiring = wiring  # ✅ 주입(선택)
 
+        # ✅ 결과 테이블 컨테이너 (표 기반 렌더)
+        self._result_rows = []     # [{"code","name","price","rt","open","high","low","vol","updated_at"}...]
+        self._result_index = {}    # code -> index (upsert)
 
         # 다이얼로그/스트림 상태
         self._macd_dialogs: dict[str, QDialog] = {}
@@ -154,7 +120,6 @@ class MainWindow(QMainWindow):
         self.status.showMessage("준비됨")
         self._start_clock()
         self.label_new_stock = QLabel("신규 종목 없음")
-        self.label_new_stock.setObjectName("label_new_stock")
         self.status.addPermanentWidget(self.label_new_stock)
 
         # 시그널 연결
@@ -168,16 +133,24 @@ class MainWindow(QMainWindow):
             self.engine.start_loop()
         self.load_candidates()
 
-        # 상태 저장/복원
-        self._settings = QSettings("Trade", "AutoTraderUI")
-        state = self._settings.value("hsplit_state")
+        # 상태 저장/복원 + 설정 로드/적용
+        self._settings_qs = QSettings("Trade", "AutoTraderUI")
+        state = self._settings_qs.value("hsplit_state")
         if state is not None:
             try:
                 self.hsplit.restoreState(state)
             except Exception:
                 pass
-        self.cb_auto_buy.setChecked(self._settings.value("auto_buy", False, type=bool))
-        self.cb_auto_sell.setChecked(self._settings.value("auto_sell", False, type=bool))
+
+        # ✅ 앱 설정 로드 → Wiring에 적용 → UI 체크박스 동기화
+        self.store = SettingsStore()
+        self.app_cfg = self.store.load()
+        if self.wiring:
+            self.wiring.apply_settings(self.app_cfg)
+
+        # UI 토글 초기화 (QSettings 호환 유지)
+        self.cb_auto_buy.setChecked(self.app_cfg.auto_buy)
+        self.cb_auto_sell.setChecked(self.app_cfg.auto_sell)
 
         # 옵션: 자동 오픈 off
         self.auto_open_macd_modal = False
@@ -204,6 +177,7 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self.on_click_start_condition)
         self.btn_stop.clicked.connect(self.on_click_stop_condition)
         self.btn_filter.clicked.connect(self.on_click_filter)
+        self.btn_settings.triggered.connect(self.on_open_settings_dialog)  # ✅ 환경설정
 
         # 입력/목록
         self.search_conditions.textChanged.connect(self._filter_conditions)
@@ -294,34 +268,31 @@ class MainWindow(QMainWindow):
         self.cand_table.setCornerButtonEnabled(False)
         top_left.addWidget(self.cand_table, 1)
 
-        # 컬럼 인덱스
-        self.COL_NAME = 0
-        self.COL_CODE = 1
-        self.COL_PRICE = 2
-
-        hsplit.addWidget(pane_top_left)
-
-        # 상단-우: 결과 카드 영역
+        # 상단-우: 결과 표 영역
         pane_top_right = QWidget()
         top_right = QVBoxLayout(pane_top_right)
         top_right.addWidget(QLabel("종목 검색 결과"))
 
-        row_auto = QHBoxLayout()
-        self.cb_auto_buy = QCheckBox("자동 매수")
-        self.cb_auto_sell = QCheckBox("자동 매도")
-        row_auto.addWidget(self.cb_auto_buy)
-        row_auto.addWidget(self.cb_auto_sell)
-        row_auto.addStretch(1)
-        top_right.addLayout(row_auto)
+        # 정렬 UI
+        sort_row = QHBoxLayout()
+        self.cmb_sort_key = QComboBox()
+        self.cmb_sort_key.addItems(["등락률(%)", "현재가", "거래량", "고가", "저가", "시가", "코드", "이름", "최근 갱신시간"])
+        self.cmb_sort_key.setCurrentIndex(0)
+        self.btn_sort_dir = QPushButton("내림차순")
+        self.btn_sort_dir.setCheckable(True)  # 체크=내림차순
+        self.btn_sort_dir.setChecked(True)
+        sort_row.addWidget(QLabel("정렬:"))
+        sort_row.addWidget(self.cmb_sort_key)
+        sort_row.addWidget(self.btn_sort_dir)
+        sort_row.addStretch(1)
+        top_right.addLayout(sort_row)
 
-        self.cb_auto_buy.stateChanged.connect(lambda _:
-            (getattr(self, "auto_trade_controller", None) and
-             setattr(self.auto_trade_controller.settings, "auto_buy", self.cb_auto_buy.isChecked()))
-        )
-        self.cb_auto_sell.stateChanged.connect(lambda _:
-            (getattr(self, "auto_trade_controller", None) and
-             setattr(self.auto_trade_controller.settings, "auto_sell", self.cb_auto_sell.isChecked()))
-        )
+        # 정렬 이벤트 연결
+        self.cmb_sort_key.currentIndexChanged.connect(lambda _ : self._render_results_html())
+        self.btn_sort_dir.toggled.connect(lambda _ : (
+            self.btn_sort_dir.setText("내림차순" if self.btn_sort_dir.isChecked() else "오름차순"),
+            self._render_results_html()
+        ))
 
         self.text_result = QTextBrowser()
         self.text_result.setOpenExternalLinks(False)
@@ -329,9 +300,6 @@ class MainWindow(QMainWindow):
         self.text_result.setReadOnly(True)
         self.text_result.anchorClicked.connect(self._on_result_anchor_clicked)
         top_right.addWidget(self.text_result, 1)
-
-        self._cards = OrderedDict()               # code -> html (최신이 맨 앞)
-        self._card_limit = 30
 
         hsplit.addWidget(pane_top_right)
         hsplit.setSizes([680, 440])
@@ -405,6 +373,9 @@ class MainWindow(QMainWindow):
         act_refresh.setShortcut("F5")
         act_refresh.triggered.connect(self.load_candidates)
 
+        tb.addSeparator()
+        self.btn_settings = tb.addAction("환경설정…")  # ✅ 설정 진입
+
     def _start_clock(self):
         self._clock = QLabel()
         self.status.addPermanentWidget(self._clock)
@@ -418,17 +389,22 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self, "hsplit"):
                 try:
-                    self._settings.setValue("hsplit_state", self.hsplit.saveState())
+                    self._settings_qs.setValue("hsplit_state", self.hsplit.saveState())
                 except Exception:
                     pass
 
-            self._settings.setValue("auto_buy", self.cb_auto_buy.isChecked())
-            self._settings.setValue("auto_sell", self.cb_auto_sell.isChecked())
+            # QSettings 호환 저장(별도 SettingsStore.save도 아래서 수행)
+            self._settings_qs.setValue("auto_buy", self.cb_auto_buy.isChecked())
+            self._settings_qs.setValue("auto_sell", self.cb_auto_sell.isChecked())
+
+            # 최신 cfg 반영 저장
+            self.app_cfg.auto_buy = self.cb_auto_buy.isChecked()
+            self.app_cfg.auto_sell = self.cb_auto_sell.isChecked()
+            self.store.save(self.app_cfg)
 
             if hasattr(self.engine, "shutdown"):
                 self.engine.shutdown()
 
-            # 스트림 중지(선택): 유지하고 싶으면 이 블록 제거
             for code6 in list(self._active_macd_streams):
                 if hasattr(self.engine, "stop_macd_stream"):
                     self.engine.stop_macd_stream(code6)
@@ -452,7 +428,6 @@ class MainWindow(QMainWindow):
                 return
             self.engine.initialize()
             self.btn_init.setEnabled(False)
-            # self.status.showMessage("초기화 진행 중...", 0)
         except Exception as e:
             QMessageBox.critical(self, "초기화 실패", str(e))
 
@@ -487,6 +462,23 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "오류", str(e))
 
+    # -------- 환경설정 --------
+    def on_open_settings_dialog(self):
+        # 현재 설정을 기반으로 다이얼로그 오픈
+        dlg = SettingsDialog(self, self.app_cfg)
+        if dlg.exec() == QDialog.Accepted:
+            new_cfg = dlg.get_settings()
+            # UI 체크박스 동기화
+            self.cb_auto_buy.setChecked(new_cfg.auto_buy)
+            self.cb_auto_sell.setChecked(new_cfg.auto_sell)
+            # 저장
+            self.store.save(new_cfg)
+            self.app_cfg = new_cfg
+            # Wiring 적용
+            if self.wiring:
+                self.wiring.apply_settings(new_cfg)
+            self.append_log("⚙️ 설정이 적용되었습니다.")
+
     # -------- 다이얼로그 열기 --------
     def _open_macd_dialog(self, code: str):
         code6 = str(code)[-6:].zfill(6)
@@ -500,23 +492,6 @@ class MainWindow(QMainWindow):
         dlg.finished.connect(lambda _: self._macd_dialogs.pop(code6, None))
         dlg.show()
         self._macd_dialogs[code6] = dlg
-
-    # -------- 카드 렌더 --------
-    def _render_card(self, code: str, html: str):
-        key = str(code) if code else f"__nocode__:{hash(html)}"
-
-        if not hasattr(self, "_cards"):
-            self._cards = OrderedDict()
-        if key in self._cards and self._cards[key] == html:
-            return
-
-        self._cards[key] = html
-        self._cards.move_to_end(key, last=False)
-
-        while len(self._cards) > getattr(self, "_card_limit", 30):
-            self._cards.popitem(last=True)
-
-        self.text_result.setHtml("\n".join(self._cards.values()))
 
     # -------- 브리지 → UI --------
     @Slot(str)
@@ -554,30 +529,19 @@ class MainWindow(QMainWindow):
 
     @Slot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
-        """레거시 4-튜플 신호 (표시만)"""
         code6 = str(code)[-6:].zfill(6)
         self.status.showMessage(f"[MACD] {code6} M:{macd:.2f} S:{signal:.2f} H:{hist:.2f}", 2500)
-        # 새 다이얼로그는 macd_bus를 직접 구독하므로, 별도 push 필요 없음
         logger.info(f"[MACD] {code6} | MACD:{macd:.2f} Signal:{signal:.2f} Hist:{hist:.2f}")
 
     @Slot(dict)
     def on_macd_series_ready(self, data: dict):
-        """브리지 경유 새 포맷 수신. 다이얼로그는 macd_bus를 직접 구독하므로 여기서는 캐시/표시만."""
         code = data.get("code")
         tf = (data.get("tf") or "").lower()
         series = data.get("series") or data.get("values")
         if not code or not tf or not series:
             return
-
         code6 = str(code)[-6:].zfill(6)
-
         logger.info("[ui_main] on_macd_series_ready: %s", code6)
-        # 카드 등 다른 표시를 원하면 여기서 가공
-        # (현재는 다이얼로그가 store(feed)에서 바로 로드하므로 별도 처리 불필요)
-        dlg = self._macd_dialogs.get(code6)
-        if dlg:
-            # 다이얼로그는 feed↔bus로 최신 반영되므로 no-op 가능
-            pass
 
     # ---- 변환/도우미 ----
     @staticmethod
@@ -589,7 +553,6 @@ class MainWindow(QMainWindow):
         return default
 
     def _ensure_macd_stream(self, code6: str):
-        """신규 종목 감지될 때 MACD 스트림을 안전하게 시작."""
         try:
             now = pd.Timestamp.now(tz="Asia/Seoul")
             last = self._last_stream_req_ts.get(code6)
@@ -611,12 +574,136 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning("start_macd_stream failed for %s: %s", code6, e)
 
+    # -------- 결과표 렌더링 --------
+    def _fmt_num(self, v, digits=0):
+        try:
+            if v is None or v == "":
+                return "-"
+            f = float(str(v).replace(",", "").replace("%", ""))
+            if digits:
+                return f"{f:,.{digits}f}"
+            return f"{int(round(f)):,.0f}"
+        except Exception:
+            return str(v)
+
+    def _fmt_time(self, ts):
+        try:
+            if isinstance(ts, pd.Timestamp):
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize("Asia/Seoul")
+                return ts.strftime("%H:%M:%S")
+            return pd.Timestamp(ts).tz_localize("Asia/Seoul").strftime("%H:%M:%S")
+        except Exception:
+            return "-"
+
+    def _render_results_html(self):
+        if not self._result_rows:
+            self.text_result.setHtml("<div style='color:#9aa0a6;'>표시할 결과가 없습니다.</div>")
+            return
+
+        key_map = {
+            "등락률(%)": "rt",
+            "현재가": "price",
+            "거래량": "vol",
+            "고가": "high",
+            "저가": "low",
+            "시가": "open",
+            "코드": "code",
+            "이름": "name",
+            "최근 갱신시간": "updated_at",
+        }
+        sort_label = self.cmb_sort_key.currentText() if hasattr(self, "cmb_sort_key") else "등락률(%)"
+        key = key_map.get(sort_label, "rt")
+        desc = self.btn_sort_dir.isChecked() if hasattr(self, "btn_sort_dir") else True
+
+        def sort_key(row):
+            v = row.get(key)
+            if key == "updated_at":
+                try:
+                    ts = v if isinstance(v, pd.Timestamp) else pd.Timestamp(v)
+                    if ts.tzinfo is None:
+                        ts = ts.tz_localize("Asia/Seoul")
+                    return ts.timestamp()
+                except Exception:
+                    return 0
+            try:
+                return float(str(v).replace("%", "").replace(",", ""))
+            except Exception:
+                return str(v)
+
+        rows = sorted(self._result_rows, key=sort_key, reverse=desc)
+
+        html = [
+            """
+            <style>
+              table.res { width:100%; border-collapse:collapse; font-size:12px; }
+              table.res th, table.res td { border-bottom:1px solid #2f3338; padding:8px 10px; }
+              table.res th { text-align:center; color:#cfd3d8; background:#25282d; position:sticky; top:0; }
+              table.res td.right { text-align:right; font-family:Consolas,'Courier New',monospace; }
+              table.res tr:hover { background:#2a2e33; }
+              .pos { color:#e53935; font-weight:700; }
+              .neg { color:#43a047; font-weight:700; }
+              .muted { color:#9aa0a6; }
+              .code { color:#9aa0a6; font-family:Consolas,'Courier New',monospace; }
+              .btn { padding:2px 8px; border:1px solid #4c566a; border-radius:10px; color:#e0e0e0; text-decoration:none; background:#2b2f36; }
+            </style>
+            <table class="res">
+              <thead>
+                <tr>
+                  <th style="width:22%;">이름</th>
+                  <th style="width:10%;">코드</th>
+                  <th style="width:12%;">현재가</th>
+                  <th style="width:11%;">등락률</th>
+                  <th style="width:11%;">시가</th>
+                  <th style="width:11%;">고가</th>
+                  <th style="width:11%;">저가</th>
+                  <th style="width:8%;">최근 갱신</th>
+                  <th style="width:4%;"></th>
+                </tr>
+              </thead>
+              <tbody>
+            """
+        ]
+
+        for r in rows:
+            name  = r.get("name","-")
+            code6 = r.get("code","-")
+            price = self._fmt_num(r.get("price"))
+            rtval = r.get("rt", 0.0)
+            try:
+                f_rt = float(str(rtval).replace("%", "").replace(",", ""))
+            except Exception:
+                f_rt = 0.0
+            cls = "pos" if f_rt > 0 else ("neg" if f_rt < 0 else "muted")
+            rtf = f"{f_rt:.2f}%"
+
+            opn  = self._fmt_num(r.get("open"))
+            high = self._fmt_num(r.get("high"))
+            low  = self._fmt_num(r.get("low"))
+            upd  = self._fmt_time(r.get("updated_at"))
+
+            html.append(
+                f"""
+                <tr>
+                  <td>{name}</td>
+                  <td class="code">{code6}</td>
+                  <td class="right">{price}</td>
+                  <td class="right {cls}">{rtf}</td>
+                  <td class="right">{opn}</td>
+                  <td class="right">{high}</td>
+                  <td class="right">{low}</td>
+                  <td class="right">{upd}</td>
+                  <td><a href="macd:{code6}" class="btn">상세</a></td>
+                </tr>
+                """
+            )
+
+        html.append("</tbody></table>")
+        self.text_result.setHtml("".join(html))
+
     # ---- 신규 종목 상세 수신 ----
     @Slot(dict)
     def on_new_stock_detail(self, payload: dict):
-        logger.info("[UI] on_new_stock_detail: code=%s, cond=%s",
-                    payload.get("stock_code"), payload.get("condition_name"))
-
         row0 = None
         if isinstance(payload.get("open_pric_pre_flu_rt"), list) and payload["open_pric_pre_flu_rt"]:
             row0 = payload["open_pric_pre_flu_rt"][0]
@@ -630,88 +717,53 @@ class MainWindow(QMainWindow):
 
         code = (flat.get("stock_code") or "").strip()
         name = flat.get("stock_name") or flat.get("stk_nm") or flat.get("isu_nm") or "종목명 없음"
-        cond = flat.get("condition_name") or ""
 
-        cur      = self._pick(flat, ["cur_prc", "stck_prpr", "price"])
-        rt       = self._pick(flat, ["flu_rt", "prdy_ctrt"])
-        opn      = self._pick(flat, ["open_pric", "stck_oprc"])
-        high     = self._pick(flat, ["high_pric", "stck_hgpr"])
-        low      = self._pick(flat, ["low_pric", "stck_lwpr"])
-        vol      = self._pick(flat, ["now_trde_qty", "acml_vol", "trqu"])
-        strength = self._pick(flat, ["cntr_str", "antc_tr_pbmn", "cttr"])
-        opn_diff = self._pick(flat, ["open_pric_pre", "opn_diff", "prdy_vrss"])
+        def _num(keys):
+            for k in keys:
+                v = flat.get(k)
+                if v not in (None, "", "-"):
+                    try:
+                        return float(str(v).replace(",", "").replace("%",""))
+                    except Exception:
+                        pass
+            return None
 
-        logger.info("[UI] extracted: name=%s cur=%s rt=%s opn=%s high=%s low=%s vol=%s strength=%s opn_diff=%s",
-                    name, cur, rt, opn, high, low, vol, strength, opn_diff)
+        price = _num(["cur_prc","stck_prpr","price"])
+        rt    = _num(["flu_rt","prdy_ctrt"])
+        opn   = _num(["open_pric","stck_oprc"])
+        high  = _num(["high_pric","stck_hgpr"])
+        low   = _num(["low_pric","stck_lwpr"])
+        vol   = _num(["now_trde_qty","acml_vol","trqu"])
 
-        # 등락률/색
-        try:
-            rt_val_card = float(str(rt).replace("%", "").replace(",", ""))
-        except Exception:
-            rt_val_card = 0.0
-        color = "#e53935" if rt_val_card > 0 else ("#43a047" if rt_val_card < 0 else "#cfcfcf")
-        rt_fmt = f"{rt_val_card:.2f}%"
-        cond_chip = f'<span style="margin-left:8px; font-size:10px; padding:2px 6px; border:1px solid #2c2c2c; border-radius:10px; color:#cfd8dc;">[{cond}]</span>' if cond else ""
-
-        code6 = str(code)[-6:].zfill(6)
-        detail_btn = f'<a href="macd:{code6}" style="margin-left:8px; font-size:11px; padding:2px 8px; border:1px solid #4c566a; border-radius:10px; color:#e0e0e0; text-decoration:none; background:#2b2f36;">상세</a>'
-
-        html = f"""
-        <div style="margin:10px 0;">
-          <div style="border:1px solid #2c2c2c; border-left:6px solid {color}; background:#161616; padding:10px; border-radius:8px;">
-            <table style="width:100%; border-collapse:collapse;">
-              <tr>
-                <td style="vertical-align:top; width:70%;">
-                  <div style="padding-top:6px; border-top:1px dashed #333; margin-top:2px;">
-                    <b style="font-size:11px; color:#ff9800;">{name}</b>
-                    <span style="color:#9aa0a6; margin-left:5px;">{code6}</span>
-                    {cond_chip}
-                    {detail_btn}
-                  </div>
-                </td>
-                <td style="vertical-align:top; text-align:right;">
-                  <div style="font-size:12px; color:#bdbdbd;">현재가</div>
-                  <div style="font-size:18px; font-weight:700; font-family:Consolas,'Courier New',monospace;">{cur}</div>
-                  <div style="margin-top:2px; font-weight:700; color:{color};">{rt_fmt}</div>
-                </td>
-              </tr>
-            </table>
-
-            <hr style="border:0; border-top:1px dashed #333; margin:8px 0;">
-
-            <div style="font-size:12px; color:#bdbdbd; line-height:1.6;">
-              시가 <b style="color:#e0e0e0;">{opn}</b>
-              <span style="color:#8e8e8e;"> (시가대비 {opn_diff})</span><br>
-              고가 <b style="color:#e0e0e0;">{high}</b>&nbsp;&nbsp;저가 <b style="color:#e0e0e0;">{low}</b><br>
-              거래량 <b style="color:#e0e0e0;">{vol}</b>&nbsp;&nbsp;체결강도 <b style="color:#e0e0e0;">{strength}</b>
-            </div>
-          </div>
-        </div>
-        """
-        if (not name) or (name.strip() in ("종목명 없음", "", "-")):
-            logger.info("skip card render: name is empty for code=%s", code6)
-        else:
-            self._render_card(code6, html)
-
-        if code:
-            self.label_new_stock.setText(f"신규 종목: {code}")
-
-        # 스트림 확보
-        if code6:
-            self._ensure_macd_stream(code6)
-
-        # 열려있을 때만 다이얼로그 배지 업데이트 (현재가/등락률)
-        dlg = self._macd_dialogs.get(code6)
-        if not dlg:
+        code6 = str(code)[-6:].zfill(6) if code else ""
+        if not code6:
             return
-        try:
-            raw_rt = self._pick(flat, ["flu_rt", "prdy_ctrt"])
-            rt_val = float(str(raw_rt).replace("%", "").replace(",", ""))
-        except Exception:
-            rt_val = None
 
-        # (선택) 자동매매 트리거 → 필요시 구현
-        # self._trigger_auto_trade(payload)
+        updated_at = pd.Timestamp.now(tz="Asia/Seoul")
+
+        row = {
+            "code": code6,
+            "name": name or "-",
+            "price": price,
+            "rt": rt if rt is not None else 0.0,
+            "open": opn,
+            "high": high,
+            "low": low,
+            "vol": vol,
+            "updated_at": updated_at,
+        }
+
+        idx = self._result_index.get(code6)
+        if idx is None:
+            self._result_index[code6] = len(self._result_rows)
+            self._result_rows.append(row)
+        else:
+            self._result_rows[idx] = row
+
+        self.label_new_stock.setText(f"신규 종목: {code6}")
+
+        self._render_results_html()
+        self._ensure_macd_stream(code6)
 
     # -------- 링크 클릭(상세) 핸들러 --------
     @Slot(QUrl)
@@ -737,7 +789,6 @@ class MainWindow(QMainWindow):
 
         try:
             df = pd.read_csv(path, encoding="utf-8-sig")
-            # 컬럼 정규화
             rename_map = {}
             for col in list(df.columns):
                 low = col.lower()
