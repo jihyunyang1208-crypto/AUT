@@ -49,6 +49,9 @@ class DailyResultsRecorder:
             "symbol": sig.symbol,
             "price": sig.price,
             "reason": sig.reason,
+            "source": getattr(sig, "source", "bar"),
+            "condition_name": getattr(sig, "condition_name", ""),
+            "return_msg": getattr(sig, "return_msg", None), 
         }
         with self._lock:
             p = self._path_for_today()
@@ -63,10 +66,21 @@ class DailyResultsRecorder:
 class TradeSignal:
     side: str           # "BUY" | "SELL"
     symbol: str
-    ts: pd.Timestamp    # 신호가 발생한 5분봉 종료시각
+    ts: pd.Timestamp    # 신호 발생 시각
     price: float        # 기준가격(보통 종가)
     reason: str         # 신호 사유 텍스트
+    source: str = "bar" # "bar" | "condition" | "manual" | "macd" 등
+    condition_name: str = ""  # 조건검색식 이름
+    extra: dict = None        # 추가정보 (optional)
+    return_msg: str | None = None
 
+@dataclass
+class MonitorCustom:
+    """고급 커스텀 설정 (모니터가 해석)"""
+    enabled: bool = False                # 고급 커스텀 전체 스위치
+    auto_buy: bool = True                # '매수' 체크
+    auto_sell: bool = False              # '매도' 체크
+    allow_intrabar_condition_triggers: bool = True  # 봉마감 전 즉시 트리거 허용
 
 
 # ============================================================================
@@ -146,6 +160,7 @@ class ExitEntryMonitor:
     - 봉 마감 구간에서만 평가
     - JSON 기록
     - 🔧 캐시 우선 설계: ingest_bars()로 들어온 DF를 먼저 활용, 없을 때만 pull
+    - 🔔 조건검색(편입) 즉시 트리거 → TradeSignal로 통합 발행
     """
     def __init__(
         self,
@@ -163,6 +178,7 @@ class ExitEntryMonitor:
         bar_close_window_start_sec: int = 5,
         bar_close_window_end_sec: int = 30,
         disable_server_pull: bool = False,   # 💡 캐시만 사용하고 싶을 때 True
+        custom: Optional[MonitorCustom] = None,  # 💡 고급 커스텀
     ):
         self.detail_getter = detail_getter
         self.bridge = bridge
@@ -177,6 +193,7 @@ class ExitEntryMonitor:
         self.on_signal = on_signal or (lambda sig: logger.info(f"[SIGNAL] {sig}"))
         self.results_recorder = results_recorder
         self.disable_server_pull = bool(disable_server_pull)
+        self.custom = custom or MonitorCustom()
 
         # 파라미터 검증
         if not (0 <= bar_close_window_start_sec <= bar_close_window_end_sec <= 59):
@@ -199,6 +216,26 @@ class ExitEntryMonitor:
             logger.info("[ExitEntryMonitor] tracking symbols from MACD bus: tf=%s", self.macd30_timeframe)
         except Exception as e:
             logger.warning("[ExitEntryMonitor] macd_bus connect failed: %s", e)
+
+    # ----------------------------------------------------------------------
+    # 고급 커스텀 설정 업데이트
+    # ----------------------------------------------------------------------
+    def set_custom(
+        self,
+        *,
+        enabled: bool | None = None,
+        auto_buy: bool | None = None,
+        auto_sell: bool | None = None,
+        allow_intrabar_condition_triggers: bool | None = None,
+    ):
+        if enabled is not None:
+            self.custom.enabled = bool(enabled)
+        if auto_buy is not None:
+            self.custom.auto_buy = bool(auto_buy)
+        if auto_sell is not None:
+            self.custom.auto_sell = bool(auto_sell)
+        if allow_intrabar_condition_triggers is not None:
+            self.custom.allow_intrabar_condition_triggers = bool(allow_intrabar_condition_triggers)
 
     # ----------------------------------------------------------------------
     # 내부 헬퍼
@@ -378,7 +415,7 @@ class ExitEntryMonitor:
         except Exception:
             pass
 
-        sig_obj = TradeSignal(side, symbol, ts, price, reason)
+        sig_obj = TradeSignal(side, symbol, ts, price, reason)  # source='bar' 기본값 유지
 
         # 1) 외부 콜백
         try:
@@ -392,6 +429,90 @@ class ExitEntryMonitor:
                 self.results_recorder.record_signal(sig_obj)
             except Exception as e:
                 logger.exception(f"[ExitEntryMonitor] 기록 실패: {e}")
+
+    # ----------------------------------------------------------------------
+    # 조건검색 '편입(I)' 즉시 트리거 → TradeSignal 통합 발행
+    # ----------------------------------------------------------------------
+    async def on_condition_detected(
+        self,
+        symbol: str,
+        *,
+        condition_name: str = "",
+        source: str = "condition",
+        reason: str = "조건검색 편입(I)",
+    ):
+        """
+        조건검색식에서 종목이 편입될 때 호출됨.
+        - custom.enabled & allow_intrabar_condition_triggers 일 때만 즉시 평가/발행
+        - auto_buy/auto_sell 토글에 따라 BUY/SELL 선택
+        - 가격은 5분봉 캐시 또는 pull 결과의 마지막 종가 사용
+        """
+        try:
+            # 추적 목록에는 추가해 둔다(이후 정규루프에서도 평가 가능)
+            sym = _code6(symbol)
+            with self._sym_lock:
+                self._symbols.add(sym)
+
+            if not (self.custom.enabled and self.custom.allow_intrabar_condition_triggers):
+                logger.debug(f"[Monitor] custom disabled or intrabar not allowed → skip immediate ({sym})")
+                return
+
+            df5 = await self._get_5m(sym, count=200)
+            if df5 is None or df5.empty:
+                logger.debug(f"[Monitor] {sym} 즉시트리거: 5m 없음 → skip")
+                return
+
+            ref_ts = df5.index[-1]
+            last_close = float(df5["Close"].iloc[-1])
+
+            # MACD30 필터
+            if self.use_macd30_filter and not self._macd30_pass(sym, ref_ts):
+                logger.debug(f"[Monitor] {sym} 즉시트리거: MACD30 fail → skip")
+                return
+
+            # 사이드 결정
+            side = None
+            if self.custom.auto_buy:
+                side = "BUY"
+            elif self.custom.auto_sell:
+                side = "SELL"
+
+            if side is None:
+                logger.debug(f"[Monitor] {sym} 즉시트리거: side 토글 없음 → skip")
+                return
+
+            sig = TradeSignal(
+                side=side,
+                symbol=sym,
+                ts=ref_ts,
+                price=last_close,
+                reason=reason,
+                source=source,
+                condition_name=condition_name,
+                extra={"immediate": True},
+            )
+
+            # 외부 콜백(오토트레이더 on_signal 등)
+            try:
+                self.on_signal(sig)
+            except Exception:
+                logger.exception("[ExitEntryMonitor] on_signal handler error (immediate)")
+
+            # 로그/저장
+            try:
+                if self.bridge and hasattr(self.bridge, "log"):
+                    self.bridge.log.emit(f"📊 즉시신호 [{side}] {sym} @ {last_close} ({condition_name})")
+            except Exception:
+                pass
+
+            if self.results_recorder:
+                try:
+                    self.results_recorder.record_signal(sig)
+                except Exception as e:
+                    logger.exception(f"[ExitEntryMonitor] 기록 실패(immediate): {e}")
+
+        except Exception:
+            logger.exception(f"[Monitor] on_condition_detected error: {symbol}")
 
     # ----------------------------------------------------------------------
     # 심볼 평가

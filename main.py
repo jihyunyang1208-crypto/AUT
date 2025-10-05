@@ -17,7 +17,7 @@ from matplotlib import rcParams
 
 # ---- 앱 유틸/코어 ----
 from utils.utils import load_api_keys
-from utils.token_manager import get_access_token
+from utils.token_manager import get_access_token, get_access_token_cached
 from core.websocket_client import WebSocketClient
 from strategy.filter_1_finance import run_finance_filter
 from strategy.filter_2_technical import run_technical_filter
@@ -33,7 +33,8 @@ from ui_main import MainWindow
 
 # ---- trade_pro 모듈 ----
 from trade_pro.entry_exit_monitor import ExitEntryMonitor
-from trade_pro.auto_trader import AutoTrader
+from setting.settings_manager import SettingsStore, AppSettings, SettingsDialog
+from trade_pro.auto_trader import AutoTrader, TradeSettings, LadderSettings
 
 # ─────────────────────────────────────────────────────────
 # 한글 폰트 설정
@@ -399,7 +400,7 @@ class Engine(QObject):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.bridge.log.emit(f"⚠️ 5m 스트림 오류({code}): {e}  (type={type(e).__name__})")
+                logger.info(f"⚠️ 5m 스트림 오류({code}): {e}  (type={type(e).__name__})")
 
         async def job_30m():
             try:
@@ -427,7 +428,7 @@ class Engine(QObject):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.bridge.log.emit(f"⚠️ 30m 스트림 오류({code}): {e}  (type={type(e).__name__})")
+                logger.info(f"⚠️ 30m 스트림 오류({code}): {e}  (type={type(e).__name__})")
 
         async def job_1d():
             try:
@@ -440,7 +441,7 @@ class Engine(QObject):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.bridge.log.emit(f"⚠️ 1d 초기화 오류({code}): {e}  (type={type(e).__name__})")
+                logger.info(f"⚠️ 1d 초기화 오류({code}): {e}  (type={type(e).__name__})")
 
         def _submit(coro):
             return asyncio.run_coroutine_threadsafe(coro, self.loop)
@@ -517,6 +518,37 @@ def perform_filtering():
         raise RuntimeError(f"기술적 필터링 실패: {e}")
 
 
+
+def _build_trader_from_cfg(cfg: AppSettings) -> AutoTrader:
+    # ① AutoTrader 설정 매핑
+    trade_settings = TradeSettings(
+        master_enable=cfg.master_enable,
+        auto_buy=cfg.auto_buy,
+        auto_sell=cfg.auto_sell,
+    )
+    # (지정가/시장가 기본 지정은 _resolve_trde_tp에서 cfg.order_type을 참고하도록 적용)
+    # TradeSettings에 order_type 필드가 있다면 아래처럼 넘겨주세요:
+    # trade_settings.order_type = cfg.order_type  # "limit" | "market"
+
+    ladder = LadderSettings(
+        unit_amount=cfg.ladder_unit_amount,
+        num_slices=cfg.ladder_num_slices,
+    )
+
+    # ② API Base URL 제공자
+    def base_url_provider():
+        # 비어있으면 환경변수/기본값 사용 (AutoTrader가 rstrip("/"))
+        return cfg.api_base_url or os.getenv("HTTP_API_BASE", "https://api.kiwoom.com")
+
+    trader = AutoTrader(
+        settings=trade_settings,
+        ladder=ladder,
+        token_provider=lambda: get_access_token_cached(),   # 당신의 기존 토큰 함수
+        base_url_provider=base_url_provider,
+        paper_mode=cfg.sim_mode,                             # SIM/PAPER 모드 연동
+    )
+    return trader
+
 # ─────────────────────────────────────────────────────────
 # 진입점
 # ─────────────────────────────────────────────────────────
@@ -540,7 +572,7 @@ def main():
     # 매수/매도 monitor
 
 
-    trader = AutoTrader(token_provider=get_access_token, use_mock=False)
+    trader = AutoTrader(token_provider=lambda: get_access_token_cached())
     trader.settings.master_enable = True
     trader.settings.auto_buy = True
     trader.settings.auto_sell = True
@@ -556,6 +588,12 @@ def main():
     # 이벤트 배선
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
+
+    store = SettingsStore()
+    app_cfg = store.load()            # ← 로컬 저장소 + .env 병합된 설정 로드
+
+    trader = _build_trader_from_cfg(app_cfg)
+
 
     ui.show()
 

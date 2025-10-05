@@ -6,7 +6,8 @@ import logging
 from google.api_core import exceptions as gax_exceptions
 
 logger = logging.getLogger(__name__)
-
+from dotenv import load_dotenv
+load_dotenv()
 
 # 1) 안전한 기본값과 폴백 맵
 PREFERRED_MODELS = [
