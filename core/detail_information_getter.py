@@ -294,7 +294,8 @@ class DetailInformationGetter:
 
         tail = norm[-max_points:]
         tf = "5m" if tic == 5 else "30m" if tic == 30 else f"{tic}m"
-        calculator.apply_rows(code=code6, tf=("5m" if tf not in ("5m", "30m", "1d") else tf), rows=tail, need=max_points)
+        valid_tf = tf if tf in ("5m", "30m", "1d") else "5m"
+        calculator.apply_rows_full(code=code6, tf=valid_tf, rows=tail, need=max_points)
 
         # ② ✅ 매매 모니터로 5분봉 DF 푸시
         if monitor is not None:

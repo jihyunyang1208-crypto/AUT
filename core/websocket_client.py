@@ -377,7 +377,8 @@ class WebSocketClient:
                         break  # 현재 루프 종료 → 소켓은 서버가 곧 닫음
 
                 elif trnm == "PING":
-                    await self.send_message(response)
+                    await self.send_message({"trnm": "PONG"})
+                    continue
 
                 # 3) 조건식 목록
                 elif trnm == "CNSRLST":

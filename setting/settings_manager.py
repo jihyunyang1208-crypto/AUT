@@ -1,16 +1,55 @@
-# core/settings_manager.py
+# setting/settings_manager.py
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, asdict
 from typing import Optional, Literal
 
-from PySide6.QtCore import QSettings, Qt, QRegularExpression
+from PySide6.QtCore import QSettings, Qt, QRegularExpression, Slot
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QCheckBox,
-    QComboBox, QDialogButtonBox, QWidget, QLineEdit, QGroupBox, QFormLayout
+    QComboBox, QDialogButtonBox, QWidget, QLineEdit, QGroupBox, QFormLayout,
+    QTabWidget, QPushButton, QMessageBox
 )
+
+# ----- AutoTrader 타입 힌트를 위해 (런타임 의존 없음)
+try:
+    from trade_pro.auto_trader import TradeSettings as _TradeSettings, LadderSettings as _LadderSettings
+except Exception:
+    _TradeSettings = None  # type: ignore
+    _LadderSettings = None  # type: ignore
+
+# 로그인 탭 연동(앞서 제공한 호환판 token_manager 전제)
+try:
+    from utils.token_manager import load_keys as tm_load_keys, set_keys as tm_set_keys, request_new_token as tm_request_new_token
+except Exception:
+    # 토큰 모듈이 아직 없을 수 있으므로, 안전한 no-op 대체
+    def tm_load_keys():
+        return os.getenv("APP_KEY", ""), os.getenv("APP_SECRET", "")
+    def tm_set_keys(appkey: str, appsecret: str):
+        pass
+    def tm_request_new_token(appkey: Optional[str] = None, appsecret: Optional[str] = None, token_url: str = "") -> str:
+        raise RuntimeError("token_manager가 준비되지 않았습니다.")
+
+
+# ===================== 유틸 =====================
+def _b(env_key: str, default: Optional[bool] = None) -> Optional[bool]:
+    val = os.getenv(env_key)
+    if val is None:
+        return default
+    return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
+
+def _s(env_key: str, default: str = "") -> str:
+    v = os.getenv(env_key)
+    return (v.strip() if isinstance(v, str) else default)
+
+def _normalize_base_url(api: str) -> str:
+    api = (api or "").strip()
+    if api.endswith("/"):
+        api = api[:-1]
+    return api
+
 
 # ===================== 데이터 모델 =====================
 @dataclass
@@ -34,7 +73,7 @@ class AppSettings:
     bar_close_window_end_sec: int = 30
 
     # 시뮬/실거래
-    sim_mode: bool = False
+    sim_mode: bool = False              # ✅ UI 시뮬레이션 스위치 (paper ≡ simulation)
     api_base_url: str = ""
 
     # 라더(사다리) 매수 기본 설정
@@ -47,29 +86,30 @@ class AppSettings:
     @classmethod
     def from_env(cls) -> "AppSettings":
         """환경변수 → 초기값. QSettings와 병합 시 '기본'으로 사용됩니다."""
-        def _b(env_key: str, default: Optional[bool] = None):
-            val = os.getenv(env_key)
-            if val is None:
-                return default
-            return str(val).strip().lower() in ("1", "true", "yes", "y", "on")
-
-        def _s(env_key: str, default: str = "") -> str:
-            v = os.getenv(env_key)
-            return (v.strip() if isinstance(v, str) else default)
-
         def _order_type_from_env() -> Literal["limit", "market"]:
-            # ORDER_TYPE=limit/market (없으면 limit)
             raw = _s("ORDER_TYPE", "").lower()
             return "market" if raw == "market" else "limit"
 
-        # 시뮬 모드: SIM_MODE 우선, 없으면 PAPER_MODE 사용
+        # --- 시뮬 모드(하위호환 포함) ---
+        # 1순위: SIM_MODE / SIMULATION_MODE / PAPER_MODE
         sim = _b("SIM_MODE", None)
         if sim is None:
-            sim = _b("PAPER_MODE", False)
+            sim = _b("SIMULATION_MODE", None)
+        if sim is None:
+            sim = _b("PAPER_MODE", None)
 
-        api = _s("HTTP_API_BASE", "")
-        if api.endswith("/"):
-            api = api[:-1]
+        # 2순위: TRADE_MODE 키워드
+        if sim is None:
+            trade_mode = (_s("TRADE_MODE", "") or "").lower()
+            if trade_mode in ("paper", "sim", "simulation"):
+                sim = True
+            elif trade_mode in ("live", "real", "prod"):
+                sim = False
+
+        if sim is None:
+            sim = False  # default
+
+        api = _normalize_base_url(_s("HTTP_API_BASE", ""))
 
         return cls(
             sim_mode=bool(sim),
@@ -112,7 +152,7 @@ class SettingsStore:
                 bar_close_window_start_sec=int(merged.get("bar_close_window_start_sec", 5)),
                 bar_close_window_end_sec=int(merged.get("bar_close_window_end_sec", 30)),
                 sim_mode=bool(merged.get("sim_mode", False)),
-                api_base_url=str(merged.get("api_base_url", "")),
+                api_base_url=_normalize_base_url(str(merged.get("api_base_url", ""))),
                 ladder_unit_amount=int(merged.get("ladder_unit_amount", 100_000)),
                 ladder_num_slices=int(merged.get("ladder_num_slices", 10)),
                 timezone=str(merged.get("timezone", "Asia/Seoul")),
@@ -129,25 +169,86 @@ class SettingsStore:
         return base
 
     def save(self, cfg: AppSettings):
-        # URL 뒤 슬래시는 저장 전에 정규화
-        api = cfg.api_base_url.strip()
-        if api.endswith("/"):
-            api = api[:-1]
-        cfg.api_base_url = api
-
+        cfg.api_base_url = _normalize_base_url(cfg.api_base_url)
         self.qs.setValue(self.KEY, asdict(cfg))
-        # 구버전 호환키도 같이 저장(점진적 이전용)
         self.qs.setValue("auto_buy", cfg.auto_buy)
         self.qs.setValue("auto_sell", cfg.auto_sell)
+
+        # 즉시 환경변수 반영
+        if cfg.api_base_url:
+            os.environ["HTTP_API_BASE"] = cfg.api_base_url
+        if hasattr(cfg, "ws_uri") and cfg.ws_uri:
+            os.environ["WS_URI"] = cfg.ws_uri
+
+# ===================== (신규) 로그인 탭 =====================
+class _LoginTab(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+
+        self.le_appkey = QLineEdit()
+        self.le_secret = QLineEdit()
+        self.le_secret.setEchoMode(QLineEdit.Password)
+
+        ak, sk = tm_load_keys()
+        self.le_appkey.setText(ak or "")
+        self.le_secret.setText(sk or "")
+
+        form.addRow("APP_KEY", self.le_appkey)
+        form.addRow("APP_SECRET", self.le_secret)
+
+        btn_row = QHBoxLayout()
+        self.btn_save = QPushButton("저장")
+        self.btn_test = QPushButton("토큰 발급 테스트")
+        btn_row.addWidget(self.btn_save)
+        btn_row.addWidget(self.btn_test)
+        btn_row.addStretch(1)
+
+        lay.addLayout(form)
+        lay.addLayout(btn_row)
+        lay.addStretch(1)
+
+        self.btn_save.clicked.connect(self._on_save)
+        self.btn_test.clicked.connect(self._on_test)
+
+    @Slot()
+    def _on_save(self):
+        ak = (self.le_appkey.text() or "").strip()
+        sk = (self.le_secret.text() or "").strip()
+        if not ak or not sk:
+            QMessageBox.warning(self, "저장 실패", "APP_KEY와 APP_SECRET을 모두 입력하세요.")
+            return
+        try:
+            tm_set_keys(ak, sk)
+            QMessageBox.information(self, "완료", "키가 저장되었습니다 (.env).")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", f"키 저장 실패:\n{e}")
+
+    @Slot()
+    def _on_test(self):
+        try:
+            tok = tm_request_new_token()  # .env/ENV를 사용하여 강제 발급
+            if tok:
+                QMessageBox.information(self, "성공", "토큰 발급 성공! (캐시에 저장됨)")
+        except Exception as e:
+            QMessageBox.critical(self, "실패", f"토큰 발급 실패:\n{e}")
 
 
 # ===================== 설정 다이얼로그 =====================
 class SettingsDialog(QDialog):
     """
+    (호환 보장)
+    - 생성자 서명: SettingsDialog(parent: QWidget|None, cfg: AppSettings)
     - .env 값은 기본값(AppSettings.from_env)로 로딩되고,
       사용자가 다이얼로그에서 조정하면 QSettings에 저장됩니다.
     - order_type(지정가/시장가) 필드(ComboBox)
     - 라더 매수 기본값(1회 금액, 분할 수) 편집 가능
+    - (신규) 로그인 탭 추가: APP_KEY/APP_SECRET 저장 및 토큰 발급 테스트
     """
     GEOM_KEY = "ui/settings_dialog_geometry_v1"
 
@@ -161,13 +262,21 @@ class SettingsDialog(QDialog):
         self._load_to_widgets()
         self._restore_geometry()
 
-    # ----------- UI 구성(그룹/폼으로 세련되게 정리) -----------
+    # ----------- UI 구성 -----------
     def _build_ui(self):
         self.setModal(True)
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 14, 14, 10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 10)
+        outer.setSpacing(10)
+
+        self.tabs = QTabWidget(self)
+
+        # ---------- (탭1) 일반 ----------
+        self.tab_general = QWidget(self)
+        lay = QVBoxLayout(self.tab_general)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
 
         # --- 트레이딩 스위치 그룹 ---
@@ -242,13 +351,24 @@ class SettingsDialog(QDialog):
         ft.addRow("Time Zone", self.le_tz)
         lay.addWidget(grp_tz)
 
-        # --- 버튼 ---
+        # 일반 탭 완성
+        self.tab_general.setLayout(lay)
+
+        # ---------- (탭2) 로그인 ----------
+        self.tab_login = _LoginTab(self)
+
+        # 탭 추가
+        self.tabs.addTab(self.tab_general, "매매 설정")
+        self.tabs.addTab(self.tab_login, "로그인")
+        outer.addWidget(self.tabs)
+
+        # --- 버튼 (기존 그대로 Ok/Cancel) ---
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
+        outer.addWidget(btns)
 
-        # 기본 스타일(라이트/다크 공용, 기존 코드와 충돌 없음)
+        # 스타일(기존과 충돌 없음)
         self.setStyleSheet("""
             QGroupBox {
                 font-weight: 600;
@@ -264,7 +384,7 @@ class SettingsDialog(QDialog):
             QLineEdit, QComboBox, QSpinBox { min-height: 26px; }
         """)
 
-    # ---------------- 내부: UI ← 설정 ----------------
+    # ---------------- UI ← 설정 ----------------
     def _load_to_widgets(self):
         c = self.cfg
         self.cb_master.setChecked(c.master_enable)
@@ -290,7 +410,7 @@ class SettingsDialog(QDialog):
 
         self.le_tz.setText(c.timezone or "Asia/Seoul")
 
-    # ---------------- 내부: UI → 설정 ----------------
+    # ---------------- UI → 설정 ----------------
     def get_settings(self) -> AppSettings:
         c = AppSettings(**asdict(self.cfg))
 
@@ -312,7 +432,7 @@ class SettingsDialog(QDialog):
 
         c.sim_mode = self.cb_sim.isChecked()
         api = (self.le_api.text().strip() or "")
-        c.api_base_url = api[:-1] if api.endswith("/") else api
+        c.api_base_url = _normalize_base_url(api)
 
         c.ladder_unit_amount = int(self.sp_ladder_unit_amount.value())
         c.ladder_num_slices = int(self.sp_ladder_num_slices.value())
@@ -320,7 +440,7 @@ class SettingsDialog(QDialog):
         c.timezone = self.le_tz.text().strip() or "Asia/Seoul"
         return c
 
-    # --------------- 다이얼로그 위치/크기 기억(선택) ---------------
+    # --------------- 다이얼로그 위치/크기 기억 ---------------
     def _restore_geometry(self):
         data = self._qs.value(self.GEOM_KEY, None)
         if isinstance(data, bytes):
@@ -340,3 +460,60 @@ class SettingsDialog(QDialog):
     def reject(self):
         self._save_geometry()
         super().reject()
+
+
+# ===================== AutoTrader 연동 헬퍼 =====================
+def to_trade_settings(cfg: AppSettings):
+    """
+    AppSettings → AutoTrader.TradeSettings 변환
+    - simulation_mode로 단일 스위치 연결 (paper ≡ simulation)
+    """
+    if _TradeSettings is None:
+        raise RuntimeError("trade_pro.auto_trader.TradeSettings 를 불러올 수 없습니다.")
+    return _TradeSettings(
+        master_enable=bool(cfg.master_enable),
+        auto_buy=bool(cfg.auto_buy),
+        auto_sell=bool(cfg.auto_sell),
+        order_type=("market" if cfg.order_type == "market" else "limit"),
+        simulation_mode=bool(cfg.sim_mode),
+    )
+
+def to_ladder_settings(cfg: AppSettings):
+    """
+    AppSettings → AutoTrader.LadderSettings 변환
+    - unit_amount/num_slices만 기본 매핑 (나머지는 AutoTrader 기본값 사용)
+    """
+    if _LadderSettings is None:
+        raise RuntimeError("trade_pro.auto_trader.LadderSettings 를 불러올 수 없습니다.")
+    lad = _LadderSettings()
+    lad.unit_amount = int(cfg.ladder_unit_amount)
+    lad.num_slices = int(cfg.ladder_num_slices)
+    return lad
+
+def apply_to_autotrader(trader, cfg: AppSettings):
+    """
+    이미 생성된 AutoTrader 인스턴스에 UI 설정을 반영.
+    - simulation_mode 런타임 토글
+    - order_type, master/auto_* 스위치 반영
+    - ladder 기본값 반영
+    - base url provider를 쓰는 구조라면, 환경변수(HTTP_API_BASE)를 업데이트하는 방식으로 전달 가능
+    """
+    # simulation toggle (런타임 반영)
+    if hasattr(trader, "set_simulation_mode"):
+        trader.set_simulation_mode(bool(cfg.sim_mode))
+
+    # settings 객체 값들 반영
+    if hasattr(trader, "settings"):
+        trader.settings.master_enable = bool(cfg.master_enable)
+        trader.settings.auto_buy = bool(cfg.auto_buy)
+        trader.settings.auto_sell = bool(cfg.auto_sell)
+        trader.settings.order_type = ("market" if cfg.order_type == "market" else "limit")
+
+    if hasattr(trader, "ladder"):
+        trader.ladder.unit_amount = int(cfg.ladder_unit_amount)
+        trader.ladder.num_slices = int(cfg.ladder_num_slices)
+
+    # API Base URL은 AutoTrader가 base_url_provider를 통해 읽습니다.
+    # 필요한 경우 환경변수를 업데이트해서 주입합니다(선택).
+    if cfg.api_base_url:
+        os.environ["HTTP_API_BASE"] = _normalize_base_url(cfg.api_base_url)

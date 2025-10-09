@@ -7,7 +7,6 @@ import json
 import logging
 import asyncio
 import threading
-from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Dict, Optional, List
 
@@ -33,8 +32,12 @@ from ui_main import MainWindow
 
 # ---- trade_pro 모듈 ----
 from trade_pro.entry_exit_monitor import ExitEntryMonitor
-from setting.settings_manager import SettingsStore, AppSettings, SettingsDialog
-from trade_pro.auto_trader import AutoTrader, TradeSettings, LadderSettings
+
+# ---- 설정: settings_manager에 일원화 ----
+from setting.settings_manager import (
+    SettingsStore, AppSettings, SettingsDialog,
+    to_trade_settings, to_ladder_settings, apply_to_autotrader
+)
 
 # ─────────────────────────────────────────────────────────
 # 한글 폰트 설정
@@ -50,25 +53,18 @@ def _setup_korean_font():
         rcParams["font.family"] = "NanumGothic"
     rcParams["axes.unicode_minus"] = False
 
-
 _setup_korean_font()
-
 
 # ─────────────────────────────────────────────────────────
 # 로거 설정
 # ─────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)
 
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, datetime.now().strftime("app_%Y%m%d.log"))
-
-
 def setup_logger(to_console: bool = True, to_file: bool = True, log_dir: str = "logs"):
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
 
-    # 기존 핸들러 제거 (중복 방지)
+    # 기존 핸들러 제거(중복 방지)
     for h in root.handlers[:]:
         root.removeHandler(h)
 
@@ -87,7 +83,6 @@ def setup_logger(to_console: bool = True, to_file: bool = True, log_dir: str = "
     )
     return root
 
-
 # 이제부터 모든 로거는 이 설정에 따라 동작합니다.
 logger = setup_logger(to_console=False, to_file=True)  # 파일만
 
@@ -95,7 +90,6 @@ try:
     project_root  # noqa: F823
 except NameError:
     project_root = os.getcwd()
-
 
 # ─────────────────────────────────────────────────────────
 # 유틸: 다음 분/30분 경계까지 남은 초
@@ -121,8 +115,6 @@ def start_monitor_on_thread(monitor: ExitEntryMonitor):
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
     return t
-
-
 
 # ─────────────────────────────────────────────────────────
 # Bridge: 비UI 스레드 → UI 신호
@@ -158,9 +150,11 @@ class AsyncBridge(QObject):
     minute_bars_received = Signal(str, list)
     symbol_name_updated = Signal(str, str)  # (code6, name)
 
+    # (선택) 주문/체결 이벤트 브릿지
+    order_event = Signal(dict)
+
     def __init__(self):
         super().__init__()
-
 
 # ─────────────────────────────────────────────────────────
 # Engine: 토큰/WS/HTTP 초기화 + 5m/30m/1d 병렬 스트림
@@ -223,7 +217,7 @@ class Engine(QObject):
             # 3) WS 클라이언트 생성 및 시작
             if self.websocket_client is None:
                 self.websocket_client = WebSocketClient(
-                    uri="wss://api.kiwoom.com:10000/api/dostk/websocket",
+                    uri=os.getenv("WS_URI", "wss://api.kiwoom.com:10000/api/dostk/websocket"),
                     token=self.access_token,
                     bridge=self.bridge,
                     market_api=self.market_api,
@@ -272,7 +266,6 @@ class Engine(QObject):
             code = str(payload.get("code", ""))
             series = payload.get("series") or []
             if code and series:
-
                 last = series[-1]
                 self.bridge.macd_data_received.emit(
                     code,
@@ -281,8 +274,6 @@ class Engine(QObject):
                     float(last.get("hist")),
                 )
                 logger.info(f"[Engine] macd_series_ready: {code} ")
-
-
         except Exception as e:
             self.bridge.log.emit(f"⚠️ MACD 패스스루 실패: {e}")
 
@@ -329,13 +320,6 @@ class Engine(QObject):
             return
 
         def _safe_rows(rows_any) -> list[dict]:
-            """
-            rows_any:
-            - dict: {"rows": [...]} 또는 {"data":[...]} 형태 → rows 추출
-            - list: list[dict]이면 그대로, list[str(JSON)]이면 파싱
-            - str : JSON 문자열이면 dict/list 파싱 후 위 규칙 재적용
-            - 그 외: []
-            """
             try:
                 if isinstance(rows_any, dict):
                     cand = rows_any.get("rows") or rows_any.get("data") or rows_any.get("bars")
@@ -369,14 +353,12 @@ class Engine(QObject):
             return []
 
         def _extract_rows(any_res) -> list[dict]:
-            """fetch_* 결과를 안전하게 rows(list[dict])로 추출한다."""
             if isinstance(any_res, dict):
                 return _safe_rows(any_res.get("rows") or any_res.get("data") or any_res.get("bars") or [])
             return _safe_rows(any_res)
 
         async def job_5m():
             try:
-                # 초기 FULL (5m)
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=need_5m)
                 rows5 = _extract_rows(res)
                 self.bridge.chart_rows_received.emit(code, "5m", rows5)
@@ -385,16 +367,13 @@ class Engine(QObject):
                     if rows5_norm:
                         calculator.apply_rows_full(code=code, tf="5m", rows=rows5_norm, need=need_5m)
 
-                # 증분 루프
                 while True:
                     await asyncio.sleep(_seconds_to_next_boundary(datetime.now(), poll_5m_step))
                     inc = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=60)
                     rows_inc = _extract_rows(inc)
-
                     if rows_inc:
                         self.bridge.chart_rows_received.emit(code, "5m", rows_inc)
                         rows_inc_norm = normalize_ka10080_rows(rows_inc)
-
                         if rows_inc_norm:
                             calculator.apply_append(code=code, tf="5m", rows=rows_inc_norm)
             except asyncio.CancelledError:
@@ -404,17 +383,14 @@ class Engine(QObject):
 
         async def job_30m():
             try:
-                # 초기 FULL (30m)
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=need_30m)
                 rows30 = _extract_rows(res)
                 self.bridge.chart_rows_received.emit(code, "30m", rows30)
                 if rows30:
                     rows30_norm = normalize_ka10080_rows(rows30)
-
                     if rows30_norm:
                         calculator.apply_rows_full(code=code, tf="30m", rows=rows30_norm, need=need_30m)
 
-                # 증분
                 while True:
                     await asyncio.sleep(_seconds_to_next_boundary(datetime.now(), poll_30m_step))
                     inc = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=60)
@@ -422,9 +398,8 @@ class Engine(QObject):
                     if rows_inc:
                         self.bridge.chart_rows_received.emit(code, "30m", rows_inc)
                         rows_inc_norm = normalize_ka10080_rows(rows_inc)
-
                         if rows_inc_norm:
-                            calculator.apply_append(code=code, tf="30m", rows=rows_inc_norm)
+                            calculator.apply_append(code=code, tf="30m", rows=rows_inc_norm)  # ✅ 고쳐진 라인
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -454,7 +429,7 @@ class Engine(QObject):
         tasks = self._minute_stream_tasks.get(code)
         if not tasks:
             return
-        for tf, fut in list(tasks.items()):
+        for _, fut in list(tasks.items()):
             try:
                 fut.cancel()
             except Exception:
@@ -480,8 +455,6 @@ class Engine(QObject):
                 self.loop.call_soon_threadsafe(self.loop.stop)
         except Exception as e:
             self.bridge.log.emit(f"❌ 루프 종료 오류: {e}")
-
-
 
 # ─────────────────────────────────────────────────────────
 # 필터 파이프라인
@@ -517,35 +490,24 @@ def perform_filtering():
         logger.exception("기술적 필터링 중 오류 발생")
         raise RuntimeError(f"기술적 필터링 실패: {e}")
 
+# ─────────────────────────────────────────────────────────
+# 트레이더 팩토리 (설정 → AutoTrader)
+# ─────────────────────────────────────────────────────────
+def _build_trader_from_cfg(cfg: AppSettings):
+    # AutoTrader 인스턴스 생성(설정은 settings_manager 헬퍼로 변환)
+    from trade_pro.auto_trader import AutoTrader  # 지연 임포트(툴체인 의존성 회피)
+    trade_settings = to_trade_settings(cfg)
+    ladder_settings = to_ladder_settings(cfg)
 
-
-def _build_trader_from_cfg(cfg: AppSettings) -> AutoTrader:
-    # ① AutoTrader 설정 매핑
-    trade_settings = TradeSettings(
-        master_enable=cfg.master_enable,
-        auto_buy=cfg.auto_buy,
-        auto_sell=cfg.auto_sell,
-    )
-    # (지정가/시장가 기본 지정은 _resolve_trde_tp에서 cfg.order_type을 참고하도록 적용)
-    # TradeSettings에 order_type 필드가 있다면 아래처럼 넘겨주세요:
-    # trade_settings.order_type = cfg.order_type  # "limit" | "market"
-
-    ladder = LadderSettings(
-        unit_amount=cfg.ladder_unit_amount,
-        num_slices=cfg.ladder_num_slices,
-    )
-
-    # ② API Base URL 제공자
     def base_url_provider():
-        # 비어있으면 환경변수/기본값 사용 (AutoTrader가 rstrip("/"))
-        return cfg.api_base_url or os.getenv("HTTP_API_BASE", "https://api.kiwoom.com")
+        base = cfg.api_base_url or os.getenv("HTTP_API_BASE", "https://api.kiwoom.com")
+        return base.rstrip("/")
 
     trader = AutoTrader(
         settings=trade_settings,
-        ladder=ladder,
-        token_provider=lambda: get_access_token_cached(),   # 당신의 기존 토큰 함수
+        ladder=ladder_settings,
+        token_provider=lambda: get_access_token_cached(),
         base_url_provider=base_url_provider,
-        paper_mode=cfg.sim_mode,                             # SIM/PAPER 모드 연동
     )
     return trader
 
@@ -569,31 +531,31 @@ def main():
         project_root=os.getcwd(),
     )
 
-    # 매수/매도 monitor
-
-
-    trader = AutoTrader(token_provider=lambda: get_access_token_cached())
-    trader.settings.master_enable = True
-    trader.settings.auto_buy = True
-    trader.settings.auto_sell = True
-
-    monitor = ExitEntryMonitor(
-        detail_getter=getter,
-        use_macd30_filter=True,
-        bar_close_window_start_sec=0,   # 예: 디버그용으로 0~59 전부 허용
-        bar_close_window_end_sec=59,
-        on_signal=trader.make_on_signal(bridge),
-    )
-
     # 이벤트 배선
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
+    # 주문/체결 이벤트 필요 시:
+    # bridge.order_event.connect(ui.on_order_event)
 
+    # 설정 로드
     store = SettingsStore()
-    app_cfg = store.load()            # ← 로컬 저장소 + .env 병합된 설정 로드
+    app_cfg = store.load()
 
+    # 트레이더 생성(단일 인스턴스 원칙)
     trader = _build_trader_from_cfg(app_cfg)
 
+    # 모니터: AppSettings의 모든 관련 옵션을 주입
+    monitor = ExitEntryMonitor(
+        detail_getter=getter,
+        use_macd30_filter=bool(app_cfg.use_macd30_filter),
+        macd30_timeframe=str(app_cfg.macd30_timeframe or "30m"),
+        macd30_max_age_sec=int(app_cfg.macd30_max_age_sec),
+        tz=str(app_cfg.timezone or "Asia/Seoul"),
+        poll_interval_sec=int(app_cfg.poll_interval_sec),
+        on_signal=trader.make_on_signal(bridge),  # AutoTrader 핸들러 연결
+        bar_close_window_start_sec=int(app_cfg.bar_close_window_start_sec),
+        bar_close_window_end_sec=int(app_cfg.bar_close_window_end_sec),
+    )
 
     ui.show()
 
@@ -601,10 +563,10 @@ def main():
     engine.start_loop()
     QTimer.singleShot(0, ui.on_click_init)
 
-
+    # 2) 모니터 시작 (별도 스레드)
     QTimer.singleShot(0, lambda: start_monitor_on_thread(monitor))
-    sys.exit(app.exec())
 
+    sys.exit(app.exec())
 
 if __name__ == "__main__":
     main()

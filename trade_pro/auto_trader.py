@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Literal
+from typing import Any, Callable, Dict, List, Optional, Literal, Tuple
 
 import requests
 
@@ -22,17 +22,25 @@ try:
 except Exception:  # pragma: no cover
     PositionManager = None  # type: ignore
 
+# ✅ NEW: 외부 시뮬 엔진 사용
+try:
+    from simulator.sim_engine import SimEngine
+except Exception as _e:  # pragma: no cover
+    SimEngine = None  # type: ignore
+
 
 # =========================
 # Settings / Data Classes
 # =========================
 @dataclass
 class TradeSettings:
-    # Match legacy defaults to avoid unintended live orders
+    # Legacy defaults (안전)
     master_enable: bool = False
     auto_buy: bool = True
     auto_sell: bool = False
     order_type: Literal["limit", "market"] = "limit"
+    # ✅ UI에서 직접 제어하는 시뮬레이션 스위치 (paper ≡ simulation)
+    simulation_mode: Optional[bool] = None  # None이면 env/인자 기반으로 결정
 
 
 @dataclass
@@ -62,66 +70,118 @@ class TradeLogger:
         self._lock = threading.Lock()
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-    def _paths(self):
+    def _paths(self) -> Tuple[Path, Path]:
         day = datetime.now().strftime("%Y-%m-%d")
         return (
             self.log_dir / f"{self.file_prefix}_{day}.csv",
             self.log_dir / f"{self.file_prefix}_{day}.jsonl",
         )
 
+    @staticmethod
+    def _flatten_response(resp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(resp, dict):
+            return {
+                "resp_status_code": None,
+                "resp_api_id": "",
+                "resp_cont_yn": "",
+                "resp_next_key": "",
+                "resp_return_code": None,
+                "resp_return_msg": "",
+            }
+        header = resp.get("header") or {}
+        body = resp.get("body") or {}
+        return {
+            "resp_status_code": resp.get("status_code"),
+            "resp_api_id": header.get("api-id", ""),
+            "resp_cont_yn": header.get("cont-yn", ""),
+            "resp_next_key": header.get("next-key", ""),
+            "resp_return_code": body.get("return_code"),
+            "resp_return_msg": body.get("return_msg", ""),
+        }
+
     def _ensure_csv_header(self, csv_path: Path):
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
                 w.writerow([
+                    # --- 기본 정보 ---
                     "ts","session_id","uid","strategy","action","stk_cd","dmst_stex_tp",
                     "cur_price","limit_price","qty","trde_tp",
                     "tick_mode","tick_used",
                     "slice_idx","slice_total","unit_amount","notional",
                     "duration_ms","status_code",
+
+                    # --- 결과/상태 ---
+                    "status_label","success","order_id","order_id_hint","error_msg","note",
+
+                    # --- response (flatten) ---
+                    "resp_status_code","resp_api_id","resp_cont_yn","resp_next_key",
+                    "resp_return_code","resp_return_msg",
                 ])
 
     def write_order_record(self, record: Dict[str, Any]):
         csv_path, jsonl_path = self._paths()
         with self._lock:
             self._ensure_csv_header(csv_path)
+
+            ts = record.get("ts") or datetime.now(timezone.utc).isoformat()
+            resp_flat = self._flatten_response(record.get("response"))
+
+            row = [
+                ts,
+                record.get("session_id"),
+                record.get("uid"),
+                record.get("strategy"),
+                record.get("action"),
+                record.get("stk_cd"),
+                record.get("dmst_stex_tp"),
+                record.get("cur_price"),
+                record.get("limit_price"),
+                record.get("qty"),
+                record.get("trde_tp"),
+                record.get("tick_mode"),
+                record.get("tick_used"),
+                record.get("slice_idx"),
+                record.get("slice_total"),
+                record.get("unit_amount"),
+                record.get("notional"),
+                record.get("duration_ms"),
+                record.get("status_code"),
+
+                record.get("status_label"),
+                record.get("success"),
+                record.get("order_id"),
+                record.get("order_id_hint"),
+                record.get("error_msg"),
+                record.get("note"),
+
+                resp_flat["resp_status_code"],
+                resp_flat["resp_api_id"],
+                resp_flat["resp_cont_yn"],
+                resp_flat["resp_next_key"],
+                resp_flat["resp_return_code"],
+                resp_flat["resp_return_msg"],
+            ]
+
             with open(csv_path, "a", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow([
-                    record.get("ts"),
-                    record.get("session_id"),
-                    record.get("uid"),
-                    record.get("strategy"),
-                    record.get("action"),
-                    record.get("stk_cd"),
-                    record.get("dmst_stex_tp"),
-                    record.get("cur_price"),
-                    record.get("limit_price"),
-                    record.get("qty"),
-                    record.get("trde_tp"),
-                    record.get("tick_mode"),
-                    record.get("tick_used"),
-                    record.get("slice_idx"),
-                    record.get("slice_total"),
-                    record.get("unit_amount"),
-                    record.get("notional"),
-                    record.get("duration_ms"),
-                    record.get("status_code"),
-                ])
+                csv.writer(f).writerow(row)
+
             with open(jsonl_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    # Legacy-compatible alias (minimal): mirrors old .log(record, response, note)
+    # Legacy-compatible alias
     def log(self, record: Dict[str, Any], response: Optional[Dict[str, Any]] = None, note: str = ""):
         rec = dict(record)
         rec.setdefault("ts", datetime.now(timezone.utc).isoformat())
         if response is not None and isinstance(response, dict):
+            rec.setdefault("response", response)
             rec.setdefault("status_code", response.get("status_code"))
+        rec.setdefault("note", rec.get("note") or note or "")
         self.write_order_record(rec)
 
 
 # =========================
-# AutoTrader (drop-in comp.)
+# AutoTrader
 # =========================
 class AutoTrader:
     def __init__(
@@ -131,8 +191,8 @@ class AutoTrader:
         ladder: Optional[LadderSettings] = None,
         token_provider: Optional[Callable[[], str]] = None,
         base_url_provider: Optional[Callable[[], str]] = None,
-        endpoint: str = "/api/dostk/ordr",   # keep legacy endpoint
-        paper_mode: Optional[bool] = None,
+        endpoint: str = "/api/dostk/ordr",
+        paper_mode: Optional[bool] = None,   # 하위호환 입력 (simulation 별칭)
         log: Optional[Callable[[str], None]] = None,
         bridge: Optional[object] = None,
         position_mgr: Optional[PositionManager] = None,
@@ -144,17 +204,22 @@ class AutoTrader:
         self._base_url_provider = base_url_provider or (lambda: os.getenv("HTTP_API_BASE", "https://api.kiwoom.com").rstrip("/"))
         self._endpoint = endpoint
 
-        # --- Mode & env overrides ---
+        # ----- Simulation mode 통합 (paper ≡ simulation) -----
         env_mode = (os.getenv("TRADE_MODE") or "").strip().lower()
         env_pm = _parse_bool(os.getenv("PAPER_MODE"), default=False)
-        if paper_mode is not None:
-            self.paper_mode = bool(paper_mode)
+        env_sim = _parse_bool(os.getenv("SIMULATION_MODE"), default=False)
+
+        if self.settings.simulation_mode is not None:
+            self.simulation = bool(self.settings.simulation_mode)
+        elif paper_mode is not None:
+            self.simulation = bool(paper_mode)
         elif env_mode in ("paper", "sim", "simulation"):
-            self.paper_mode = True
-        elif env_mode in ("live", "real", "prod"):
-            self.paper_mode = False
+            self.simulation = True
         else:
-            self.paper_mode = env_pm
+            self.simulation = bool(env_pm or env_sim)
+
+        # deprecate alias (내부 사용 X, 호환 위해 유지)
+        self.paper_mode = self.simulation
 
         if use_mock is not None:
             self._use_mock = bool(use_mock)
@@ -167,9 +232,12 @@ class AutoTrader:
         self.bridge = bridge
         self.position_mgr = position_mgr
 
-        # Paper trading: ensure we have a dummy sim if none provided
-        if self.paper_mode and not getattr(self, "sim_engine", None):
-            self.sim_engine = _DummySim(self._log)
+        # ✅ 외부 시뮬 엔진 초기화
+        self.sim_engine: Optional[SimEngine] = None
+        if self.simulation:
+            if SimEngine is None:
+                raise RuntimeError("SimEngine 모듈(simulator/sim_engine.py)을 찾을 수 없습니다.")
+            self.sim_engine = SimEngine(self._log)
 
         # dedupe for websocket fills
         self._seen_exec_keys: set[tuple[str, Optional[str]]] = set()
@@ -178,11 +246,20 @@ class AutoTrader:
         self._api_id_buy = "kt10000"
         self._api_id_sell = "kt10001"
 
-        self._log(f"[AutoTrader] mode={'PAPER' if self.paper_mode else 'LIVE'} use_mock={self._use_mock}")
+        self._log(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} use_mock={self._use_mock}")
 
-    # ---------- Public: legacy-compatible dispatcher ----------
+    # ---------- 런타임 토글 ----------
+    def set_simulation_mode(self, on: bool) -> None:
+        self.simulation = bool(on)
+        self.paper_mode = self.simulation
+        if self.simulation and self.sim_engine is None:
+            if SimEngine is None:
+                raise RuntimeError("SimEngine 모듈(simulator/sim_engine.py)을 찾을 수 없습니다.")
+            self.sim_engine = SimEngine(self._log)
+        self._log(f"[AutoTrader] simulation_mode set to {self.simulation}")
+
+    # ---------- Public dispatcher ----------
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Legacy entrypoint: routes ladder_buy / single BUY/SELL payloads."""
         if not getattr(self.settings, "master_enable", True):
             self._log("⏹ master_enable=False: 주문 중단")
             return None
@@ -195,7 +272,6 @@ class AutoTrader:
         if signal == "SELL":
             return await self._handle_simple_sell(data)
         elif signal == "BUY":
-            # emulate single buy as one-leg ladder near current
             try:
                 cur_price = int(float(data.get("ord_uv") or 0))
             except Exception:
@@ -217,9 +293,7 @@ class AutoTrader:
             })
             return None
 
-    # ---------- Public: legacy on_signal(sig_obj) compatible ----------
     def make_on_signal_legacy(self, bridge: Optional[object] = None) -> Callable[[Any], None]:
-        """Accepts TradeSignal object (has .side/.symbol/.price)."""
         if bridge is not None:
             self.bridge = bridge
 
@@ -245,19 +319,18 @@ class AutoTrader:
                 asyncio.create_task(self._handle_simple_sell(data))
             else:
                 self._emit_order_event({
-                    "type": "ORDER_EVENT", "action": None, "symbol": symbol,
-                    "price": 0, "qty": 0, "status": f"UNHANDLED_SIDE:{side}",
-                    "ts": datetime.now(timezone.utc).isoformat(), "extra": {},
+                    "type": "ORDER_EVENT","action": None,"symbol": symbol,
+                    "price": 0,"qty": 0,"status": f"UNHANDLED_SIDE:{side}",
+                    "ts": datetime.now(timezone.utc).isoformat(),"extra": {},
                 })
         return _handler
 
-    # Keep old name for drop-in replacement
     def make_on_signal(self, bridge: Optional[object] = None) -> Callable[[Any], None]:
         return self.make_on_signal_legacy(bridge)
 
-    # ---------- Market feed (paper sim) ----------
+    # ---------- Market feed (simulation) ----------
     def feed_market_event(self, event: Dict[str, Any]):
-        if self.paper_mode and getattr(self, "sim_engine", None):
+        if self.simulation and self.sim_engine:
             self.sim_engine.on_market_update(event)
 
     # ---------- Tick utils ----------
@@ -322,8 +395,8 @@ class AutoTrader:
 
     def _resolve_trde_tp(self) -> str:
         if self.settings.order_type == "market":
-            return "3"   # 시장가 (broker-specific mapping)
-        return "0"       # 지정가
+            return "3"
+        return "0"
 
     # =========================
     # Ladder BUY (below current)
@@ -340,11 +413,10 @@ class AutoTrader:
             self._log("🚫 (ladder) 종목코드 또는 현재가가 유효하지 않습니다.")
             return None
 
-        # Fixed tick mode (match legacy default behavior)
         if "tick" in payload and int(payload["tick"]) > 0:
-            tick = int(payload["tick"]) ; tick_mode = "fixed"
+            tick = int(payload["tick"]); tick_mode = "fixed"
         else:
-            tick = self._krx_tick(cur_price) ; tick_mode = "fixed"
+            tick = self._krx_tick(cur_price); tick_mode = "fixed"
 
         unit_amount = int(payload.get("unit_amount") or self.ladder.unit_amount)
         num_slices = int(payload.get("num_slices") or self.ladder.num_slices)
@@ -353,7 +425,6 @@ class AutoTrader:
         trde_tp = str(payload.get("trde_tp") or self._resolve_trde_tp())
         min_qty = self.ladder.min_qty
 
-        # optional: cap by target_total_qty using position manager
         target_total_qty = payload.get("target_total_qty")
         remaining_cap = None
         if self.position_mgr and target_total_qty is not None:
@@ -369,10 +440,14 @@ class AutoTrader:
             cur_price=cur_price, tick=tick, count=num_slices,
             start_ticks_below=start_ticks_below, step_ticks=step_ticks
         )
-        self.bridge.log.emit(f"🪜 (ladder/{tick_mode}) tick={tick} prices={prices}")
+        if self.bridge and hasattr(self.bridge, "log"):
+            try:
+                self.bridge.log.emit(f"🪜 (ladder/{tick_mode}) tick={tick} prices={prices}")
+            except Exception:
+                pass
 
-        # Paper mode: simulate only
-        if self.paper_mode and getattr(self, "sim_engine", None):
+        # Simulation
+        if self.simulation and self.sim_engine:
             total = len(prices)
             for i, limit_price in enumerate(prices, start=1):
                 qty = max(min_qty, math.floor(unit_amount / limit_price))
@@ -383,7 +458,6 @@ class AutoTrader:
                     qty = min(qty, remaining_cap)
                     remaining_cap -= qty
                 if qty <= 0:
-                    self._log(f"↪️ (paper/ladder) [{i}/{total}] {limit_price}원: 수량=0 → 스킵")
                     self._emit_order_event({
                         "type": "ORDER_SKIP","action": "BUY","symbol": stk_cd,
                         "price": limit_price,"qty": 0,"status": "SKIPPED",
@@ -396,19 +470,19 @@ class AutoTrader:
                         stk_cd=stk_cd, limit_price=limit_price, qty=qty,
                         parent_uid=uuid.uuid4().hex, strategy="ladder",
                     )
-                    self._log(f"🧪 (paper) [{i}/{total}] NEW {stk_cd} {qty}주 @ {limit_price}원 → sim_oid={sim_oid}")
+                    self._log(f"🧪 (sim) [{i}/{total}] NEW {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
                     self._emit_order_event({
                         "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
-                        "price": limit_price,"qty": qty,"status": "PAPER_SUBMIT",
+                        "price": limit_price,"qty": qty,"status": "SIM_SUBMIT",
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "extra": {"slice": i, "total": total, "sim_oid": sim_oid},
                     })
                 except Exception as e:
-                    self._log(f"❌ (ladder) paper submit 실패 → {e}")
+                    self._log(f"❌ (ladder) sim submit 실패 → {e}")
                 await asyncio.sleep(self.ladder.interval_sec)
             return {"ladder_submitted": total}
 
-        # Live mode
+        # Live
         try:
             token = self._token_provider()
             if not token:
@@ -428,7 +502,6 @@ class AutoTrader:
                 qty = min(qty, remaining_cap)
                 remaining_cap -= qty
             if qty <= 0:
-                self._log(f"↪️ (LIVE)(ladder) [{i}/{total}] {limit_price}원: 수량=0 → 스킵")
                 self._emit_order_event({
                     "type": "ORDER_SKIP","action": "BUY","symbol": stk_cd,
                     "price": limit_price,"qty": 0,"status": "SKIPPED",
@@ -448,7 +521,6 @@ class AutoTrader:
 
             uid = uuid.uuid4().hex
             tick_used = tick
-
             try:
                 start = time.perf_counter()
                 resp = await asyncio.to_thread(self._fn_kt10000, token=token, data=data, cont_yn="N", next_key="")
@@ -456,7 +528,11 @@ class AutoTrader:
                 code = resp.get("status_code")
                 results.append(resp)
 
-                self.bridge.log.emit(f"✅ (LIVE)(ladder) [{i}/{total}] {stk_cd} {qty}주 @ {limit_price}원 → Code={code}")
+                if self.bridge and hasattr(self.bridge, "log"):
+                    try:
+                        self.bridge.log.emit(f"✅ (LIVE)(ladder) [{i}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}")
+                    except Exception:
+                        pass
 
                 record = {
                     "session_id": self.session_id,"uid": uid,"strategy": "ladder","action": "BUY",
@@ -476,7 +552,9 @@ class AutoTrader:
                     "ts": record["ts"],"extra": {"slice": i, "total": total, "resp": resp},
                 })
             except Exception as e:
-                self.bridge.log.emit(f"💥 (LIVE)(ladder) [{i}/{total}] 주문 실패: {e}")
+                if self.bridge and hasattr(self.bridge, "log"):
+                    try: self.bridge.log.emit(f"💥 (LIVE)(ladder) [{i}/{total}] 주문 실패: {e}")
+                    except Exception: pass
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
                     "price": limit_price,"qty": qty,"status": "ERROR",
@@ -491,7 +569,7 @@ class AutoTrader:
         return {"ladder_results": results}
 
     # =========================
-    # Simple SELL (limit/market)
+    # Simple SELL
     # =========================
     async def _handle_simple_sell(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not self.settings.auto_sell or not self.settings.master_enable:
@@ -500,7 +578,7 @@ class AutoTrader:
 
         stk_cd = str(payload.get("stk_cd") or "").strip()
         dmst_stex_tp = (payload.get("dmst_stex_tp") or "KRX").upper()
-        trde_tp = str(payload.get("trde_tp") or "0")  # '0': limit, '3': market (broker-specific)
+        trde_tp = str(payload.get("trde_tp") or "0")  # '0': limit, '3': market
         qty = int(payload.get("ord_qty") or 0)
         limit_price = int(payload.get("ord_uv") or 0) if trde_tp == "0" else None
 
@@ -511,6 +589,39 @@ class AutoTrader:
         if trde_tp == "0" and (limit_price is None or limit_price <= 0):
             self._log("🚫 (sell) 지정가인데 가격 없음"); return None
 
+        # ✅ Simulation
+        if self.simulation and self.sim_engine:
+            try:
+                sim_oid = self.sim_engine.submit_limit_sell(
+                    stk_cd=stk_cd,
+                    limit_price=(None if trde_tp == "3" else limit_price),
+                    qty=qty,
+                    parent_uid=uuid.uuid4().hex,
+                    strategy="simple-sell",
+                )
+                self._log(f"🧪 (sim sell) {stk_cd} {qty}주 @{limit_price if trde_tp=='0' else 'MKT'} → sim_oid={sim_oid}")
+                self._emit_order_event({
+                    "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
+                    "price": limit_price or 0,"qty": qty,"status": "SIM_SUBMIT",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "extra": {"trde_tp": trde_tp, "sim_oid": sim_oid},
+                })
+                record = {
+                    "session_id": self.session_id,"uid": uuid.uuid4().hex,"strategy": "manual","action": "SELL",
+                    "stk_cd": stk_cd,"dmst_stex_tp": dmst_stex_tp,"cur_price": None,
+                    "limit_price": limit_price,"qty": qty,"trde_tp": trde_tp,
+                    "tick_mode": "n/a","tick_used": "n/a","slice_idx": 1,"slice_total": 1,
+                    "unit_amount": None,"notional": None,"duration_ms": 0,
+                    "status_code": None,"ts": datetime.now(timezone.utc).isoformat(),
+                    "status_label": "SIM_SUBMIT","success": True,"order_id": sim_oid,
+                }
+                self.logger.write_order_record(record)
+                return {"sell_result": {"simulated": True, "order_id": sim_oid}}
+            except Exception as e:
+                self._log(f"❌ (sim sell) 실패 → {e}")
+                return None
+
+        # ===== LIVE =====
         try:
             token = self._token_provider()
             if not token:
@@ -549,7 +660,6 @@ class AutoTrader:
                 "ts": record["ts"],"extra": {"resp": resp, "trde_tp": trde_tp},
             })
             return {"sell_result": resp}
-
         except Exception as e:
             self._log(f"❌ (sell) {stk_cd} 실패 → {e}")
             self._emit_order_event({
@@ -575,9 +685,9 @@ class AutoTrader:
             self._log("🚫 (ladder-sell) 종목코드 또는 현재가가 유효하지 않습니다."); return None
 
         if "tick" in payload and int(payload["tick"]) > 0:
-            tick = int(payload["tick"]) ; tick_mode = "fixed"
+            tick = int(payload["tick"]); tick_mode = "fixed"
         else:
-            tick = self._krx_tick(cur_price) ; tick_mode = "fixed"
+            tick = self._krx_tick(cur_price); tick_mode = "fixed"
 
         num_slices = int(payload.get("num_slices") or 10)
         start_ticks_above = int(payload.get("start_ticks_above") or 1)
@@ -593,7 +703,7 @@ class AutoTrader:
             sellable = max(0, cur_qty - int(pend_sell))
             if sellable <= 0:
                 self._log("ℹ️ (ladder-sell) 매도 가능 수량 없음")
-                return {"ladder_sell_results": []} if not self.paper_mode else {"ladder_sell_submitted": 0}
+                return {"ladder_sell_results": []} if not self.simulation else {"ladder_sell_submitted": 0}
             base = sellable // num_slices ; rem = sellable % num_slices
             qty_plan = [(base + 1 if i < rem else base) for i in range(num_slices)]
         else:
@@ -614,6 +724,37 @@ class AutoTrader:
         )
         self._log(f"🪜 (ladder-sell/{tick_mode}) tick={tick} prices={prices} qty_plan={qty_plan}")
 
+        # Simulation
+        if self.simulation and self.sim_engine:
+            total = min(len(prices), len(qty_plan))
+            for i in range(total):
+                limit_price = prices[i]; qty = int(qty_plan[i] or 0)
+                if qty <= 0:
+                    self._emit_order_event({
+                        "type": "ORDER_SKIP","action": "SELL","symbol": stk_cd,
+                        "price": limit_price,"qty": 0,"status": "SKIPPED",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "extra": {"reason": "qty==0", "slice": i+1, "total": total},
+                    })
+                    continue
+                try:
+                    sim_oid = self.sim_engine.submit_limit_sell(
+                        stk_cd=stk_cd, limit_price=limit_price, qty=qty,
+                        parent_uid=uuid.uuid4().hex, strategy="ladder-sell",
+                    )
+                    self._log(f"🧪 (sim) [SELL {i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
+                    self._emit_order_event({
+                        "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
+                        "price": limit_price,"qty": qty,"status": "SIM_SUBMIT",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "extra": {"slice": i+1, "total": total, "sim_oid": sim_oid},
+                    })
+                except Exception as e:
+                    self._log(f"❌ (ladder-sell) sim submit 실패 → {e}")
+                await asyncio.sleep(self.ladder.interval_sec)
+            return {"ladder_sell_submitted": total}
+
+        # Live
         try:
             token = self._token_provider()
             if not token: raise RuntimeError("액세스 토큰이 비어있습니다.")
@@ -622,36 +763,6 @@ class AutoTrader:
 
         results: List[Dict[str, Any]] = []
         total = min(len(prices), len(qty_plan))
-
-        # Paper mode
-        if self.paper_mode and getattr(self, "sim_engine", None):
-            for i in range(total):
-                limit_price = prices[i] ; qty = int(qty_plan[i] or 0)
-                if qty <= 0:
-                    self._emit_order_event({
-                        "type": "ORDER_SKIP","action": "SELL","symbol": stk_cd,
-                        "price": limit_price,"qty": 0,"status": "SKIPPED",
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "extra": {"reason": "qty==0", "slice": i+1, "total": total},
-                    }) ; continue
-                try:
-                    sim_oid = self.sim_engine.submit_limit_sell(
-                        stk_cd=stk_cd, limit_price=limit_price, qty=qty,
-                        parent_uid=uuid.uuid4().hex, strategy="ladder-sell",
-                    )
-                    self._log(f"🧪 (paper) [SELL {i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
-                    self._emit_order_event({
-                        "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
-                        "price": limit_price,"qty": qty,"status": "PAPER_SUBMIT",
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "extra": {"slice": i+1, "total": total, "sim_oid": sim_oid},
-                    })
-                except Exception as e:
-                    self._log(f"❌ (ladder-sell) paper submit 실패 → {e}")
-                await asyncio.sleep(self.ladder.interval_sec)
-            return {"ladder_sell_submitted": total}
-
-        # Live mode
         for i in range(total):
             limit_price = prices[i]
             qty = int(qty_plan[i] or 0)
@@ -672,7 +783,6 @@ class AutoTrader:
 
             uid = uuid.uuid4().hex
             tick_used = tick
-
             try:
                 start = time.perf_counter()
                 resp = await asyncio.to_thread(self._fn_kt10001, token=token, data=data, cont_yn="N", next_key="")
@@ -710,9 +820,8 @@ class AutoTrader:
 
         return {"ladder_sell_results": results}
 
-
     # =========================
-    # Public: buy immediately on condition detection
+    # Immediate BUY (1-shot)
     # =========================
     async def buy_immediate_on_detection(
         self,
@@ -723,12 +832,6 @@ class AutoTrader:
         unit_amount: int | None = None,
         order_type: Literal["limit", "market"] | None = None,
     ) -> Optional[Dict[str, Any]]:
-        """
-        조건검색식 '편입(I)' 즉시 한 번만 매수하는 간편 API.
-        - 기본은 지정가 한 번(현재가에 틱 스냅)으로 보냄
-        - order_type="market"이면 시장가 1회
-        - unit_amount 입력 없으면 self.ladder.unit_amount 사용
-        """
         if not self.settings.master_enable or not self.settings.auto_buy:
             self._log("⛔ [immediate] master_enable/auto_buy 비활성 → 매수 차단")
             return None
@@ -742,7 +845,6 @@ class AutoTrader:
             self._log("🚫 [immediate] 종목코드/가격 유효하지 않음")
             return None
 
-        # 일회성 사다리로 위임 (1틱 아래 대신 현재가 그대로)
         payload = {
             "stk_cd": stk_cd,
             "dmst_stex_tp": dmst_stex_tp,
@@ -753,11 +855,10 @@ class AutoTrader:
             "unit_amount": int(unit_amount) if unit_amount else self.ladder.unit_amount,
         }
 
-        # 주문 타입 강제 지정(옵션)
         if order_type in ("limit", "market"):
             old = self.settings.order_type
             try:
-                self.settings.order_type = order_type  # 일시 오버라이드
+                self.settings.order_type = order_type
                 return await self._handle_ladder_buy(payload)
             finally:
                 self.settings.order_type = old
@@ -810,7 +911,6 @@ class AutoTrader:
                 "ts": raw.get("ts") or raw.get("time"),"extra": raw,
             })
 
-    # ---- broker → internal schema mappers ----
     def _map_fill(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
             side = str(raw["side"]).upper()
@@ -848,7 +948,6 @@ class AutoTrader:
             return None
         return {"symbol": sym, "qty": qty, "reason": reason, "ts": ts, "raw": raw}
 
-    # ---- dedupe fills ----
     def _dedupe_fill(self, info: Dict[str, Any]) -> bool:
         key = (info["exec_id"], info.get("part_seq"))
         with self._exec_lock:
@@ -857,12 +956,11 @@ class AutoTrader:
             self._seen_exec_keys.add(key)
             return True
 
-    # ---- apply fills to position manager ----
     def _apply_fill(self, info: Dict[str, Any]) -> None:
         if not self.position_mgr:
             return
-        side = info["side"] ; sym = info["symbol"]
-        qty = int(info["fill_qty"]) ; price = float(info["fill_price"])
+        side = info["side"]; sym = info["symbol"]
+        qty = int(info["fill_qty"]); price = float(info["fill_price"])
         if side == "BUY":
             try: self.position_mgr.apply_fill_buy(sym, qty, price)
             except Exception: pass
@@ -904,7 +1002,6 @@ class AutoTrader:
         host = self._base_url()
         url = host + self._endpoint
         headers = self._headers(token, cont_yn, next_key, api_id=self._api_id_buy)
-        # request
         response = requests.post(url, headers=headers, json=data, timeout=10)
         header_subset = {k: response.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}
         try:
@@ -937,42 +1034,8 @@ class AutoTrader:
 # =========================
 # Utilities
 # =========================
-
 def _parse_bool(v: Optional[str], default: bool = False) -> bool:
     if v is None:
         return default
     t = str(v).strip().lower()
     return t in ("1", "true", "t", "yes", "y", "on")
-
-
-class _DummySim:
-    def __init__(self, log_fn: Callable[[str], None]):
-        self._log = log_fn
-        self._orders: Dict[str, dict] = {}
-
-    def submit_limit_buy(self, *, stk_cd: str, limit_price: int, qty: int, parent_uid: str, strategy: str) -> str:
-        oid = uuid.uuid4().hex[:10]
-        self._orders[oid] = {"side": "BUY", "stk_cd": stk_cd, "limit": limit_price, "qty": qty,
-                              "pid": parent_uid, "strategy": strategy, "ts": time.time()}
-        self._log(f"[sim] limit BUY {stk_cd} x{qty} @ {limit_price} (oid={oid})")
-        return oid
-
-    def submit_limit_sell(self, *, stk_cd: str, limit_price: Optional[int], qty: int, parent_uid: str, strategy: str) -> str:
-        oid = uuid.uuid4().hex[:10]
-        self._orders[oid] = {"side": "SELL", "stk_cd": stk_cd, "limit": limit_price or 0, "qty": qty,
-                              "pid": parent_uid, "strategy": strategy, "ts": time.time()}
-        self._log(f"[sim] limit SELL {stk_cd} x{qty} @ {limit_price if limit_price is not None else 'MKT'} (oid={oid})")
-        return oid
-
-    def on_market_update(self, event: Dict[str, Any]):
-        last = int(event.get("last") or 0)
-        done: List[str] = []
-        for oid, od in self._orders.items():
-            if od["side"] == "BUY" and last and last <= int(od["limit"]):
-                self._log(f"[sim] filled BUY {od['stk_cd']} x{od['qty']} @ {od['limit']} (oid={oid})")
-                done.append(oid)
-            if od["side"] == "SELL" and last and last >= int(od["limit"]):
-                self._log(f"[sim] filled SELL {od['stk_cd']} x{od['qty']} @ {od['limit']} (oid={oid})")
-                done.append(oid)
-        for oid in done:
-            self._orders.pop(oid, None)

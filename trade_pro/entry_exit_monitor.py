@@ -1,4 +1,4 @@
-# core/entry_exit_monitor.py
+# trade_pro/entry_exit_monitor.py
 from __future__ import annotations
 
 import asyncio
@@ -270,7 +270,7 @@ class ExitEntryMonitor:
     # ----------------------------------------------------------------------
     def ingest_bars(self, symbol: str, timeframe: str, df: pd.DataFrame):
         """
-        외부에서 받은 OHLCV df(예: 5m, 30m)를 내부 캐시에 저장하고
+        외부에서 받은 OHLCV df(예: 5m, 30m)를 내부 캐시에 '병합' 저장하고
         심볼을 트래킹 목록에 추가. 5분봉 마감창이면 즉시 1회 평가.
         - 인덱스: tz-aware(Asia/Seoul) 권장
         - 컬럼  : Open,High,Low,Close,Volume
@@ -278,7 +278,12 @@ class ExitEntryMonitor:
         tf = str(timeframe).lower()
         sym = _code6(symbol)
 
-        # 형식 보정
+        # 0) 입력 가드
+        if df is None or df.empty:
+            return
+        df = df.copy()  # 외부 DF 오염 방지
+
+        # 1) 컬럼 정규화
         need_cols = ["Open", "High", "Low", "Close", "Volume"]
         if list(df.columns) != need_cols:
             mapper = {
@@ -291,22 +296,63 @@ class ExitEntryMonitor:
                 logger.warning("[ExitEntryMonitor] ingest: invalid columns=%s", list(df.columns))
                 return
 
+        # 2) 인덱스 정규화(시간/타임존)
+        if not isinstance(df.index, pd.DatetimeIndex):
+            try:
+                df.index = pd.to_datetime(df.index)
+            except Exception:
+                logger.warning("[ExitEntryMonitor] ingest: non-datetime index -> skip")
+                return
         if df.index.tz is None:
             df.index = df.index.tz_localize(self.tz)
+        else:
+            df.index = df.index.tz_convert(self.tz)
 
+        # 3) 타입 보정(숫자형 강제)
+        for c in need_cols:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        df = df.dropna(subset=["Close"])  # 핵심열 결측 제거
+        if df.empty:
+            return
+
+        # 4) 병합(기존 캐시와 concat→중복 제거→정렬→슬라이딩 윈도우)
+        key = (sym, tf)
         with self._sym_lock:
-            self._bars_cache[(sym, tf)] = df
+            cur = self._bars_cache.get(key)
+            if cur is not None and not cur.empty:
+                merged = pd.concat([cur, df])
+            else:
+                merged = df
+
+            # 중복 타임스탬프 제거(마지막 값 우선), 시간 정렬
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+
+            # 미래 시각(클럭 이슈) 필터(±3일 이상 튀면 제거)
+            now = pd.Timestamp.now(tz=self.tz)
+            cutoff_future = now + pd.Timedelta(days=3)
+            merged = merged[merged.index <= cutoff_future]
+
+            # 메모리 보호: 최근 N개만 유지(필요시 조정)
+            MAX_KEEP = 5000
+            if len(merged) > MAX_KEEP:
+                merged = merged.iloc[-MAX_KEEP:]
+
+            self._bars_cache[key] = merged
             self._symbols.add(sym)
 
-        logger.debug(
-            f"[ExitEntryMonitor] cache[{sym},{tf}] size={len(df)} "
-            f"last={df.index[-1]} close={df['Close'].iloc[-1]}"
-        )
+            last_ts = merged.index[-1]
+            last_close = float(merged["Close"].iloc[-1])
 
-        # 5분봉 마감창이면 즉시 1회 평가
-        now_kst = pd.Timestamp.now(tz=self.tz)
-        if tf == "5m" and TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
-            self._schedule_immediate_check(sym)
+        logger.debug(f"[ExitEntryMonitor] cache[{sym},{tf}] size={len(merged)} last={last_ts} close={last_close}")
+
+        # 5) 5분봉 마감창이면 즉시 1회 평가 (루프 전/후 모두 안전하게)
+        if tf == "5m":
+            now_kst = pd.Timestamp.now(tz=self.tz)
+            if TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
+                try:
+                    self._schedule_immediate_check(sym)
+                except Exception:
+                    self._schedule_check(sym)  # 루프 미기동 시 폴백
 
     # ----------------------------------------------------------------------
     # 캐시-우선 5분봉 조회

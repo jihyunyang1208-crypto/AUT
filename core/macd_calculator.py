@@ -202,6 +202,7 @@ class MacdCalculator:
         logger.debug("[MACD] FULL start: code=%s tf=%s rows_in=%d need=%d",
                      code, tf, len(rows or []), need)
         df = self._rows_to_df(rows, tf)
+
         if df.empty or "close" not in df.columns:
             logger.debug("[MACD] FULL abort: empty/invalid df")
             return
@@ -250,6 +251,7 @@ class MacdCalculator:
         key = (code, tf)
         state = self._states.get(key)
         df = self._rows_to_df(rows, tf)
+
         if df.empty or "close" not in df.columns:
             return
 

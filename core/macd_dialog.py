@@ -17,9 +17,10 @@ from core.macd_calculator import macd_bus, get_points
 from utils.stock_info_manager import stock_info_manager
 from utils.gemini_client import GeminiClient
 
-# 결과(JSONL) 유틸 – DailyResultsRecorder 포맷과 호환
+# 결과(JSONL) 유틸 
 from utils.results_store import (
-    load_results_for_date, filter_by_symbol, to_dataframe, today_str
+    load_results_for_date, filter_by_symbol, to_dataframe, today_str,
+    load_orders_jsonl, results_path_for,  
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,9 @@ class BullishAnalysisWorker(QObject):
 class MacdDialog(QDialog):
     COLS = ["TF", "Time", "MACD", "Hist", "ΔMACD", "ΔHist", "Cross"]
     _ROW_OF = {"5m": 0, "30m": 1}
+    _ANALYSIS_TEXT_CACHE: Dict[str, str] = {}
+
+    GRAPH_POINTS = 20
 
     # 다이얼로그를 닫아도 유지하고 싶은 데이터 캐시
     _UI_CACHE_BY_CODE: Dict[str, pd.DataFrame] = {}
@@ -116,16 +120,18 @@ class MacdDialog(QDialog):
         self._set_item(2, 0, "1d", center=True)
 
         # 그래프
-        self.graph_widget = pg.PlotWidget(title="MACD & Histogram (10 Recent)")
+        self.graph_widget = pg.PlotWidget(title=f"MACD & Histogram ({self.GRAPH_POINTS} Recent)")
+
         self.graph_widget.setBackground('k')
         self.graph_widget.getAxis('bottom').setPen('w')
         self.graph_widget.getAxis('left').setPen('w')
         self.graph_widget.getAxis('left').setTicks([])
         self.graph_widget.plotItem.getAxis('bottom').setTicks([])
-
+        self.graph_widget.setMinimumHeight(160)  
         self.top_split.addWidget(self.table)
         self.top_split.addWidget(self.graph_widget)
-        self.top_split.setStretchFactor(0, 1)
+        
+        self.top_split.setStretchFactor(0, 2)
         self.top_split.setStretchFactor(1, 1)
 
         # ====== 하부: 오늘자 결과(JSONL) 표 ======
@@ -142,9 +148,9 @@ class MacdDialog(QDialog):
         bottom_layout.addLayout(btn_row)
 
         # 결과 표
-        self.results_table = QTableWidget(0, 7, self)
+        self.results_table = QTableWidget(0, 6, self)
         self.results_table.setHorizontalHeaderLabels(
-            ["Time", "Side", "Price", "Reason", "Source", "Condition", "ReturnMsg"]
+            ["Time", "Symbol", "Stock Code", "Name", "Qty", "ReturnMsg"]
         )
         self.results_table.verticalHeader().setVisible(False)
         self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -157,8 +163,10 @@ class MacdDialog(QDialog):
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(self.top_split)
         splitter.addWidget(bottom_widget)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([120, 300])     # ↑차트 120px, ↓테이블 600px
+
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
         main_layout.addWidget(splitter)
 
         # ====== 분석 결과 영역 (초기 숨김) ======
@@ -171,6 +179,11 @@ class MacdDialog(QDialog):
         self.analysis_output.setReadOnly(True)
         analysis_layout.addWidget(self.analysis_output)
         main_layout.addWidget(self.analysis_widget)
+        cached_text = MacdDialog._ANALYSIS_TEXT_CACHE.get(self.code)
+        if cached_text:
+            self.analysis_output.setText(cached_text)
+        else:
+            self.analysis_output.clear()
 
         # 초기 표시
         self._refresh_all()
@@ -221,7 +234,7 @@ class MacdDialog(QDialog):
         if row is None:
             return
 
-        pts = get_points(self.code, tf, n=10) or []
+        pts = get_points(self.code, tf, n=self.GRAPH_POINTS) or []
         if not pts:
             for c in range(1, len(self.COLS)):
                 self._set_item(row, c, "—", center=True)
@@ -276,7 +289,7 @@ class MacdDialog(QDialog):
         zero_line = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen('w', width=1, style=Qt.DashLine))
         self.graph_widget.addItem(zero_line)
 
-        recent = pts[-10:]
+        recent = pts[-self.GRAPH_POINTS:]
         x_vals = list(range(len(recent)))
 
         hist_values = [float(p.get("hist", float("nan"))) / 10.0 for p in recent]
@@ -335,6 +348,8 @@ class MacdDialog(QDialog):
     @Slot(str)
     def _on_analysis_ready(self, result: str):
         self.analysis_output.setText(result)
+        MacdDialog._ANALYSIS_TEXT_CACHE[self.code] = self.analysis_output.toPlainText()
+
         self._is_analysis_loaded = True
         self._is_analysis_visible = True
         self.analysis_widget.show()
@@ -352,54 +367,98 @@ class MacdDialog(QDialog):
         code = self.code
         df: Optional[pd.DataFrame] = None
         if use_cache_first:
-            df = self._UI_CACHE_BY_CODE.get(code)
+            df = self._UI_CACHE_BY_CODE.get(f"orders:{code}")
 
         if df is None:
-            rows = load_results_for_date(today_str())
-            rows = filter_by_symbol(rows, code)
-            df = to_dataframe(rows)
-            self._UI_CACHE_BY_CODE[code] = df
+            # 오늘자 orders_YYYY-MM-DD.jsonl 로드
+            orders_path = results_path_for(today_str())
+            df = load_orders_jsonl(orders_path)  # ts_kst, code 등 포함된 DF
+            # 이 다이얼로그의 종목만 필터
+            if not df.empty and "code" in df.columns:
+                df = df[df["code"] == code].copy()
+            else:
+                df = df.iloc[0:0]
+            # 캐시
+            self._UI_CACHE_BY_CODE[f"orders:{code}"] = df
 
         self._populate_results_table(df)
+
+    def _extract_return_msg(self, row: pd.Series) -> str:
+        """CSV/JSONL 어디서 오든 return_msg를 안전 추출."""
+        # 1) 납작 필드(TradeLogger CSV 확장) 우선
+        for key in ("resp_return_msg", "return_msg"):
+            if key in row and pd.notna(row[key]) and str(row[key]).strip():
+                return str(row[key])
+        # 2) JSONL 원본 구조: response.body.return_msg
+        try:
+            resp = row.get("response", None)
+            if isinstance(resp, dict):
+                body = resp.get("body", {})
+                msg = body.get("return_msg", "")
+                if msg:
+                    return str(msg)
+        except Exception:
+            pass
+        return ""
 
     def _populate_results_table(self, df: pd.DataFrame):
         self.results_table.setRowCount(0)
         if df is None or df.empty:
             return
 
-        cols = ["ts", "side", "price", "reason", "source", "condition_name", "return_msg"]
-        for col in cols:
-            if col not in df.columns:
-                df[col] = None
+        # 필요한 컬럼이 없을 수 있으니 보정
+        for need in ["ts_kst", "symbol", "stk_cd", "code", "qty", "condition_name", "resp_return_msg", "return_msg", "response"]:
+            if need not in df.columns:
+                df[need] = None
 
-        for _, row in df.sort_values("ts").iterrows():
+        # 시간 정렬 (ts_kst가 있으면 그걸로)
+        if "ts_kst" in df.columns:
+            try:
+                df = df.sort_values("ts_kst", kind="mergesort")
+            except Exception:
+                pass
+
+        for _, row in df.iterrows():
             r = self.results_table.rowCount()
             self.results_table.insertRow(r)
 
-            def _s(val) -> str:
-                if pd.isna(val) or val is None:
-                    return ""
-                return str(val)
-
-            ts_val = row["ts"]
-            if isinstance(ts_val, pd.Timestamp):
-                ts_disp = ts_val.tz_localize("Asia/Seoul") if ts_val.tzinfo is None else ts_val
-                ts_text = ts_disp.strftime("%Y-%m-%d %H:%M:%S")
+            # Time
+            ts = row["ts_kst"]
+            if isinstance(ts, pd.Timestamp):
+                ts_text = ts.strftime("%Y-%m-%d %H:%M:%S")
             else:
-                ts_text = _s(ts_val)
+                # ts(문자열)만 있을 수 있으니 폴백
+                ts_text = str(row.get("ts") or "")
+
+            # Symbol / Stock Code
+            code6 = str(row.get("code") or "")
+            symbol = str(row.get("symbol") or row.get("stk_cd") or code6 or "")
+            stock_code = code6
+
+            # Name
+            name = stock_info_manager.get_name(code6) if code6 else ""
+
+            # Qty
+            qty = row.get("qty")
+            qty_text = "" if pd.isna(qty) else str(int(qty)) if str(qty).isdigit() else str(qty)
+
+            # ReturnMsg
+            return_msg = self._extract_return_msg(row)
+
+            # Condition
+            cond = row.get("condition_name")
+            cond_text = "" if pd.isna(cond) or cond is None else str(cond)
 
             cells = [
-                ts_text,
-                _s(row["side"]),
-                _s(row["price"]),
-                _s(row["reason"]),
-                _s(row["source"]),
-                _s(row["condition_name"]),
-                _s(row["return_msg"]),
+                ts_text, symbol, stock_code, name, qty_text, return_msg, cond_text
             ]
             for c, text in enumerate(cells):
                 it = QTableWidgetItem(text)
-                align = Qt.AlignCenter if c in (0, 1, 4, 5) else (Qt.AlignRight | Qt.AlignVCenter)
+                # 가운데 정렬: Time / Symbol / Stock Code / Name / Qty / Condition
+                if c in (0, 1, 2, 3, 4, 6):
+                    align = Qt.AlignCenter
+                else:
+                    align = Qt.AlignLeft | Qt.AlignVCenter
                 it.setTextAlignment(align)
                 self.results_table.setItem(r, c, it)
 
@@ -407,10 +466,13 @@ class MacdDialog(QDialog):
 
     @Slot()
     def _on_refresh_results_clicked(self):
-        rows = load_results_for_date(today_str())
-        rows = filter_by_symbol(rows, self.code)
-        df = to_dataframe(rows)
-        self._UI_CACHE_BY_CODE[self.code] = df
+        orders_path = results_path_for(today_str())
+        df = load_orders_jsonl(orders_path)
+        if not df.empty and "code" in df.columns:
+            df = df[df["code"] == self.code].copy()
+        else:
+            df = df.iloc[0:0]
+        self._UI_CACHE_BY_CODE[f"orders:{self.code}"] = df
         self._populate_results_table(df)
 
     # -----------------------------
@@ -432,6 +494,8 @@ class MacdDialog(QDialog):
     # 종료 처리
     # -----------------------------
     def closeEvent(self, e):
+        MacdDialog._ANALYSIS_TEXT_CACHE[self.code] = self.analysis_output.toPlainText()
+
         try:
             self.bus.macd_series_ready.disconnect(self._on_bus)
         except Exception:
