@@ -1,3 +1,0 @@
-{"ts": "2025-10-06T14:15:00+09:00", "side": "SELL", "symbol": "073010", "price": 95.0, "reason": "SELL: Close < prev Open", "source": "bar", "condition_name": "", "return_msg": null}
-{"ts": "2025-10-06T14:15:00+09:00", "side": "BUY", "symbol": "073010", "price": 95.0, "reason": "BUY: Bull breaks prev bear High", "source": "bar", "condition_name": "", "return_msg": null}
-{"ts": "2025-10-06T14:10:38.377349+09:00", "side": "BUY", "symbol": "073010", "price": 70000, "reason": "manual smoke", "source": "bar", "condition_name": "", "return_msg": null}

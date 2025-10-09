@@ -1,5 +1,4 @@
-# ui_main.py (완성본, 구/신버전 호환)
-from __future__ import annotations
+# ui_main.py 
 
 import os
 import sys
@@ -19,13 +18,12 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStatusBar,
     QTableView, QHeaderView, QLineEdit, QToolBar, QListWidget,
     QTextEdit, QListWidgetItem, QTextBrowser, QSplitter, QCheckBox,
-    QComboBox, QGroupBox, QScrollArea, QFrame, QProgressBar, QTabWidget, QFrame
+    QComboBox, QGroupBox, QScrollArea, QFrame, QProgressBar, QTabWidget
 )
 
 
 try:
     from matplotlib.dates import DateFormatter
-
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     import matplotlib
@@ -131,6 +129,8 @@ class MainWindow(QMainWindow):
         self._active_macd_streams: set[str] = set()
         self._last_stream_req_ts: dict[str, Any] = {}
         self._stream_debounce_sec = 15
+        self._cond_seq_to_name: dict[str, str] = {}     # "12" -> "20일 신고가"
+        self._code_to_conds: dict[str, set[str]] = {}   # "005930" -> {"12:20일 신고가", "34:거래량 급증"}
 
         # UI 구성
         self._build_toolbar()
@@ -180,9 +180,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        self.cb_auto_buy.setChecked(getattr(self.app_cfg, "auto_buy", False))
-        self.cb_auto_sell.setChecked(getattr(self.app_cfg, "auto_sell", False))
-
         # 리스크 패널 토글 복원
         vis = self._settings_qs.value("risk_panel_visible", True)
         vis = (str(vis).lower() in ("true","1","yes")) if not isinstance(vis, bool) else vis
@@ -226,15 +223,12 @@ class MainWindow(QMainWindow):
         self.btn_filter = QPushButton("종목 필터링 실행 (재무+기술)")
         self.list_conditions = QListWidget()
         self.lbl_cond_info = QLabel("0개 / 선택: 0")
-        cb_row = QHBoxLayout(); self.cb_auto_buy = QCheckBox("자동매수"); self.cb_auto_sell = QCheckBox("자동매도")
-        cb_row.addWidget(self.cb_auto_buy); cb_row.addWidget(self.cb_auto_sell); cb_row.addStretch(1)
 
         left.addWidget(self.search_conditions)
         left.addWidget(QLabel("조건식 목록"))
         left.addWidget(self.list_conditions, 1)
         left.addWidget(self.btn_init)
         left.addWidget(self.btn_filter)
-        left.addLayout(cb_row)
         left.addWidget(self.lbl_cond_info)
         row_btns = QHBoxLayout(); row_btns.addWidget(self.btn_start); row_btns.addWidget(self.btn_stop)
         left.addLayout(row_btns)
@@ -277,7 +271,7 @@ class MainWindow(QMainWindow):
 
         sort_row = QHBoxLayout()
         self.cmb_sort_key = QComboBox()
-        self.cmb_sort_key.addItems(["등락률(%)", "현재가", "거래량", "매수가", "매도가", "코드", "이름", "최근 갱신시간"])
+        self.cmb_sort_key.addItems(["등락률(%)", "현재가", "거래량", "매수가", "매도가", "코드", "이름", "최근 갱신시간", "조건식"])
         self.cmb_sort_key.setCurrentText("최근 갱신시간")
         self.btn_sort_dir = QPushButton("내림차순")
         self.btn_sort_dir.setCheckable(True)
@@ -290,8 +284,8 @@ class MainWindow(QMainWindow):
         top_right.addWidget(self.text_result, 1)
 
         tab_top = QTabWidget()
-        tab_top.setDocumentMode(True)      
-        tab_top.setMovable(True)           
+        tab_top.setDocumentMode(True)
+        tab_top.setMovable(True)
         tab_top.setTabPosition(QTabWidget.North)
 
         # 다크테마 가독성 향상 스타일
@@ -363,7 +357,6 @@ class MainWindow(QMainWindow):
         lay.addWidget(QLabel("총 포지션 비중(순자산 대비, %)"))
         self.pb_exposure = QProgressBar(); self.pb_exposure.setRange(0, 200); self.pb_exposure.setValue(0)
 
-
         lay.addWidget(self.pb_exposure)
         self._update_exposure_gauge(0)
 
@@ -380,9 +373,9 @@ class MainWindow(QMainWindow):
             self.ax_equity.title.set_color("#e9edf1")
             self.ax_equity.set_title(
                 "20일 손익",
-                color="#e9edf1",      # 글자 색상
-                fontsize=8,          # 글자 크기
-                fontweight="bold",    # 굵게
+                color="#e9edf1",
+                fontsize=8,
+                fontweight="bold",
             )
             self.ax_equity.set_xlabel("일자");  self.ax_equity.xaxis.label.set_color("#cfd6df")
             self.ax_equity.set_ylabel("순자산"); self.ax_equity.yaxis.label.set_color("#cfd6df")
@@ -400,9 +393,9 @@ class MainWindow(QMainWindow):
             self.ax_hist.title.set_color("#e9edf1")
             self.ax_hist.set_title(
                 "일일 손익",
-                color="#e9edf1",      # 글자 색상
-                fontsize=8,          # 글자 크기
-                fontweight="bold",    # 굵게
+                color="#e9edf1",
+                fontsize=8,
+                fontweight="bold",
             )
 
             self.ax_hist.set_xlabel("일자"); self.ax_hist.xaxis.label.set_color("#cfd6df")
@@ -480,9 +473,7 @@ class MainWindow(QMainWindow):
                     self._settings_qs.setValue("hsplit_state", self.hsplit.saveState())
                 except Exception:
                     pass
-            # 저장: 자동매매 토글/창 크기/리스크 패널 상태
-            self._settings_qs.setValue("auto_buy", self.cb_auto_buy.isChecked())
-            self._settings_qs.setValue("auto_sell", self.cb_auto_sell.isChecked())
+            # 저장: 창 크기/리스크 패널 상태
             try:
                 self._settings_qs.setValue("window_maximized", self.isMaximized())
                 if not self.isMaximized():
@@ -493,8 +484,6 @@ class MainWindow(QMainWindow):
                 pass
             # cfg 동기화
             try:
-                setattr(self.app_cfg, "auto_buy", self.cb_auto_buy.isChecked())
-                setattr(self.app_cfg, "auto_sell", self.cb_auto_sell.isChecked())
                 setattr(self.app_cfg, "window_maximized", bool(self.isMaximized()))
                 if not self.isMaximized():
                     setattr(self.app_cfg, "window_width", int(self.width()))
@@ -630,10 +619,10 @@ class MainWindow(QMainWindow):
 
                 self.ax_equity.set_title(
                     "20일 손익",
-                    color="#e9edf1",      # 글자 색상
-                    fontsize=8,          # 글자 크기
-                    fontweight="bold",    # 굵게
-                    fontname="Malgun Gothic"  # 글꼴 (Windows: 맑은 고딕)
+                    color="#e9edf1",
+                    fontsize=8,
+                    fontweight="bold",
+                    fontname="Malgun Gothic"
                 )
                 self.ax_equity.grid(True, which="major", alpha=0.25)
                 self.ax_equity.tick_params(axis="x", labelsize=8); self.ax_equity.tick_params(axis="y", labelsize=8)
@@ -651,10 +640,10 @@ class MainWindow(QMainWindow):
 
                 self.ax_hist.set_title(
                     "일일 손익",
-                    color="#e9edf1",      # 글자 색상
-                    fontsize=8,          # 글자 크기
-                    fontweight="bold",    # 굵게
-                    fontname="Malgun Gothic"  # 글꼴 (Windows: 맑은 고딕)
+                    color="#e9edf1",
+                    fontsize=8,
+                    fontweight="bold",
+                    fontname="Malgun Gothic"
                 )
                 self.ax_hist.grid(True, which="major", alpha=0.25)
                 self.ax_hist.tick_params(axis="x", labelsize=8); self.ax_hist.tick_params(axis="y", labelsize=8)
@@ -763,6 +752,7 @@ class MainWindow(QMainWindow):
     @Slot(list)
     def populate_conditions(self, conditions: list):
         self.list_conditions.clear()
+        self._cond_seq_to_name.clear()
         normalized = []
         for cond in (conditions or []):
             if isinstance(cond, dict):
@@ -773,14 +763,28 @@ class MainWindow(QMainWindow):
                 continue
             if seq or name:
                 normalized.append({"seq": seq, "name": name})
+                if seq:
+                    self._cond_seq_to_name[seq] = name
         for c in normalized:
             item = QListWidgetItem(f"[{c['seq']}] {c['name']}"); item.setData(Qt.UserRole, c['seq'])
             self.list_conditions.addItem(item)
         self._update_cond_info(); self.append_log(f"✅ 조건식 {len(normalized)}개 로드")
 
-    @Slot(str)
-    def on_new_stock(self, code: str):
-        self.label_new_stock.setText(f"신규 종목: {code}"); self.status.showMessage(f"신규 종목: {code}", 3000)
+    @Slot(object)
+    def on_new_stock(self, payload):
+        if isinstance(payload, dict):
+            code = payload.get("stock_code") or payload.get("code")
+            cond_name = payload.get("condition_name") or payload.get("cond_name") or ""
+        else:
+            code = str(payload)
+            cond_name = ""
+        code6 = str(code)[-6:].zfill(6)
+        if not code6:
+            return
+
+        self.label_new_stock.setText(f"신규 종목: {code6}")
+        self.status.showMessage(f"신규 종목: {code6} ({cond_name})", 3000)
+
 
     @Slot(dict)
     def on_new_stock_detail(self, payload: dict):
@@ -797,6 +801,12 @@ class MainWindow(QMainWindow):
 
         code = (flat.get("stock_code") or flat.get("code") or "").strip()
         name = flat.get("stock_name") or flat.get("stk_nm") or flat.get("isu_nm") or "종목명 없음"
+
+        cond_name = (
+            flat.get("condition_name")
+            or flat.get("cond_name")
+            or ""
+        ).strip()
 
         def _num(*keys):
             for k in keys:
@@ -817,22 +827,36 @@ class MainWindow(QMainWindow):
 
         updated_at = datetime.now().isoformat(timespec="seconds")
 
-        row = {"code":code6, "name":name, "price":price, "rt":rt, "vol":vol,
-               "buy_price":None, "sell_price":None, "updated_at":updated_at}
+        row = {
+            "code": code6,
+            "name": name,
+            "price": price,
+            "rt": rt,
+            "vol": vol,
+            "buy_price": None,
+            "sell_price": None,
+            "updated_at": updated_at,
+            "conds": cond_name or "-",
+        }
+
 
         idx = self._result_index.get(code6)
         if idx is None:
             self._result_index[code6] = len(self._result_rows); self._result_rows.append(row)
+            idx = self._result_index[code6]
         else:
             keep_buy = self._result_rows[idx].get("buy_price")
             keep_sell = self._result_rows[idx].get("sell_price")
-            if keep_buy is not None: row["buy_price"] = keep_buy
-            if keep_sell is not None: row["sell_price"] = keep_sell
+            if keep_buy is not None: 
+                row["buy_price"] = keep_buy
+            if keep_sell is not None: 
+                row["sell_price"] = keep_sell
             self._result_rows[idx] = row
 
-        self.label_new_stock.setText(f"신규 종목: {code6}")
+
         self._render_results_html()
         self._ensure_macd_stream(code6)
+
 
     @Slot(str, float, float, float)
     def on_macd_data(self, code: str, macd: float, signal: float, hist: float):
@@ -847,20 +871,43 @@ class MainWindow(QMainWindow):
     @Slot(dict)
     def on_trade_signal(self, payload: dict):
         try:
-            side = str(payload.get("side", "")).upper()
-            code6 = str(payload.get("code", "")).zfill(6)[-6:]
-            price = payload.get("price")
-            if not code6 or price in (None, ""):
+            # 사이드/코드/가격 안전 파싱
+            side = str(payload.get("side") or payload.get("action") or "").upper()
+            code = (payload.get("code") or payload.get("stock_code") or payload.get("stk_cd") or "").strip()
+            code6 = str(code)[-6:].zfill(6) if code else ""
+            raw_price = (payload.get("price") if "price" in payload else
+                         payload.get("limit_price") if "limit_price" in payload else
+                         payload.get("cur_price") if "cur_price" in payload else
+                         payload.get("prc") if "prc" in payload else
+                         payload.get("avg_price"))
+            if not code6 or raw_price in (None, ""):
                 return
+            try:
+                price = float(str(raw_price).replace(",", ""))
+            except Exception:
+                return
+
             idx = self._result_index.get(code6)
             if idx is None:
                 row = {"code":code6, "name":code6, "price":None, "rt":0.0, "vol":None,
                        "buy_price":None, "sell_price":None,
+                       "conds": " | ".join(sorted(self._code_to_conds.get(code6, set()))) if code6 in self._code_to_conds else "-",
                        "updated_at": datetime.now().isoformat(timespec="seconds")}
                 self._result_index[code6] = len(self._result_rows); self._result_rows.append(row); idx = self._result_index[code6]
+
             row = self._result_rows[idx]
-            if side == "BUY": row["buy_price"] = float(price)
-            elif side == "SELL": row["sell_price"] = float(price)
+
+            # conds 최신화(다른 경로로 들어온 조건 누적 반영)
+            if code6 in self._code_to_conds:
+                row["conds"] = " | ".join(sorted(self._code_to_conds.get(code6, set()))) or "-"
+
+            if side == "BUY":
+                row["buy_price"] = price
+            elif side == "SELL":
+                row["sell_price"] = price
+            else:
+                return
+
             row["updated_at"] = datetime.now().isoformat(timespec="seconds")
             self._render_results_html()
         except Exception as e:
@@ -868,8 +915,14 @@ class MainWindow(QMainWindow):
 
     def _render_results_html(self):
         if not self._result_rows:
-            self.text_result.setHtml("<div style='color:#9aa0a6;'>표시할 결과가 없습니다.</div>"); return
-        key_map = {"등락률(%)":"rt","현재가":"price","거래량":"vol","매수가":"buy_price","매도가":"sell_price","코드":"code","이름":"name","최근 갱신시간":"updated_at"}
+            self.text_result.setHtml("<div style='color:#9aa0a6;'>표시할 결과가 없습니다.</div>")
+            return
+
+        # ✅ 정렬 키 맵 (들여쓰기 버그 수정: if 블록 밖에 있어야 함)
+        key_map = {
+            "등락률(%)":"rt","현재가":"price","거래량":"vol","매수가":"buy_price","매도가":"sell_price",
+            "코드":"code","이름":"name","최근 갱신시간":"updated_at","조건식":"conds"
+        }
         sort_label = self.cmb_sort_key.currentText(); key = key_map.get(sort_label, "updated_at"); desc = self.btn_sort_dir.isChecked()
 
         def sort_key(row):
@@ -891,7 +944,7 @@ class MainWindow(QMainWindow):
               table.res tr:hover { background:#2a2e33; }
               .pos { color:#e53935; font-weight:700; }
               .neg { color:#43a047; font-weight:700; }
-              .muted { color:#9aa0a6; }
+              .muted { color:#9aa0a6; font-weight:700; }
               .code { color:#9aa0a6; font-family:Consolas,'Courier New',monospace; }
               .btn { padding:2px 8px; border:1px solid #4c566a; border-radius:10px; color:#e0e0e0; text-decoration:none; background:#2b2f36; }
             </style>
@@ -904,6 +957,7 @@ class MainWindow(QMainWindow):
                 <th style='width:11%;'>매수가</th>
                 <th style='width:11%;'>매도가</th>
                 <th style='width:11%;'>최근 갱신</th>
+                <th style='width:18%;'>조건식</th>
                 <th style='width:8%;'></th>
               </tr></thead><tbody>
             """]
@@ -913,6 +967,8 @@ class MainWindow(QMainWindow):
             except Exception: f_rt=0.0
             cls = "pos" if f_rt>0 else ("neg" if f_rt<0 else "muted"); rtf=f"{f_rt:.2f}%"
             buy=self._fmt_num(r.get("buy_price")); sell=self._fmt_num(r.get("sell_price")); upd=str(r.get("updated_at","-"))
+            conds = r.get("conds") or "-"
+
             html.append(f"""
                 <tr>
                   <td>{name}</td>
@@ -922,6 +978,7 @@ class MainWindow(QMainWindow):
                   <td class='right'>{buy}</td>
                   <td class='right'>{sell}</td>
                   <td class='right'>{upd}</td>
+                  <td>{conds}</td>
                   <td><a href='macd:{code6}' class='btn'>상세</a></td>
                 </tr>
             """)
@@ -1011,8 +1068,6 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self, self.app_cfg)
         if dlg.exec() == QDialog.Accepted:
             new_cfg = dlg.get_settings()
-            self.cb_auto_buy.setChecked(getattr(new_cfg, "auto_buy", False))
-            self.cb_auto_sell.setChecked(getattr(new_cfg, "auto_sell", False))
             if self.store: self.store.save(new_cfg)
             self.app_cfg = new_cfg
             if self.wiring and hasattr(self.wiring, "apply_settings"):

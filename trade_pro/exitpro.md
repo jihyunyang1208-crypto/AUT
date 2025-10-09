@@ -12,6 +12,4 @@ sequenceDiagram
     MacdDialog->>MacdDialog: update buffers & UI table
     Bridge->>ExitEntryMonitor: (via MacdDialogFeedAdapter)<br>IMacdDialogFeedAdapter.get_latest()
     ExitEntryMonitor->>ExitEntryMonitor: evaluate rules (5m close, 30m MACD hist >=0)
-    ExitEntryMonitor->>DailyResultsRecorder: record_signal(TradeSignal)
-    DailyResultsRecorder->>File[system_results_YYYY-MM-DD.json]: append signal
 ```

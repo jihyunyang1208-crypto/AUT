@@ -1,4 +1,3 @@
-# setting/settings_manager.py
 from __future__ import annotations
 
 import os
@@ -54,12 +53,15 @@ def _normalize_base_url(api: str) -> str:
 # ===================== 데이터 모델 =====================
 @dataclass
 class AppSettings:
-    # 트레이딩 스위치
+    # 트레이딩 스위치 (master_enable은 하위호환용으로만 보관)
     master_enable: bool = True
     auto_buy: bool = True
     auto_sell: bool = True
+    # Pro 모드(룰 기반) 스위치
+    buy_pro: bool = False
+    sell_pro: bool = False
 
-    # 주문 타입(지정가/시장가) - AutoTrader.TradeSettings.order_type 와 매핑
+    # 주문 타입(지정가/시장가)
     order_type: Literal["limit", "market"] = "limit"
 
     # 전략/필터
@@ -91,14 +93,12 @@ class AppSettings:
             return "market" if raw == "market" else "limit"
 
         # --- 시뮬 모드(하위호환 포함) ---
-        # 1순위: SIM_MODE / SIMULATION_MODE / PAPER_MODE
         sim = _b("SIM_MODE", None)
         if sim is None:
             sim = _b("SIMULATION_MODE", None)
         if sim is None:
             sim = _b("PAPER_MODE", None)
 
-        # 2순위: TRADE_MODE 키워드
         if sim is None:
             trade_mode = (_s("TRADE_MODE", "") or "").lower()
             if trade_mode in ("paper", "sim", "simulation"):
@@ -139,11 +139,13 @@ class SettingsStore:
         if isinstance(raw, dict):
             merged = asdict(base)
             merged.update(raw)
-            # 타입 안정화(일부 값이 str로 저장되는 경우 방지)
+            # 타입 안정화
             return AppSettings(
                 master_enable=bool(merged.get("master_enable", True)),
                 auto_buy=bool(merged.get("auto_buy", True)),
                 auto_sell=bool(merged.get("auto_sell", True)),
+                buy_pro=bool(merged.get("buy_pro", False)),
+                sell_pro=bool(merged.get("sell_pro", False)),
                 order_type=("market" if merged.get("order_type", "limit") == "market" else "limit"),
                 use_macd30_filter=bool(merged.get("use_macd30_filter", False)),
                 macd30_timeframe=str(merged.get("macd30_timeframe", "30m")),
@@ -265,7 +267,7 @@ class SettingsDialog(QDialog):
     # ----------- UI 구성 -----------
     def _build_ui(self):
         self.setModal(True)
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(680)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(14, 14, 14, 10)
@@ -282,12 +284,14 @@ class SettingsDialog(QDialog):
         # --- 트레이딩 스위치 그룹 ---
         grp_switch = QGroupBox("트레이딩 스위치")
         sw = QHBoxLayout(grp_switch)
-        self.cb_master = QCheckBox("마스터 ON"); self.cb_master.setToolTip("전체 자동 매매 스위치")
         self.cb_auto_buy = QCheckBox("자동 매수")
         self.cb_auto_sell = QCheckBox("자동 매도")
-        sw.addWidget(self.cb_master); sw.addSpacing(8)
+        self.cb_buy_pro = QCheckBox("Buy-Pro(룰 기반)")
+        self.cb_sell_pro = QCheckBox("Sell-Pro(룰 기반)")
         sw.addWidget(self.cb_auto_buy); sw.addSpacing(8)
-        sw.addWidget(self.cb_auto_sell); sw.addStretch(1)
+        sw.addWidget(self.cb_auto_sell); sw.addSpacing(8)
+        sw.addWidget(self.cb_buy_pro); sw.addSpacing(8)
+        sw.addWidget(self.cb_sell_pro); sw.addStretch(1)
         lay.addWidget(grp_switch)
 
         # --- 주문 타입/시뮬/API 그룹 ---
@@ -387,9 +391,10 @@ class SettingsDialog(QDialog):
     # ---------------- UI ← 설정 ----------------
     def _load_to_widgets(self):
         c = self.cfg
-        self.cb_master.setChecked(c.master_enable)
         self.cb_auto_buy.setChecked(c.auto_buy)
         self.cb_auto_sell.setChecked(c.auto_sell)
+        self.cb_buy_pro.setChecked(c.buy_pro)
+        self.cb_sell_pro.setChecked(c.sell_pro)
 
         # 주문 타입 매핑
         self.cmb_order_type.setCurrentText("시장가" if c.order_type == "market" else "지정가")
@@ -414,9 +419,10 @@ class SettingsDialog(QDialog):
     def get_settings(self) -> AppSettings:
         c = AppSettings(**asdict(self.cfg))
 
-        c.master_enable = self.cb_master.isChecked()
         c.auto_buy = self.cb_auto_buy.isChecked()
         c.auto_sell = self.cb_auto_sell.isChecked()
+        c.buy_pro = self.cb_buy_pro.isChecked()
+        c.sell_pro = self.cb_sell_pro.isChecked()
 
         # 주문 타입 매핑
         order_txt = self.cmb_order_type.currentText()
@@ -467,6 +473,7 @@ def to_trade_settings(cfg: AppSettings):
     """
     AppSettings → AutoTrader.TradeSettings 변환
     - simulation_mode로 단일 스위치 연결 (paper ≡ simulation)
+    - master_enable은 하위호환 필드로만 전달(현재 AutoTrader 로직에서는 미사용)
     """
     if _TradeSettings is None:
         raise RuntimeError("trade_pro.auto_trader.TradeSettings 를 불러올 수 없습니다.")
@@ -494,7 +501,7 @@ def apply_to_autotrader(trader, cfg: AppSettings):
     """
     이미 생성된 AutoTrader 인스턴스에 UI 설정을 반영.
     - simulation_mode 런타임 토글
-    - order_type, master/auto_* 스위치 반영
+    - order_type, auto_* 스위치 반영 (master_enable은 유지 전달되지만 AutoTrader에서는 미사용)
     - ladder 기본값 반영
     - base url provider를 쓰는 구조라면, 환경변수(HTTP_API_BASE)를 업데이트하는 방식으로 전달 가능
     """
@@ -504,7 +511,7 @@ def apply_to_autotrader(trader, cfg: AppSettings):
 
     # settings 객체 값들 반영
     if hasattr(trader, "settings"):
-        trader.settings.master_enable = bool(cfg.master_enable)
+        trader.settings.master_enable = bool(cfg.master_enable)  # 하위호환 보관
         trader.settings.auto_buy = bool(cfg.auto_buy)
         trader.settings.auto_sell = bool(cfg.auto_sell)
         trader.settings.order_type = ("market" if cfg.order_type == "market" else "limit")
@@ -514,6 +521,5 @@ def apply_to_autotrader(trader, cfg: AppSettings):
         trader.ladder.num_slices = int(cfg.ladder_num_slices)
 
     # API Base URL은 AutoTrader가 base_url_provider를 통해 읽습니다.
-    # 필요한 경우 환경변수를 업데이트해서 주입합니다(선택).
     if cfg.api_base_url:
         os.environ["HTTP_API_BASE"] = _normalize_base_url(cfg.api_base_url)

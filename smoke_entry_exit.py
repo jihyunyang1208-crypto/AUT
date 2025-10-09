@@ -1,96 +1,183 @@
-# smoke_entry_exit.py
+# smoke_test_autotrader.py
 import asyncio
-from dataclasses import dataclass
-from pathlib import Path
-import pandas as pd
+import uuid
+from datetime import datetime, timezone
 
-# 테스트 대상 모듈 import (경로에 맞게 수정)
-from trade_pro.entry_exit_monitor import (
-    ExitEntryMonitor,
-    DailyResultsRecorder,
-    TradeSignal,
-    DetailGetter,
-)
+# === 1) 프로젝트 모듈 임포트 ===
+from trade_pro.auto_trader import AutoTrader, TradeSettings, LadderSettings
 
-# --- 1) 더미 DetailGetter: 5분봉 2개짜리 DF를 반환 --------------------------
-class FakeDetailGetter:
-    async def get_bars(self, code: str, interval: str, count: int) -> pd.DataFrame:
-        # 보통은 캐시로 먹이지만, 혹시 호출되면 최소 동작 보장
-        return make_test_5m_df()
+# === 2) 브리지/포지션 더미 ===
+class DummyEmitter:
+    def emit(self, msg):
+        print(" [EMIT]", msg)
 
-def make_test_5m_df():
-    tz = "Asia/Seoul"
-    # 5분 스냅으로 깔끔히 맞춰줌
-    now = pd.Timestamp.now(tz=tz).ceil("5min")
-    idx = pd.DatetimeIndex([now - pd.Timedelta(minutes=5), now], tz=tz)
+class DummyBridge:
+    def __init__(self):
+        self.log = DummyEmitter()
+        self.order_event = DummyEmitter()
 
-    # 조건:
-    # - 직전봉 prev: 음봉(Open=100, Close=90), High=105
-    # - 현재봉 last: 약한 양/음 상관없이 Close=95 (prev_open=100보다 작아서 SELL 조건 충족)
-    df = pd.DataFrame(
-        {
-            "Open":   [100.0,  92.0],
-            "High":   [105.0,  99.0],
-            "Low":    [  89.0,  90.0],
-            "Close":  [ 90.0,  95.0],   # last_close(95) < prev_open(100) → SELL 발생
-            "Volume": [ 10000, 12000],
-        },
-        index=idx,
+# === 3) 시뮬 엔진 더미 ===
+class FakeSimEngine:
+    """프로덕션 없이 동작 확인용으로만 사용. order_id는 임의 UUID 조각."""
+    def __init__(self, log_fn=None):
+        self._log = log_fn or (lambda m: print(m))
+        self._n = 0
+
+    def _oid(self, prefix):
+        self._n += 1
+        return f"{prefix}-{uuid.uuid4().hex[:8]}-{self._n}"
+
+    # --- BUY ---
+    def submit_market_buy(self, *, stk_cd, qty, parent_uid=None, strategy=""):
+        oid = self._oid("SIM-MKT-BUY")
+        self._log(f"  FakeSimEngine.submit_market_buy: {stk_cd} x{qty} → {oid}")
+        return oid
+
+    def submit_limit_buy(self, *, stk_cd, limit_price, qty, parent_uid=None, strategy=""):
+        oid = self._oid("SIM-LMT-BUY")
+        self._log(f"  FakeSimEngine.submit_limit_buy: {stk_cd} x{qty} @ {limit_price} → {oid}")
+        return oid
+
+    # --- SELL ---
+    def submit_market_sell(self, *, stk_cd, qty, parent_uid=None, strategy=""):
+        oid = self._oid("SIM-MKT-SELL")
+        self._log(f"  FakeSimEngine.submit_market_sell: {stk_cd} x{qty} → {oid}")
+        return oid
+
+    def submit_limit_sell(self, *, stk_cd, limit_price, qty, parent_uid=None, strategy=""):
+        oid = self._oid("SIM-LMT-SELL")
+        self._log(f"  FakeSimEngine.submit_limit_sell: {stk_cd} x{qty} @ {limit_price} → {oid}")
+        return oid
+
+    # --- 시세 이벤트 (옵션) ---
+    def on_market_update(self, event: dict):
+        self._log(f"  FakeSimEngine.on_market_update: {event}")
+
+# === 4) 모듈 스코프의 SimEngine 심기 ===
+# AutoTrader.__init__에서 trade_pro.auto_trader 모듈 스코프의 SimEngine 심볼을 참조하므로,
+# 여기서 테스트용 FakeSimEngine으로 치환한다.
+import trade_pro.auto_trader as at_mod
+at_mod.SimEngine = FakeSimEngine
+
+# === 5) 공용 로그 함수 ===
+def log(msg: str):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}")
+
+# === 6) 라이브 모드 더미 HTTP 패치 ===
+def make_live_stub_methods(trader: AutoTrader):
+    def _fn_kt10000_stub(token: str, data: dict, cont_yn: str = "N", next_key: str = "") -> dict:
+        log(f"  LIVE_STUB kt10000(BUY) called: token={bool(token)} data={data}")
+        return {
+            "status_code": 200,
+            "header": {"api-id": "kt10000", "cont-yn": cont_yn, "next-key": next_key},
+            "body": {"return_code": 0, "return_msg": "OK(STUB)"},
+        }
+
+    def _fn_kt10001_stub(token: str, data: dict, cont_yn: str = "N", next_key: str = "") -> dict:
+        log(f"  LIVE_STUB kt10001(SELL) called: token={bool(token)} data={data}")
+        return {
+            "status_code": 200,
+            "header": {"api-id": "kt10001", "cont-yn": cont_yn, "next-key": next_key},
+            "body": {"return_code": 0, "return_msg": "OK(STUB)"},
+        }
+
+    trader._fn_kt10000 = _fn_kt10000_stub  # type: ignore
+    trader._fn_kt10001 = _fn_kt10001_stub  # type: ignore
+
+# === 7) 스모크 시나리오 ===
+async def smoke_simulation_mode():
+    print("\n===== A) SIMULATION MODE =====")
+    settings = TradeSettings(
+        master_enable=True,
+        auto_buy=True, auto_sell=True,
+        order_type="market",
+        simulation_mode=True,      # 시뮬 강제 On
     )
-    return df
-
-# --- 2) on_signal 콜백: 신호가 오면 콘솔에 찍기 -----------------------------
-def print_signal(sig: TradeSignal):
-    print(
-        f"SIG | side={sig.side} symbol={sig.symbol} ts={sig.ts} "
-        f"price={sig.price} reason={sig.reason} source={getattr(sig,'source','bar')}"
+    trader = AutoTrader(
+        settings=settings,
+        ladder=LadderSettings(unit_amount=100_000, num_slices=1),  # 단일 BUY를 ladder(1슬라이스)로
+        token_provider=lambda: "FAKE_TOKEN",   # 시뮬에서는 사용되지 않음
+        log=log,
+        bridge=DummyBridge(),
     )
 
-# --- 3) 메인 시나리오 -------------------------------------------------------
+    # 1) 단일 BUY (시장가) → handle_signal로 진입하면 ladder(1슬라이스) 경로를 탑니다.
+    buy_result = await trader.handle_signal({
+        "signal": "BUY",
+        "data": {
+            "dmst_stex_tp": "KRX",
+            "stk_cd": "005930",
+            "ord_qty": "10",     # ladder 경로에서는 qty 대신 unit_amount/price로 계산
+            "ord_uv": "72000",   # 현재가로 사용됨
+            "trde_tp": "3",      # 시장가
+        }
+    })
+    print("→ BUY(sim) result:", buy_result)
+
+    # 2) 단일 SELL (지정가) → _handle_simple_sell 경로
+    sell_result = await trader.handle_signal({
+        "signal": "SELL",
+        "data": {
+            "dmst_stex_tp": "KRX",
+            "stk_cd": "005930",
+            "ord_qty": "3",
+            "ord_uv": "72500",
+            "trde_tp": "0",      # 지정가
+        }
+    })
+    print("→ SELL(sim) result:", sell_result)
+
+async def smoke_live_mode():
+    print("\n===== B) LIVE MODE (HTTP STUB) =====")
+    settings = TradeSettings(
+        master_enable=True,
+        auto_buy=True, auto_sell=True,
+        order_type="limit",
+        simulation_mode=False,    # 라이브 강제
+    )
+    trader = AutoTrader(
+        settings=settings,
+        ladder=LadderSettings(unit_amount=200_000, num_slices=1),
+        token_provider=lambda: "FAKE_TOKEN",   # 더미 토큰
+        base_url_provider=lambda: "https://example.invalid",  # 실제 호출 안 함(스텁으로 대체)
+        log=log,
+        bridge=DummyBridge(),
+        use_mock=True,            # 로깅 메시지만 다름
+    )
+    # HTTP 호출 스텁 주입
+    make_live_stub_methods(trader)
+
+    # 1) 단일 BUY (지정가) → ladder(1슬라이스) + kt10000 스텁
+    buy_result = await trader.handle_signal({
+        "signal": "BUY",
+        "data": {
+            "dmst_stex_tp": "KRX",
+            "stk_cd": "000660",
+            "ord_qty": "7",
+            "ord_uv": "145000",
+            "trde_tp": "0",
+        }
+    })
+    print("→ BUY(live-stub) result:", buy_result)
+
+    # 2) 단일 SELL (시장가) → _handle_simple_sell + kt10001 스텁
+    sell_result = await trader.handle_signal({
+        "signal": "SELL",
+        "data": {
+            "dmst_stex_tp": "KRX",
+            "stk_cd": "000660",
+            "ord_qty": "4",
+            "ord_uv": "0",
+            "trde_tp": "3",   # 시장가
+        }
+    })
+    print("→ SELL(live-stub) result:", sell_result)
+
 async def main():
-    # 결과 폴더 준비
-    out_dir = Path("tmp_results")
-    out_dir.mkdir(exist_ok=True)
-
-    # 레코더 & 더미 게터
-    rec = DailyResultsRecorder(str(out_dir))
-    dg = FakeDetailGetter()
-
-    mon = ExitEntryMonitor(
-        detail_getter=dg,
-        on_signal=print_signal,
-        # 스모크 테스트에서는 5분봉 마감창 제약을 풀어 바로 평가되게 함
-        bar_close_window_start_sec=0,
-        bar_close_window_end_sec=59,
-        # 캐시를 써서 확실히 동작시키기 위해 서버 pull은 끄고, 아래에서 수동 주입
-        disable_server_pull=True,
-        results_recorder=rec,
-    )
-
-    # 005930(삼성전자)로 테스트
-    symbol = "073010"
-    df5 = make_test_5m_df()
-    mon.ingest_bars(symbol, "5m", df5)  # 캐시에 주입
-
-    # 3-1) 기존 경로: 봉 평가 → BUY/SELL 신호 발생
-    await mon._check_symbol(symbol)
-
-    # 3-2) (선택) 조건검색 즉시 트리거 경로
-    await mon.on_condition_detected(symbol, condition_name="급등감지")
-
-    # 3-3) JSONL 직접 기록 경로 확인
-    rec.record_signal(
-        TradeSignal("BUY", symbol, pd.Timestamp.now(tz="Asia/Seoul"), 70000, "manual smoke")
-    )
-
-    # 결과 파일 확인
-    today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
-    fpath = out_dir / f"system_results_{today}.jsonl"
-    print(f"\n== JSONL saved: {fpath} ==")
-    if fpath.exists():
-        print(fpath.read_text(encoding="utf-8"))
-    else:
-        print("결과 파일이 생성되지 않았습니다.")
+    await smoke_simulation_mode()
+    await smoke_live_mode()
+    print("\n✅ Smoke tests finished (no real network I/O). Check logs/trades/*.csv for records.")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -1,4 +1,3 @@
-# trade_pro/auto_trader.py
 from __future__ import annotations
 
 import asyncio
@@ -34,7 +33,7 @@ except Exception as _e:  # pragma: no cover
 # =========================
 @dataclass
 class TradeSettings:
-    # Legacy defaults (안전)
+    # Legacy defaults (안전)  ← 필드는 유지(하위호환), 로직에서는 master_enable 미사용
     master_enable: bool = False
     auto_buy: bool = True
     auto_sell: bool = False
@@ -282,9 +281,8 @@ class AutoTrader:
 
     # ---------- Public dispatcher ----------
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not getattr(self.settings, "master_enable", True):
-            self._log("⏹ master_enable=False: 주문 중단")
-            return None
+        # 🔁 master_enable 글로벌 차단은 더 이상 사용하지 않음(하위호환 필드는 유지)
+        # 실제 주문 차단은 auto_buy/auto_sell 각각에서 수행
 
         if payload.get("ladder_buy"):
             return await self._handle_ladder_buy(payload)
@@ -332,11 +330,25 @@ class AutoTrader:
                 self._log("🚫 on_signal: 유효하지 않은 심볼/가격")
                 return
 
-            self.bridge.log.emit(f"📶 on_signal: {side} {symbol} @ {last_price}")
+            # 로그(bridge가 있을 때만)
+            try:
+                if self.bridge and hasattr(self.bridge, "log"):
+                    self.bridge.log.emit(f"📶 on_signal: {side} {symbol} @ {last_price}")
+            except Exception:
+                pass
+
             if side == "BUY":
+                # 🔒 auto_buy 토글 존중 (master_enable 미사용)
+                if not self.settings.auto_buy:
+                    self._log("⛔ on_signal BUY 차단: auto_buy=False")
+                    return
                 payload = {"stk_cd": symbol, "dmst_stex_tp": "KRX", "cur_price": last_price}
                 asyncio.create_task(self._handle_ladder_buy(payload))
             elif side == "SELL":
+                # 🔒 auto_sell 토글 존중 (master_enable 미사용)
+                if not self.settings.auto_sell:
+                    self._log("⛔ on_signal SELL 차단: auto_sell=False")
+                    return
                 data = {"dmst_stex_tp": "KRX", "stk_cd": symbol, "ord_qty": "1", "ord_uv": str(last_price), "trde_tp": "0", "cond_uv": ""}
                 asyncio.create_task(self._handle_simple_sell(data))
             else:
@@ -347,8 +359,84 @@ class AutoTrader:
                 })
         return _handler
 
-    def make_on_signal(self, bridge: Optional[object] = None) -> Callable[[Any], None]:
-        return self.make_on_signal_legacy(bridge)
+    def make_on_signal(self, bridge: Optional[object] = None) -> Callable[[object], None]:
+        """
+        ExitEntryMonitor → on_signal 에 주입할 핸들러 팩토리.
+        역할:
+        - TradeSignal 을 AutoTrader.handle_signal 의 payload 로 변환
+        - 주문 실행은 handle_signal 단일 경로로만 위임 (역할 중복 제거)
+        """
+        if bridge is not None:
+            self.bridge = bridge
+
+        def _handler(sig_obj):
+            try:
+                side = str(getattr(sig_obj, "side", "")).upper()
+                symbol = str(getattr(sig_obj, "symbol", "")).strip()
+                price_attr = getattr(sig_obj, "price", 0)
+                last_price = int(float(price_attr)) if price_attr is not None else 0
+            except Exception:
+                return
+
+            if not symbol or last_price <= 0:
+                self._log("🚫 on_signal: 유효하지 않은 심볼/가격")
+                return
+
+            # 브리지 로그(선택)
+            try:
+                if self.bridge and hasattr(self.bridge, "log"):
+                    self.bridge.log.emit(f"📶 on_signal: {side} {symbol} @ {last_price}")
+            except Exception:
+                pass
+
+            # --- TradeSignal -> handle_signal payload 변환 ---
+            payload = {"signal": side, "data": {}}
+
+            if side == "BUY":
+                # handle_signal(BUY)는 ladder_like로 변환하므로 현재가만 있으면 됨
+                payload["data"] = {
+                    "stk_cd": symbol,
+                    "dmst_stex_tp": "KRX",
+                    "ord_uv": str(last_price),  # handle_signal 내부에서 cur_price로 사용
+                }
+
+            elif side == "SELL":
+                # SELL은 수량이 필요. PositionManager 있으면 전량/가용수량 사용, 없으면 1로 폴백
+                qty = 1
+                if self.position_mgr:
+                    try:
+                        q = int(self.position_mgr.get_qty(symbol))
+                        qty = max(1, q)
+                    except Exception:
+                        qty = 1
+
+                trde_tp = "3" if self.settings.order_type == "market" else "0"  # 시장/지정
+                payload["data"] = {
+                    "dmst_stex_tp": "KRX",
+                    "stk_cd": symbol,
+                    "ord_qty": str(qty),
+                    "ord_uv": str(last_price),  # 지정가일 때 사용, 시장가면 handle에서 무시 가능
+                    "trde_tp": trde_tp,
+                    "cond_uv": "",
+                }
+            else:
+                # 알 수 없는 사이드면 이벤트만 남기고 종료
+                self._emit_order_event({
+                    "type": "ORDER_EVENT","action": None,"symbol": symbol,
+                    "price": 0,"qty": 0,"status": f"UNHANDLED_SIDE:{side}",
+                    "ts": datetime.now(timezone.utc).isoformat(),"extra": {},
+                })
+                return
+
+            # --- 단일 경로로 주문 실행 위임 ---
+            try:
+                # handle_signal 은 async 이므로 백그라운드 태스크로 디스패치
+                asyncio.create_task(self.handle_signal(payload))
+            except RuntimeError:
+                # 이벤트 루프가 없는 환경이면 스레드에서 실행
+                threading.Thread(target=lambda: asyncio.run(self.handle_signal(payload)), daemon=True).start()
+
+        return _handler
 
     # ---------- Market feed (simulation) ----------
     def feed_market_event(self, event: Dict[str, Any]):
@@ -607,8 +695,9 @@ class AutoTrader:
     # Simple SELL
     # =========================
     async def _handle_simple_sell(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not self.settings.auto_sell or not self.settings.master_enable:
-            self._log("⛔ auto_sell=False 또는 master_enable=False: 매도 차단")
+        # 🔒 master_enable 제거 → auto_sell만 가드
+        if not self.settings.auto_sell:
+            self._log("⛔ auto_sell=False: 매도 차단")
             return None
 
         stk_cd = str(payload.get("stk_cd") or "").strip()
@@ -720,8 +809,9 @@ class AutoTrader:
     # Ladder SELL (above current)
     # =========================
     async def _handle_ladder_sell(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not self.settings.auto_sell or not self.settings.master_enable:
-            self._log("⛔ auto_sell=False 또는 master_enable=False: 라더 매도 차단"); return None
+        # 🔒 master_enable 제거 → auto_sell만 가드
+        if not self.settings.auto_sell:
+            self._log("⛔ auto_sell=False: 라더 매도 차단"); return None
 
         stk_cd = str(payload.get("stk_cd") or "").strip()
         cur_price = int(payload.get("cur_price") or 0)
@@ -878,8 +968,9 @@ class AutoTrader:
         unit_amount: int | None = None,
         order_type: Literal["limit", "market"] | None = None,
     ) -> Optional[Dict[str, Any]]:
-        if not self.settings.master_enable or not self.settings.auto_buy:
-            self._log("⛔ [immediate] master_enable/auto_buy 비활성 → 매수 차단")
+        # 🔒 master_enable 제거 → auto_buy만 가드
+        if not self.settings.auto_buy:
+            self._log("⛔ [immediate] auto_buy 비활성 → 매수 차단")
             return None
 
         try:

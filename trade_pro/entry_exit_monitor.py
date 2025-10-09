@@ -5,7 +5,7 @@ import asyncio
 from asyncio import run_coroutine_threadsafe
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Tuple, Literal
 
 import pandas as pd
 import json
@@ -27,36 +27,6 @@ def _code6(s: str) -> str:
     d = "".join(c for c in str(s) if c.isdigit())
     return d[-6:].zfill(6)
 
-
-# ============================================================================
-# 결과 집계 & 저장 유틸 (일별 JSONL)
-# ============================================================================
-class DailyResultsRecorder:
-    def __init__(self, out_dir: str = "data/results", tz: str = "Asia/Seoul"):
-        self.out_dir = Path(out_dir)
-        self.tz = tz
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
-
-    def _path_for_today(self) -> Path:
-        now = pd.Timestamp.now(tz=self.tz)
-        return self.out_dir / f"system_results_{now.strftime('%Y-%m-%d')}.jsonl"
-
-    def record_signal(self, sig: "TradeSignal"):
-        payload = {
-            "ts": sig.ts.isoformat(),
-            "side": sig.side,
-            "symbol": sig.symbol,
-            "price": sig.price,
-            "reason": sig.reason,
-            "source": getattr(sig, "source", "bar"),
-            "condition_name": getattr(sig, "condition_name", ""),
-            "return_msg": getattr(sig, "return_msg", None), 
-        }
-        with self._lock:
-            p = self._path_for_today()
-            with p.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 # ============================================================================
@@ -81,6 +51,11 @@ class MonitorCustom:
     auto_buy: bool = True                # '매수' 체크
     auto_sell: bool = False              # '매도' 체크
     allow_intrabar_condition_triggers: bool = True  # 봉마감 전 즉시 트리거 허용
+
+    # 🔵 추가: Pro 토글
+    # 기본값을 buy_pro=False, sell_pro=True 로 두어 기존 동작과 100% 호환
+    buy_pro: bool = False               # Buy-Pro ON/OFF (조건 즉시 트리거에서 룰 체크)
+    sell_pro: bool = True               # Sell-Pro ON/OFF (주기 평가/조건 즉시 트리거에서 룰 체크)
 
 
 # ============================================================================
@@ -109,26 +84,34 @@ class BuyRules:
 
 class SellRules:
     @staticmethod
-    def sell_if_close_below_prev_open(df5: pd.DataFrame) -> pd.Series:
+    def profit3_and_prev_candle_pattern(df5: pd.DataFrame, avg_buy: float) -> bool:
         """
-        조건:
-        - 직전 봉: 음봉 (prev.Close < prev.Open)
-        - 현재 봉: 종가 <= 직전 봉 종가
+        조건(모두 만족 시 True):
+          1) 현재가(현재 5분봉 종가) ≥ 평균매수가 * 1.03  (매수가 대비 +3% 이상)
+          2) 이전봉 패턴에 따라:
+             - 이전봉이 '음봉'(prev.Close < prev.Open) 이면:  현재 종가 < 이전봉 종가
+             - 이전봉이 '양봉'(prev.Close > prev.Open) 이면:  현재 종가 < 이전봉 시가
+             - (도지 등 중립이면 매도 X)
         """
-        if df5 is None or df5.empty:
-            return pd.Series(dtype=bool)
+        if df5 is None or len(df5) < 2 or pd.isna(avg_buy) or avg_buy <= 0:
+            return False
 
-        prev = df5.shift(1)
+        last_close = float(df5["Close"].iloc[-1])
+        prev_open  = float(df5["Open"].iloc[-2])
+        prev_close = float(df5["Close"].iloc[-2])
 
-        cond_prev_bear = prev["Close"] < prev["Open"]
-        cond_close_lte_prev_close = df5["Close"] <= prev["Close"]
+        # 1) +3% 이상
+        if last_close < avg_buy * 1.03:
+            return False
 
-        cond = cond_prev_bear & cond_close_lte_prev_close
-
-        if len(cond) > 0:
-            cond.iloc[0] = False  # 첫 행은 직전 봉이 없으므로 False
-
-        return cond
+        # 2) 이전봉 패턴별 분기
+        if prev_close < prev_open:  # 이전봉 음봉
+            return last_close < prev_close
+        elif prev_close > prev_open:  # 이전봉 양봉
+            return last_close < prev_open
+        else:
+            # 도지/무변동 등은 보수적으로 패스
+            return False
 
 class TimeRules:
     @staticmethod
@@ -151,6 +134,8 @@ class DetailGetter(Protocol):
 # ============================================================================
 # 모니터러 본체
 # ============================================================================
+RuleFn = Callable[[Dict[str, object]], bool]
+
 class ExitEntryMonitor:
     """
     - 5분봉 종가 기준으로 매수/매도 신호 판단
@@ -158,9 +143,13 @@ class ExitEntryMonitor:
       ↳ get_points_fn(symbol, "30m", 1) 로 조회
     - 동일 봉 중복 트리거 방지
     - 봉 마감 구간에서만 평가
-    - JSON 기록
     - 🔧 캐시 우선 설계: ingest_bars()로 들어온 DF를 먼저 활용, 없을 때만 pull
     - 🔔 조건검색(편입) 즉시 트리거 → TradeSignal로 통합 발행
+    - 🔵 Pro 분기:
+        * Buy-Pro ON  → 조건 즉시 트리거 시 buy_rule_fn 통과 시 발행 (없으면 True)
+        * Buy-Pro OFF → 조건 즉시 트리거 시 즉시 발행(이전과 동일)
+        * Sell-Pro ON → 내부 매도전략/혹은 sell_rule_fn 통과 시 발행(없으면 기존 전략)
+        * Sell-Pro OFF→ 내부 매도전략 발행 중지(주기 평가), 조건 즉시 트리거 시 즉시 발행
     """
     def __init__(
         self,
@@ -172,13 +161,19 @@ class ExitEntryMonitor:
         tz: str = "Asia/Seoul",
         poll_interval_sec: int = 20,
         on_signal: Optional[Callable[[TradeSignal], None]] = None,
-        results_recorder: Optional[DailyResultsRecorder] = None,
         bridge: Optional[object] = None,
         get_points_fn: Callable[[str, str, int], List[dict]] = _get_points,
         bar_close_window_start_sec: int = 5,
         bar_close_window_end_sec: int = 30,
         disable_server_pull: bool = False,   # 💡 캐시만 사용하고 싶을 때 True
         custom: Optional[MonitorCustom] = None,  # 💡 고급 커스텀
+        position_mgr: Optional[object] = None,   # 💡 PM 주입(평단 조회 전담)
+
+        # 🔵 Pro 룰 주입(선택). 미제공 시 기본 동작:
+        #  - BUY: True 반환(= Pro ON이어도 기존 즉시 발행과 동일)
+        #  - SELL: 기존 내부 전략(SellRules...)을 사용
+        buy_rule_fn: Optional[RuleFn] = None,
+        sell_rule_fn: Optional[RuleFn] = None,
     ):
         self.detail_getter = detail_getter
         self.bridge = bridge
@@ -191,9 +186,18 @@ class ExitEntryMonitor:
         self.tz = tz
         self.poll_interval_sec = poll_interval_sec
         self.on_signal = on_signal or (lambda sig: logger.info(f"[SIGNAL] {sig}"))
-        self.results_recorder = results_recorder
         self.disable_server_pull = bool(disable_server_pull)
         self.custom = custom or MonitorCustom()
+        self.position_mgr = position_mgr  # ✅ PositionManager 주입
+
+        # 🔵 Pro 룰(없으면 기본 동작)
+        self._buy_rule_fn: RuleFn = buy_rule_fn or (lambda ctx: True)
+        # SELL 기본 룰은 내부 전략을 디폴트로 묶어둔다.
+        self._sell_rule_fn: RuleFn = sell_rule_fn or (lambda ctx: bool(
+            SellRules.profit3_and_prev_candle_pattern(ctx["df5"], float(ctx["avg_buy"]))  # type: ignore[index]
+            if (ctx.get("df5") is not None and ctx.get("avg_buy") is not None)
+            else False
+        ))
 
         # 파라미터 검증
         if not (0 <= bar_close_window_start_sec <= bar_close_window_end_sec <= 59):
@@ -218,7 +222,7 @@ class ExitEntryMonitor:
             logger.warning("[ExitEntryMonitor] macd_bus connect failed: %s", e)
 
     # ----------------------------------------------------------------------
-    # 고급 커스텀 설정 업데이트
+    # Pro 설정/룰 업데이트 (옵션)
     # ----------------------------------------------------------------------
     def set_custom(
         self,
@@ -227,6 +231,8 @@ class ExitEntryMonitor:
         auto_buy: bool | None = None,
         auto_sell: bool | None = None,
         allow_intrabar_condition_triggers: bool | None = None,
+        buy_pro: bool | None = None,
+        sell_pro: bool | None = None,
     ):
         if enabled is not None:
             self.custom.enabled = bool(enabled)
@@ -236,6 +242,16 @@ class ExitEntryMonitor:
             self.custom.auto_sell = bool(auto_sell)
         if allow_intrabar_condition_triggers is not None:
             self.custom.allow_intrabar_condition_triggers = bool(allow_intrabar_condition_triggers)
+        if buy_pro is not None:
+            self.custom.buy_pro = bool(buy_pro)
+        if sell_pro is not None:
+            self.custom.sell_pro = bool(sell_pro)
+
+    def set_rules(self, *, buy_rule_fn: Optional[RuleFn] = None, sell_rule_fn: Optional[RuleFn] = None):
+        if buy_rule_fn is not None:
+            self._buy_rule_fn = buy_rule_fn
+        if sell_rule_fn is not None:
+            self._sell_rule_fn = sell_rule_fn
 
     # ----------------------------------------------------------------------
     # 내부 헬퍼
@@ -406,6 +422,27 @@ class ExitEntryMonitor:
         return None
 
     # ----------------------------------------------------------------------
+    # PM에서 평균매수가 조회
+    # ----------------------------------------------------------------------
+    def _get_avg_buy(self, symbol: str) -> Optional[float]:
+        """
+        PositionManager의 공식 API(get_avg_buy)를 통해 평균매수가를 조회한다.
+        - PM이 없거나 메서드가 없으면 None
+        """
+        pm = getattr(self, "position_mgr", None)
+        if not pm:
+            return None
+        fn = getattr(pm, "get_avg_buy", None)
+        if not callable(fn):
+            return None
+        try:
+            sym = _code6(symbol)
+            v = fn(sym)
+            return float(v) if (v is not None and float(v) > 0) else None
+        except Exception:
+            return None
+
+    # ----------------------------------------------------------------------
     # MACD 30m 필터
     # ----------------------------------------------------------------------
     def _macd30_pass(self, symbol: str, ref_ts: pd.Timestamp) -> bool:
@@ -469,15 +506,9 @@ class ExitEntryMonitor:
         except Exception:
             logger.exception("[ExitEntryMonitor] on_signal handler error")
 
-        # 2) JSON 기록
-        if self.results_recorder:
-            try:
-                self.results_recorder.record_signal(sig_obj)
-            except Exception as e:
-                logger.exception(f"[ExitEntryMonitor] 기록 실패: {e}")
 
     # ----------------------------------------------------------------------
-    # 조건검색 '편입(I)' 즉시 트리거 → TradeSignal 통합 발행
+    # 조건검색 '편입(I)' 즉시 트리거 → TradeSignal 통합 발행 (+ Pro 분기)
     # ----------------------------------------------------------------------
     async def on_condition_detected(
         self,
@@ -492,6 +523,11 @@ class ExitEntryMonitor:
         - custom.enabled & allow_intrabar_condition_triggers 일 때만 즉시 평가/발행
         - auto_buy/auto_sell 토글에 따라 BUY/SELL 선택
         - 가격은 5분봉 캐시 또는 pull 결과의 마지막 종가 사용
+        - 🔵 Pro 분기:
+            * Buy-Pro ON  → buy_rule_fn 통과 시 발행(미제공 시 True)
+            * Buy-Pro OFF → 즉시 발행(기존과 동일)
+            * Sell-Pro ON → sell_rule_fn(미제공 시 내부 전략) 통과 시 발행
+            * Sell-Pro OFF→ 즉시 발행(기존과 동일)
         """
         try:
             # 추적 목록에는 추가해 둔다(이후 정규루프에서도 평가 가능)
@@ -517,7 +553,7 @@ class ExitEntryMonitor:
                 return
 
             # 사이드 결정
-            side = None
+            side: Optional[Literal["BUY","SELL"]] = None
             if self.custom.auto_buy:
                 side = "BUY"
             elif self.custom.auto_sell:
@@ -527,41 +563,68 @@ class ExitEntryMonitor:
                 logger.debug(f"[Monitor] {sym} 즉시트리거: side 토글 없음 → skip")
                 return
 
-            sig = TradeSignal(
-                side=side,
-                symbol=sym,
-                ts=ref_ts,
-                price=last_close,
-                reason=reason,
-                source=source,
-                condition_name=condition_name,
-                extra={"immediate": True},
-            )
+            # 🔵 Pro 룰 분기
+            if side == "BUY":
+                if self.custom.buy_pro:
+                    ctx = {
+                        "side": "BUY",
+                        "symbol": sym,
+                        "price": last_close,
+                        "df5": df5,
+                        "avg_buy": self._get_avg_buy(sym),
+                        "ts": ref_ts,
+                        "source": source,
+                        "condition_name": condition_name,
+                    }
+                    try:
+                        if not bool(self._buy_rule_fn(ctx)):
+                            logger.debug(f"[Monitor] BUY-Pro rule fail → skip ({sym})")
+                            return
+                    except Exception as e:
+                        # 룰 오류 시 기본 True로 간주하여 기존 동작 보존
+                        logger.warning(f"[Monitor] BUY rule error: {e} → pass-through")
+                # Pro OFF → 그대로 발행
+                self._emit("BUY", sym, ref_ts, last_close, reason)
 
-            # 외부 콜백(오토트레이더 on_signal 등)
-            try:
-                self.on_signal(sig)
-            except Exception:
-                logger.exception("[ExitEntryMonitor] on_signal handler error (immediate)")
+            else:  # SELL
+                if self.custom.sell_pro:
+                    avg_buy = self._get_avg_buy(sym)
+                    ctx = {
+                        "side": "SELL",
+                        "symbol": sym,
+                        "price": last_close,
+                        "df5": df5,
+                        "avg_buy": avg_buy,
+                        "ts": ref_ts,
+                        "source": source,
+                        "condition_name": condition_name,
+                    }
+                    try:
+                        ok = bool(self._sell_rule_fn(ctx))
+                    except Exception as e:
+                        logger.warning(f"[Monitor] SELL rule error: {e} → treat as False")
+                        ok = False
+                    if not ok:
+                        logger.debug(f"[Monitor] SELL-Pro rule fail → skip ({sym})")
+                        return
+                    # 통과 시 발행
+                    self._emit("SELL", sym, ref_ts, last_close, reason)
+                else:
+                    # Pro OFF → 즉시 발행(기존과 동일)
+                    self._emit("SELL", sym, ref_ts, last_close, reason)
 
-            # 로그/저장
+            # 로그
             try:
                 if self.bridge and hasattr(self.bridge, "log"):
                     self.bridge.log.emit(f"📊 즉시신호 [{side}] {sym} @ {last_close} ({condition_name})")
             except Exception:
                 pass
 
-            if self.results_recorder:
-                try:
-                    self.results_recorder.record_signal(sig)
-                except Exception as e:
-                    logger.exception(f"[ExitEntryMonitor] 기록 실패(immediate): {e}")
-
         except Exception:
             logger.exception(f"[Monitor] on_condition_detected error: {symbol}")
 
     # ----------------------------------------------------------------------
-    # 심볼 평가
+    # 심볼 평가 (SELL 전략 적용)  + Pro 분기
     # ----------------------------------------------------------------------
     async def _check_symbol(self, symbol: str):
         try:
@@ -589,35 +652,56 @@ class ExitEntryMonitor:
                 logger.debug(f"[ExitEntryMonitor] {sym} skip (not in 5m close window)")
                 return
 
-            last_close = float(df5["Close"].iloc[-1])
-            prev_open  = float(df5["Open"].iloc[-2])
-
-            # 3) NaN 가드
-            if pd.isna(last_close) or pd.isna(prev_open):
-                logger.debug(f"[ExitEntryMonitor] {sym} NaN in last_close/prev_open -> skip")
-                return
-
-            # 4) MACD30 필터
-            macd_ok = (not self.use_macd30_filter) or self._macd30_pass(sym, ref_ts)
-            if not macd_ok:
+            # 3) MACD30 필터 (옵션)
+            if not self._macd30_pass(sym, ref_ts):
                 logger.debug(f"[ExitEntryMonitor] {sym} skip: MACD30 filter")
                 return
 
-            # ----- SELL -----
-            if last_close < prev_open:
-                reason = "SELL: Close < prev Open" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
+            # 4) 평균매수가 조회(PM)
+            avg_buy = self._get_avg_buy(sym)
+            if avg_buy is None:
+                logger.debug(f"[ExitEntryMonitor] {sym} avg_buy unavailable → skip")
+                return
+
+            last_close = float(df5["Close"].iloc[-1])
+
+            # 🔵 Pro 분기
+            if not self.custom.auto_sell:
+                logger.debug(f"[ExitEntryMonitor] {sym} auto_sell=False → skip")
+                return
+
+            if not self.custom.sell_pro:
+                # Sell-Pro OFF → 주기 평가로는 매도 신호를 발생시키지 않음
+                # (사용자가 Pro를 끘 경우 내부 전략 매도를 막음. 기존 기본값 True라 변화 없음)
+                logger.debug(f"[ExitEntryMonitor] {sym} sell_pro=False → periodic SELL suppressed")
+                return
+
+            # Sell-Pro ON → 기존 전략(또는 외부 sell_rule_fn) 체크
+            ctx = {
+                "side": "SELL",
+                "symbol": sym,
+                "price": last_close,
+                "df5": df5,
+                "avg_buy": avg_buy,
+                "ts": ref_ts,
+                "source": "bar",
+            }
+            try:
+                should_sell = bool(self._sell_rule_fn(ctx))
+            except Exception as e:
+                logger.warning(f"[ExitEntryMonitor] sell_rule error: {e} → treat as False")
+                should_sell = False
+
+            if should_sell:
+                reason = (
+                    f"SELL: +3% vs avg({avg_buy:.2f}) & prev-candle pattern"
+                    + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
+                )
                 self._emit("SELL", sym, ref_ts, last_close, reason)
             else:
-                logger.debug(f"[ExitEntryMonitor] {sym} no SELL (last={last_close:.2f} prevOpen={prev_open:.2f})")
+                logger.debug(f"[ExitEntryMonitor] {sym} no SELL (last={last_close:.2f}, avg={avg_buy:.2f})")
 
-            # ----- BUY -----
-            # buy_series = BuyRules.buy_if_5m_break_prev_bear_high(df5)
-            # will_buy = bool(buy_series.iloc[-1]) if len(buy_series) else False
-            # if will_buy:
-            reason = "BUY: Bull breaks prev bear High" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
-            self._emit("BUY", sym, ref_ts, last_close, reason)
-            # else:
-            #    logger.debug(f"[ExitEntryMonitor] {sym} no BUY (rule/bool={will_buy})")
+            # (참고) BUY 전략은 본 파일 범위를 벗어나므로 여기서 발생시키지 않음.
 
         except Exception:
             logger.exception(f"[ExitEntryMonitor] _check_symbol error: {symbol}")
