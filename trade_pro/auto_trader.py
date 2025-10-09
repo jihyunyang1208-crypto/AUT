@@ -58,17 +58,15 @@ class LadderSettings:
 # Logger (CSV + JSONL)
 # =========================
 class TradeLogger:
-    def __init__(
-        self,
-        log_dir: str = "logs/trades",
-        file_prefix: str = "orders",
-        log_fn: Optional[Callable[[str], None]] = None,
-    ):
+    def __init__(self, log_dir: str = "logs/trades", file_prefix: str = "orders",
+                 log_fn: Optional[Callable[[str], None]] = None,
+                 slim: bool = False):  # ★ 추가
         self.log_dir = Path(log_dir)
         self.file_prefix = file_prefix
         self._log = log_fn or (lambda m: None)
         self._lock = threading.Lock()
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._slim = bool(slim)  # ★ 추가
 
     def _paths(self) -> Tuple[Path, Path]:
         day = datetime.now().strftime("%Y-%m-%d")
@@ -103,71 +101,95 @@ class TradeLogger:
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow([
-                    # --- 기본 정보 ---
-                    "ts","session_id","uid","strategy","action","stk_cd","dmst_stex_tp",
-                    "cur_price","limit_price","qty","trde_tp",
-                    "tick_mode","tick_used",
-                    "slice_idx","slice_total","unit_amount","notional",
-                    "duration_ms","status_code",
+                if self._slim:
+                    # ★ 전략 분석용 최소 스키마
+                    w.writerow([
+                        "ts","strategy","action","stk_cd","order_type","price","qty",
+                        "status","resp_code","resp_msg"
+                    ])
+                else:
+                    # 기존 풀 스키마(변경 없음)
+                    w.writerow([
+                        "ts","session_id","uid","strategy","action","stk_cd","dmst_stex_tp",
+                        "cur_price","limit_price","qty","trde_tp",
+                        "tick_mode","tick_used",
+                        "slice_idx","slice_total","unit_amount","notional",
+                        "duration_ms","status_code",
+                        "status_label","success","order_id","order_id_hint","error_msg","note",
+                        "resp_status_code","resp_api_id","resp_cont_yn","resp_next_key",
+                        "resp_return_code","resp_return_msg",
+                    ])
 
-                    # --- 결과/상태 ---
-                    "status_label","success","order_id","order_id_hint","error_msg","note",
-
-                    # --- response (flatten) ---
-                    "resp_status_code","resp_api_id","resp_cont_yn","resp_next_key",
-                    "resp_return_code","resp_return_msg",
-                ])
 
     def write_order_record(self, record: Dict[str, Any]):
+        """
+        전략 분석용 슬림 버전: 핵심 정보만 CSV/JSONL 기록
+        """
         csv_path, jsonl_path = self._paths()
         with self._lock:
-            self._ensure_csv_header(csv_path)
+            # 새 헤더: 최소 컬럼
+            if not csv_path.exists() or csv_path.stat().st_size == 0:
+                with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow([
+                        "ts","strategy","action","stk_cd",
+                        "order_type","price","qty",
+                        "status","resp_code","resp_msg"
+                    ])
 
             ts = record.get("ts") or datetime.now(timezone.utc).isoformat()
-            resp_flat = self._flatten_response(record.get("response"))
+
+            # response body에서 리턴 코드/메시지 추출
+            resp = record.get("response") or {}
+            body = resp.get("body") or {}
+            return_code = body.get("return_code")
+            return_msg = body.get("return_msg", "")
+
+            # 주문 타입과 가격 결정
+            trde_tp = str(record.get("trde_tp") or "")
+            order_type = "market" if trde_tp == "3" else (
+                "limit" if trde_tp == "0" else trde_tp
+            )
+            price = record.get("limit_price") if order_type == "limit" else ""
+
+            # 상태 문자열
+            status = record.get("status_label") or (
+                f"HTTP_{record.get('status_code')}" if record.get("status_code") else ""
+            )
 
             row = [
                 ts,
-                record.get("session_id"),
-                record.get("uid"),
                 record.get("strategy"),
                 record.get("action"),
                 record.get("stk_cd"),
-                record.get("dmst_stex_tp"),
-                record.get("cur_price"),
-                record.get("limit_price"),
+                order_type,
+                price,
                 record.get("qty"),
-                record.get("trde_tp"),
-                record.get("tick_mode"),
-                record.get("tick_used"),
-                record.get("slice_idx"),
-                record.get("slice_total"),
-                record.get("unit_amount"),
-                record.get("notional"),
-                record.get("duration_ms"),
-                record.get("status_code"),
-
-                record.get("status_label"),
-                record.get("success"),
-                record.get("order_id"),
-                record.get("order_id_hint"),
-                record.get("error_msg"),
-                record.get("note"),
-
-                resp_flat["resp_status_code"],
-                resp_flat["resp_api_id"],
-                resp_flat["resp_cont_yn"],
-                resp_flat["resp_next_key"],
-                resp_flat["resp_return_code"],
-                resp_flat["resp_return_msg"],
+                status,
+                return_code,
+                return_msg,
             ]
 
             with open(csv_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(row)
 
+            # JSONL도 최소 필드만 기록
+            slim_json = {
+                "ts": ts,
+                "strategy": record.get("strategy"),
+                "action": record.get("action"),
+                "stk_cd": record.get("stk_cd"),
+                "order_type": order_type,
+                "price": price,
+                "qty": record.get("qty"),
+                "status": status,
+                "resp_code": return_code,
+                "resp_msg": return_msg,
+            }
             with open(jsonl_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f.write(json.dumps(slim_json, ensure_ascii=False) + "\n")
+
+
 
     # Legacy-compatible alias
     def log(self, record: Dict[str, Any], response: Optional[Dict[str, Any]] = None, note: str = ""):
@@ -457,6 +479,7 @@ class AutoTrader:
                         break
                     qty = min(qty, remaining_cap)
                     remaining_cap -= qty
+
                 if qty <= 0:
                     self._emit_order_event({
                         "type": "ORDER_SKIP","action": "BUY","symbol": stk_cd,
@@ -465,21 +488,33 @@ class AutoTrader:
                         "extra": {"reason": "qty==0", "slice": i, "total": total},
                     })
                     continue
+
                 try:
-                    sim_oid = self.sim_engine.submit_limit_buy(
-                        stk_cd=stk_cd, limit_price=limit_price, qty=qty,
-                        parent_uid=uuid.uuid4().hex, strategy="ladder",
-                    )
-                    self._log(f"🧪 (sim) [{i}/{total}] NEW {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
+                    # ✅ 시장가/지정가 모두 지원 (엔진에 없으면 지정가로 폴백)
+                    if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_buy"):
+                        sim_oid = self.sim_engine.submit_market_buy(
+                            stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="ladder"
+                        )
+                        shown_price = 0
+                    else:
+                        sim_oid = self.sim_engine.submit_limit_buy(
+                            stk_cd=stk_cd, limit_price=limit_price, qty=qty,
+                            parent_uid=uuid.uuid4().hex, strategy="ladder"
+                        )
+                        shown_price = limit_price
+
+                    self._log(f"🧪 (sim) [{i}/{total}] BUY {stk_cd} {qty}주 @ {shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
                     self._emit_order_event({
                         "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
-                        "price": limit_price,"qty": qty,"status": "SIM_SUBMIT",
+                        "price": shown_price,"qty": qty,"status": "SIM_SUBMIT",
                         "ts": datetime.now(timezone.utc).isoformat(),
-                        "extra": {"slice": i, "total": total, "sim_oid": sim_oid},
+                        "extra": {"slice": i, "total": total, "sim_oid": sim_oid, "trde_tp": trde_tp},
                     })
                 except Exception as e:
                     self._log(f"❌ (ladder) sim submit 실패 → {e}")
+
                 await asyncio.sleep(self.ladder.interval_sec)
+
             return {"ladder_submitted": total}
 
         # Live
@@ -592,28 +627,39 @@ class AutoTrader:
         # ✅ Simulation
         if self.simulation and self.sim_engine:
             try:
-                sim_oid = self.sim_engine.submit_limit_sell(
-                    stk_cd=stk_cd,
-                    limit_price=(None if trde_tp == "3" else limit_price),
-                    qty=qty,
-                    parent_uid=uuid.uuid4().hex,
-                    strategy="simple-sell",
-                )
-                self._log(f"🧪 (sim sell) {stk_cd} {qty}주 @{limit_price if trde_tp=='0' else 'MKT'} → sim_oid={sim_oid}")
+                # ✅ 시장가면 submit_market_sell 우선 사용 (없으면 제한가로 폴백)
+                if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_sell"):
+                    sim_oid = self.sim_engine.submit_market_sell(
+                        stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="simple-sell"
+                    )
+                    shown_price = 0
+                else:
+                    sim_oid = self.sim_engine.submit_limit_sell(
+                        stk_cd=stk_cd,
+                        limit_price=(0 if trde_tp == "3" else limit_price),
+                        qty=qty,
+                        parent_uid=uuid.uuid4().hex,
+                        strategy="simple-sell",
+                    )
+                    shown_price = (0 if trde_tp == "3" else (limit_price or 0))
+
+                self._log(f"🧪 (sim sell) {stk_cd} {qty}주 @{shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
-                    "price": limit_price or 0,"qty": qty,"status": "SIM_SUBMIT",
+                    "price": shown_price,"qty": qty,"status": "SIM_SUBMIT",
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "extra": {"trde_tp": trde_tp, "sim_oid": sim_oid},
                 })
+
                 record = {
                     "session_id": self.session_id,"uid": uuid.uuid4().hex,"strategy": "manual","action": "SELL",
                     "stk_cd": stk_cd,"dmst_stex_tp": dmst_stex_tp,"cur_price": None,
-                    "limit_price": limit_price,"qty": qty,"trde_tp": trde_tp,
+                    "limit_price": (None if trde_tp == "3" else limit_price),
+                    "qty": qty,"trde_tp": trde_tp,
                     "tick_mode": "n/a","tick_used": "n/a","slice_idx": 1,"slice_total": 1,
                     "unit_amount": None,"notional": None,"duration_ms": 0,
-                    "status_code": None,"ts": datetime.now(timezone.utc).isoformat(),
-                    "status_label": "SIM_SUBMIT","success": True,"order_id": sim_oid,
+                    "status_code": 299,"status_label": "SIM_SUBMIT","success": True,"order_id": sim_oid,
+                    "ts": datetime.now(timezone.utc).isoformat(),
                 }
                 self.logger.write_order_record(record)
                 return {"sell_result": {"simulated": True, "order_id": sim_oid}}
