@@ -283,38 +283,128 @@ class AutoTrader:
         self._log(f"[AutoTrader] simulation_mode set to {self.simulation}")
 
     # ---------- Public dispatcher ----------
+
+    def _to_int(x, default=0):
+        try:
+            # "145000", 145000, "145000.0" 모두 허용
+            return int(float(x))
+        except Exception:
+            return int(default)
+
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # 🔁 master_enable 글로벌 차단은 더 이상 사용하지 않음(하위호환 필드는 유지)
-        # 실제 주문 차단은 auto_buy/auto_sell 각각에서 수행
+        """
+        모니터가 최종 결정을 내려준다는 가정.
+        이 함수는 오직 '집행'만 수행한다.
+        - 구버전/신버전 모두 호환: top-level / payload['data'] 모두 지원
+        - mode/signal 또한 양쪽에서 탐색
+        """
+        data   = payload.get("data") or payload
+        signal = str(payload.get("signal") or data.get("signal") or "").upper()
+        mode   = str(payload.get("mode")   or data.get("mode")   or "").lower()
 
-        if payload.get("ladder_buy"):
-            return await self._handle_ladder_buy(payload)
+        # 공통 기본값
+        dmst_stex_tp = str(data.get("dmst_stex_tp") or "KRX").upper()
+        stk_cd       = str(data.get("stk_cd") or "").strip()
+        if not stk_cd:
+            self._log("🚫 handle_signal: stk_cd 누락")
+            return None
 
-        signal = str(payload.get("signal") or "").upper()
-        data = payload.get("data") or payload
-        if signal == "SELL":
-            return await self._handle_simple_sell(data)
-        elif signal == "BUY":
-            try:
-                cur_price = int(float(data.get("ord_uv") or 0))
-            except Exception:
-                cur_price = 0
-            ladder_like = {
-                "stk_cd": data.get("stk_cd"),
-                "dmst_stex_tp": data.get("dmst_stex_tp") or "KRX",
-                "cur_price": cur_price,
+        # (하위호환) 플래그식 라더 매수 진입
+        if payload.get("ladder_buy") or data.get("ladder_buy"):
+            mode = "ladder_buy"
+            signal = "BUY"
+
+        # ─────────────────────────────────────────────
+        # Ladder BUY
+        # ─────────────────────────────────────────────
+        if mode == "ladder_buy" and signal == "BUY":
+            lb = {
+                "stk_cd": stk_cd,
+                "dmst_stex_tp": dmst_stex_tp,
+                "cur_price": self._to_int(data.get("cur_price") or data.get("ord_uv") or 0),
+                "num_slices": int(data.get("num_slices") or self.ladder.num_slices),
+                "start_ticks_below": int(data.get("start_ticks_below") or self.ladder.start_ticks_below),
+                "step_ticks": int(data.get("step_ticks") or self.ladder.step_ticks),
+                "unit_amount": int(data.get("unit_amount") or self.ladder.unit_amount),
+                "trde_tp": str(data.get("trde_tp") or self._resolve_trde_tp()),
+                "tick": int(data.get("tick") or 0),
+                "target_total_qty": data.get("target_total_qty"),
+            }
+            return await self._handle_ladder_buy(lb)
+
+        # ─────────────────────────────────────────────
+        # Ladder SELL
+        # ─────────────────────────────────────────────
+        if mode == "ladder_sell" and signal == "SELL":
+            ls = {
+                "stk_cd": stk_cd,
+                "dmst_stex_tp": dmst_stex_tp,
+                "cur_price": self._to_int(data.get("cur_price") or data.get("ord_uv") or 0),
+                "num_slices": int(data.get("num_slices") or 10),
+                "start_ticks_above": int(data.get("start_ticks_above") or 1),
+                "step_ticks": int(data.get("step_ticks") or 1),
+                "total_qty": data.get("total_qty"),
+                "slice_qty": data.get("slice_qty"),
+                "trde_tp": str(data.get("trde_tp") or "0"),
+                "tick": int(data.get("tick") or 0),
+            }
+            return await self._handle_ladder_sell(ls)
+
+        # ─────────────────────────────────────────────
+        # Simple SELL (원샷)
+        # ─────────────────────────────────────────────
+        if mode == "simple_sell" and signal == "SELL":
+            ss = {
+                "dmst_stex_tp": dmst_stex_tp,
+                "stk_cd": stk_cd,
+                "ord_qty": str(data.get("ord_qty") or "0"),
+                "ord_uv": str(data.get("ord_uv") or "0"),
+                "trde_tp": str(data.get("trde_tp") or "0"),
+                "cond_uv": str(data.get("cond_uv") or ""),
+            }
+            return await self._handle_simple_sell(ss)
+
+        # ─────────────────────────────────────────────
+        # Fallback: BUY → 1슬라이스 라더 / SELL → 단발 매도
+        # ─────────────────────────────────────────────
+        if signal == "BUY" and not mode:
+            lb = {
+                "stk_cd": stk_cd,
+                "dmst_stex_tp": dmst_stex_tp,
+                "cur_price": self._to_int(data.get("cur_price") or data.get("ord_uv") or 0),
                 "num_slices": 1,
                 "start_ticks_below": 0,
                 "step_ticks": 1,
+                "unit_amount": int(data.get("unit_amount") or self.ladder.unit_amount),
+                "trde_tp": str(data.get("trde_tp") or self._resolve_trde_tp()),
             }
-            return await self._handle_ladder_buy(ladder_like)
-        else:
-            self._emit_order_event({
-                "type": "ORDER_EVENT", "action": None, "symbol": data.get("stk_cd"),
-                "price": 0, "qty": 0, "status": f"UNHANDLED_SIGNAL:{signal}",
-                "ts": datetime.now(timezone.utc).isoformat(), "extra": payload,
-            })
-            return None
+            return await self._handle_ladder_buy(lb)
+
+        if signal == "SELL" and not mode:
+            ss = {
+                "dmst_stex_tp": dmst_stex_tp,
+                "stk_cd": stk_cd,
+                "ord_qty": str(data.get("ord_qty") or "1"),
+                "ord_uv": str(data.get("ord_uv") or "0"),
+                "trde_tp": str(data.get("trde_tp") or "0"),
+                "cond_uv": str(data.get("cond_uv") or ""),
+            }
+            return await self._handle_simple_sell(ss)
+
+        # ─────────────────────────────────────────────
+        # 미처리
+        # ─────────────────────────────────────────────
+        self._emit_order_event({
+            "type": "ORDER_EVENT",
+            "action": signal or "UNKNOWN",
+            "symbol": stk_cd,
+            "price": 0,
+            "qty": 0,
+            "status": f"UNHANDLED_MODE:{mode or 'NONE'}",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "extra": payload,
+        })
+        return None
 
     def make_on_signal_legacy(self, bridge: Optional[object] = None) -> Callable[[Any], None]:
         if bridge is not None:
@@ -510,6 +600,18 @@ class AutoTrader:
         if self.settings.order_type == "market":
             return "3"
         return "0"
+
+
+    def _ticks_above_from_target(self, cur_price: int, target_price: int) -> int:
+        """Sell - 현재가 대비 목표가가 몇 틱 위인지 계산(최소 1틱)."""
+        if cur_price <= 0 or target_price <= 0:
+            return 1
+        tick = self._krx_tick(cur_price)
+        # 목표가를 틱 격자에 맞추고, 최소 1틱은 위로
+        snapped = self._snap_to_tick(int(target_price), tick)
+        diff = max(1, math.ceil((snapped - cur_price) / tick))
+        return diff
+
 
     # =========================
     # Ladder BUY 

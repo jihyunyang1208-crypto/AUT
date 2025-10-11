@@ -68,24 +68,67 @@ def _parse_ts(ts: str) -> datetime:
     except Exception:
         return datetime.now(tz=KST)
 
-def load_system_results(path: Path) -> Dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return data
-
-def load_trade_jsonl(path: Optional[Path]) -> List[Dict[str, Any]]:
+def load_jsonl_objects(path: Path) -> List[Dict[str, Any]]:
+    """
+    JSONL(각 줄이 하나의 JSON)만 파싱.
+    - 공백/빈줄/주석(//)은 무시
+    - dict가 아닌 줄은 건너뜀
+    """
     rows: List[Dict[str, Any]] = []
-    if not path or not path.exists():
-        return rows
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
+    with path.open("r", encoding="utf-8", errors="ignore") as f:
+        for ln, line in enumerate(f, 1):
+            s = line.strip()
+            if not s or s.startswith("//"):
                 continue
             try:
-                rows.append(json.loads(line))
-            except Exception:
-                pass
+                obj = json.loads(s)
+                if isinstance(obj, dict):
+                    rows.append(obj)
+            except Exception as e:
+                raise ValueError(f"JSONL 파싱 오류: {path.name} #{ln}: {e}")
     return rows
+
+
+def load_system_results(path: Path) -> Dict[str, Any]:
+    """
+    system_results_YYYY-MM-DD.jsonl 을 가정.
+    여러 줄 JSON을 읽어 signals를 전부 합치고,
+    portfolio/quality/meta는 '마지막 줄'을 우선 적용.
+    """
+    if path.suffix.lower() != ".jsonl":
+        raise ValueError(f"system_results는 JSONL만 지원합니다: {path}")
+
+    docs = load_jsonl_objects(path)
+    if not docs:
+        return {"signals": []}
+
+    merged: Dict[str, Any] = {"signals": []}
+    for doc in docs:
+        sigs = doc.get("signals")
+        if isinstance(sigs, list):
+            merged["signals"].extend([x for x in sigs if isinstance(x, dict)])
+        # 마지막 문서의 대표 키들 우선
+        if isinstance(doc.get("portfolio"), dict):
+            merged["portfolio"] = doc["portfolio"]
+        if isinstance(doc.get("quality"), dict):
+            merged["quality"] = doc["quality"]
+        if isinstance(doc.get("meta"), dict):
+            merged["meta"] = doc["meta"]
+    return merged
+
+
+def load_trade_jsonl(path: Optional[Path]) -> List[Dict[str, Any]]:
+    """
+    trade_YYYYMMDD.jsonl 전용.
+    없으면 빈 리스트 반환.
+    """
+    if not path:
+        return []
+    if not path.exists():
+        return []
+    if path.suffix.lower() != ".jsonl":
+        raise ValueError(f"trade 로그는 JSONL만 지원합니다: {path}")
+    return load_jsonl_objects(path)
 
 def derive_kpi(system: Dict[str, Any], trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     signals: List[Dict[str, Any]] = system.get("signals", []) or []
