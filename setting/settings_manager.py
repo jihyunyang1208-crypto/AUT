@@ -509,12 +509,18 @@ def apply_to_autotrader(trader, cfg: AppSettings):
     if hasattr(trader, "set_simulation_mode"):
         trader.set_simulation_mode(bool(cfg.sim_mode))
 
-    # settings 객체 값들 반영
+    # settings 객체 값 반영
     if hasattr(trader, "settings"):
         trader.settings.master_enable = bool(cfg.master_enable)  # 하위호환 보관
         trader.settings.auto_buy = bool(cfg.auto_buy)
         trader.settings.auto_sell = bool(cfg.auto_sell)
         trader.settings.order_type = ("market" if cfg.order_type == "market" else "limit")
+        # 프로 스위치가 TradeSettings에 존재한다면 반영
+        if hasattr(trader.settings, "buy_pro"):
+            trader.settings.buy_pro = bool(cfg.buy_pro)
+        if hasattr(trader.settings, "sell_pro"):
+            trader.settings.sell_pro = bool(cfg.sell_pro)
+
 
     if hasattr(trader, "ladder"):
         trader.ladder.unit_amount = int(cfg.ladder_unit_amount)

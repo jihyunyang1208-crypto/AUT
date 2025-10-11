@@ -510,6 +510,7 @@ class ExitEntryMonitor:
     # ----------------------------------------------------------------------
     # 조건검색 '편입(I)' 즉시 트리거 → TradeSignal 통합 발행 (+ Pro 분기)
     # ----------------------------------------------------------------------
+
     async def on_condition_detected(
         self,
         symbol: str,
@@ -520,76 +521,63 @@ class ExitEntryMonitor:
     ):
         """
         조건검색식에서 종목이 편입될 때 호출됨.
-        - custom.enabled & allow_intrabar_condition_triggers 일 때만 즉시 평가/발행
-        - auto_buy/auto_sell 토글에 따라 BUY/SELL 선택
-        - 가격은 5분봉 캐시 또는 pull 결과의 마지막 종가 사용
-        - 🔵 Pro 분기:
-            * Buy-Pro ON  → buy_rule_fn 통과 시 발행(미제공 시 True)
-            * Buy-Pro OFF → 즉시 발행(기존과 동일)
-            * Sell-Pro ON → sell_rule_fn(미제공 시 내부 전략) 통과 시 발행
-            * Sell-Pro OFF→ 즉시 발행(기존과 동일)
+        - 고급 커스텀 허용(intrabar)일 때 즉시 평가/발행
+        - BUY/SELL 모두 독립적으로 평가 (모두 통과 시 모두 발행)
+        - MACD30 필터 및 5분봉 마감창 의존 제거 (df5 유효성만 가드)
+        - Pro 토글:
+            * buy_pro=True  → buy_rule_fn(ctx) 통과 시 발행
+            * buy_pro=False → 즉시 발행
+            * sell_pro=True → sell_rule_fn(ctx) 통과 시 발행(기본: +3% & 이전봉 패턴)
+            * sell_pro=False→ 즉시 발행
         """
         try:
-            # 추적 목록에는 추가해 둔다(이후 정규루프에서도 평가 가능)
+            # 추적 목록에는 추가(이후 정규 루프에서도 평가 가능)
             sym = _code6(symbol)
             with self._sym_lock:
                 self._symbols.add(sym)
 
+            # intrabar 즉시 트리거 허용 여부
             if not (self.custom.enabled and self.custom.allow_intrabar_condition_triggers):
                 logger.debug(f"[Monitor] custom disabled or intrabar not allowed → skip immediate ({sym})")
                 return
 
+            # 5분봉 확보 (유효성만 가드)
             df5 = await self._get_5m(sym, count=200)
-            if df5 is None or df5.empty:
-                logger.debug(f"[Monitor] {sym} 즉시트리거: 5m 없음 → skip")
+            if df5 is None or df5.empty or len(df5) < 2:
+                logger.debug(f"[Monitor] {sym} 즉시트리거: 5m 없음/부족 → skip")
                 return
 
             ref_ts = df5.index[-1]
             last_close = float(df5["Close"].iloc[-1])
 
-            # MACD30 필터
-            if self.use_macd30_filter and not self._macd30_pass(sym, ref_ts):
-                logger.debug(f"[Monitor] {sym} 즉시트리거: MACD30 fail → skip")
-                return
-
-            # 사이드 결정
-            side: Optional[Literal["BUY","SELL"]] = None
+            # === BUY 평가 ===
             if self.custom.auto_buy:
-                side = "BUY"
-            elif self.custom.auto_sell:
-                side = "SELL"
-
-            if side is None:
-                logger.debug(f"[Monitor] {sym} 즉시트리거: side 토글 없음 → skip")
-                return
-
-            # 🔵 Pro 룰 분기
-            if side == "BUY":
                 if self.custom.buy_pro:
-                    ctx = {
+                    ctx_buy = {
                         "side": "BUY",
                         "symbol": sym,
                         "price": last_close,
                         "df5": df5,
-                        "avg_buy": self._get_avg_buy(sym),
                         "ts": ref_ts,
                         "source": source,
                         "condition_name": condition_name,
                     }
                     try:
-                        if not bool(self._buy_rule_fn(ctx)):
-                            logger.debug(f"[Monitor] BUY-Pro rule fail → skip ({sym})")
-                            return
+                        ok_buy = bool(self._buy_rule_fn(ctx_buy))
                     except Exception as e:
-                        # 룰 오류 시 기본 True로 간주하여 기존 동작 보존
-                        logger.warning(f"[Monitor] BUY rule error: {e} → pass-through")
-                # Pro OFF → 그대로 발행
-                self._emit("BUY", sym, ref_ts, last_close, reason)
+                        logger.warning(f"[Monitor] BUY rule error: {e} → pass-through(True)")
+                        ok_buy = True
+                    if ok_buy:
+                        self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY-Pro) {condition_name}")
+                else:
+                    # Pro OFF → 즉시 발행
+                    self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY) {condition_name}")
 
-            else:  # SELL
+            # === SELL 평가 ===
+            if self.custom.auto_sell:
                 if self.custom.sell_pro:
                     avg_buy = self._get_avg_buy(sym)
-                    ctx = {
+                    ctx_sell = {
                         "side": "SELL",
                         "symbol": sym,
                         "price": last_close,
@@ -600,23 +588,33 @@ class ExitEntryMonitor:
                         "condition_name": condition_name,
                     }
                     try:
-                        ok = bool(self._sell_rule_fn(ctx))
+                        ok_sell = bool(self._sell_rule_fn(ctx_sell))
                     except Exception as e:
                         logger.warning(f"[Monitor] SELL rule error: {e} → treat as False")
-                        ok = False
-                    if not ok:
-                        logger.debug(f"[Monitor] SELL-Pro rule fail → skip ({sym})")
-                        return
-                    # 통과 시 발행
-                    self._emit("SELL", sym, ref_ts, last_close, reason)
+                        ok_sell = False
+                    if ok_sell:
+                        self._emit(
+                            "SELL",
+                            sym,
+                            ref_ts,
+                            last_close,
+                            reason or (
+                                "즉시신호(SELL-Pro)"
+                                + (f": +3% vs avg({avg_buy:.2f}) & prev-candle pattern" if avg_buy else "")
+                                + (f" [{condition_name}]" if condition_name else "")
+                            ),
+                        )
                 else:
-                    # Pro OFF → 즉시 발행(기존과 동일)
-                    self._emit("SELL", sym, ref_ts, last_close, reason)
+                    # Pro OFF → 즉시 발행
+                    self._emit("SELL", sym, ref_ts, last_close, reason or f"즉시신호(SELL) {condition_name}")
 
-            # 로그
+            # UI 로그 (선택)
             try:
                 if self.bridge and hasattr(self.bridge, "log"):
-                    self.bridge.log.emit(f"📊 즉시신호 [{side}] {sym} @ {last_close} ({condition_name})")
+                    side_info = []
+                    if self.custom.auto_buy: side_info.append("BUY")
+                    if self.custom.auto_sell: side_info.append("SELL")
+                    self.bridge.log.emit(f"📊 즉시신호 [{'/'.join(side_info)}] {sym} @ {last_close} ({condition_name})")
             except Exception:
                 pass
 
@@ -626,85 +624,87 @@ class ExitEntryMonitor:
     # ----------------------------------------------------------------------
     # 심볼 평가 (SELL 전략 적용)  + Pro 분기
     # ----------------------------------------------------------------------
+
     async def _check_symbol(self, symbol: str):
         try:
             sym = _code6(symbol)
-
             df5 = await self._get_5m(sym)
-            if df5 is None or df5.empty:
-                logger.debug(f"[ExitEntryMonitor] {sym} no 5m data")
+            if df5 is None or df5.empty or len(df5) < 2:
                 return
 
-            # 1) 최소 행수/필수 컬럼 체크
-            need_cols = {"Open", "High", "Low", "Close", "Volume"}
-            if not need_cols.issubset(df5.columns):
-                logger.debug(f"[ExitEntryMonitor] {sym} missing columns for 5m: {set(df5.columns)}")
-                return
-            if len(df5) < 2:
-                logger.debug(f"[ExitEntryMonitor] {sym} not enough 5m bars (need>=2, got={len(df5)})")
+            now_kst = pd.Timestamp.now(tz=self.tz)
+            if not TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
                 return
 
             ref_ts = df5.index[-1]
-
-            # 2) (보수적) 5분봉 마감창에서만 평가
-            now_kst = pd.Timestamp.now(tz=self.tz)
-            if not TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
-                logger.debug(f"[ExitEntryMonitor] {sym} skip (not in 5m close window)")
-                return
-
-            # 3) MACD30 필터 (옵션)
-            if not self._macd30_pass(sym, ref_ts):
-                logger.debug(f"[ExitEntryMonitor] {sym} skip: MACD30 filter")
-                return
-
-            # 4) 평균매수가 조회(PM)
-            avg_buy = self._get_avg_buy(sym)
-            if avg_buy is None:
-                logger.debug(f"[ExitEntryMonitor] {sym} avg_buy unavailable → skip")
-                return
-
             last_close = float(df5["Close"].iloc[-1])
 
-            # 🔵 Pro 분기
-            if not self.custom.auto_sell:
-                logger.debug(f"[ExitEntryMonitor] {sym} auto_sell=False → skip")
+            if self.use_macd30_filter and not self._macd30_pass(sym, ref_ts):
                 return
 
-            if not self.custom.sell_pro:
-                # Sell-Pro OFF → 주기 평가로는 매도 신호를 발생시키지 않음
-                # (사용자가 Pro를 끘 경우 내부 전략 매도를 막음. 기존 기본값 True라 변화 없음)
-                logger.debug(f"[ExitEntryMonitor] {sym} sell_pro=False → periodic SELL suppressed")
-                return
+            # ===== SELL ===== (avg_buy 필요 영역)
+            if self.custom.auto_sell:
+                if self.custom.sell_pro:
+                    avg_buy = self._get_avg_buy(sym)  # ← 여기서만 조회
+                    ctx = {
+                        "side": "SELL",
+                        "symbol": sym,
+                        "price": last_close,
+                        "df5": df5,
+                        "avg_buy": avg_buy,
+                        "ts": ref_ts,
+                        "source": "bar",
+                    }
+                    try:
+                        should_sell = bool(self._sell_rule_fn(ctx))
+                    except Exception as e:
+                        logger.warning(f"[ExitEntryMonitor] sell_rule error: {e} → treat as False")
+                        should_sell = False
 
-            # Sell-Pro ON → 기존 전략(또는 외부 sell_rule_fn) 체크
-            ctx = {
-                "side": "SELL",
-                "symbol": sym,
-                "price": last_close,
-                "df5": df5,
-                "avg_buy": avg_buy,
-                "ts": ref_ts,
-                "source": "bar",
-            }
-            try:
-                should_sell = bool(self._sell_rule_fn(ctx))
-            except Exception as e:
-                logger.warning(f"[ExitEntryMonitor] sell_rule error: {e} → treat as False")
-                should_sell = False
+                    if should_sell:
+                        reason = (
+                            "SELL(Pro)"
+                            + (f": +3% vs avg({avg_buy:.2f}) & prev-candle pattern" if avg_buy else "")
+                            + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
+                        )
+                        self._emit("SELL", sym, ref_ts, last_close, reason)
+                else:
+                    logger.debug(f"[ExitEntryMonitor] {sym} sell_pro=False → periodic SELL suppressed")
 
-            if should_sell:
-                reason = (
-                    f"SELL: +3% vs avg({avg_buy:.2f}) & prev-candle pattern"
-                    + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
-                )
-                self._emit("SELL", sym, ref_ts, last_close, reason)
-            else:
-                logger.debug(f"[ExitEntryMonitor] {sym} no SELL (last={last_close:.2f}, avg={avg_buy:.2f})")
-
-            # (참고) BUY 전략은 본 파일 범위를 벗어나므로 여기서 발생시키지 않음.
+            # ===== BUY ===== (avg_buy 불필요)
+            if self.custom.auto_buy:
+                if self.custom.buy_pro:
+                    ctx = {
+                        "side": "BUY",
+                        "symbol": sym,
+                        "price": last_close,
+                        "df5": df5,
+                        # "avg_buy": 제외
+                        "ts": ref_ts,
+                        "source": "bar",
+                    }
+                    try:
+                        should_buy = bool(self._buy_rule_fn(ctx))
+                    except Exception as e:
+                        logger.warning(f"[ExitEntryMonitor] buy_rule error: {e} → pass-through(True)")
+                        should_buy = True
+                    if should_buy:
+                        reason = "BUY(Pro)" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
+                        self._emit("BUY", sym, ref_ts, last_close, reason)
+                else:
+                    try:
+                        buy_ser = BuyRules.buy_if_5m_break_prev_bear_high(df5)
+                        should_buy = bool(buy_ser.iloc[-1]) if len(buy_ser) else False
+                    except Exception:
+                        should_buy = False
+                    if should_buy:
+                        reason = "BUY: Bull breaks prev bear high" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
+                        self._emit("BUY", sym, ref_ts, last_close, reason)
 
         except Exception:
             logger.exception(f"[ExitEntryMonitor] _check_symbol error: {symbol}")
+
+
 
     # ----------------------------------------------------------------------
     # MACD 버스 이벤트 핸들러

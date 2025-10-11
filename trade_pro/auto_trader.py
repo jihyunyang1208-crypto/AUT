@@ -40,6 +40,8 @@ class TradeSettings:
     order_type: Literal["limit", "market"] = "limit"
     # ✅ UI에서 직접 제어하는 시뮬레이션 스위치 (paper ≡ simulation)
     simulation_mode: Optional[bool] = None  # None이면 env/인자 기반으로 결정
+    ladder_sell_enable: bool = False           # 라더 매도 전체 스위치
+
 
 
 @dataclass
@@ -51,6 +53,7 @@ class LadderSettings:
     trde_tp: str = "0"                 # '0' limit, '3' market (broker-specific)
     min_qty: int = 1                   # minimum shares per order
     interval_sec: float = 0.08         # delay between ladder legs
+    start_ticks_above: int = 1         # SELL 라더 시작 틱(현재가 위)
 
 
 # =========================
@@ -375,7 +378,7 @@ class AutoTrader:
                 symbol = str(getattr(sig_obj, "symbol", "")).strip()
                 price_attr = getattr(sig_obj, "price", 0)
                 last_price = int(float(price_attr)) if price_attr is not None else 0
-            except Exception:
+            except Exception:                
                 return
 
             if not symbol or last_price <= 0:
@@ -509,7 +512,7 @@ class AutoTrader:
         return "0"
 
     # =========================
-    # Ladder BUY (below current)
+    # Ladder BUY 
     # =========================
     async def _handle_ladder_buy(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not self.settings.auto_buy:
@@ -556,7 +559,7 @@ class AutoTrader:
             except Exception:
                 pass
 
-        # Simulation
+        # ===== Simulation =====
         if self.simulation and self.sim_engine:
             total = len(prices)
             for i, limit_price in enumerate(prices, start=1):
@@ -578,7 +581,7 @@ class AutoTrader:
                     continue
 
                 try:
-                    # ✅ 시장가/지정가 모두 지원 (엔진에 없으면 지정가로 폴백)
+                    # 시장가 지원 시 시장가, 아니면 지정가
                     if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_buy"):
                         sim_oid = self.sim_engine.submit_market_buy(
                             stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="ladder"
@@ -598,6 +601,21 @@ class AutoTrader:
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "extra": {"slice": i, "total": total, "sim_oid": sim_oid, "trde_tp": trde_tp},
                     })
+
+                    # ✅ 시뮬에서도 JSON/CSV 로깅 추가
+                    order_type = "market" if trde_tp == "3" else "limit"
+                    self.logger.write_order_record({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "strategy": "ladder",
+                        "action": "BUY",
+                        "stk_cd": stk_cd,
+                        "order_type": order_type,
+                        "limit_price": shown_price,   # logger가 price로 매핑
+                        "qty": qty,
+                        "status_label": "SIM_SUBMIT",
+                        "response": {"body": {"return_code": 0, "return_msg": "SIM"}},
+                    })
+
                 except Exception as e:
                     self._log(f"❌ (ladder) sim submit 실패 → {e}")
 
@@ -605,7 +623,7 @@ class AutoTrader:
 
             return {"ladder_submitted": total}
 
-        # Live
+        # ===== Live =====
         try:
             token = self._token_provider()
             if not token:
@@ -808,8 +826,8 @@ class AutoTrader:
     # =========================
     # Ladder SELL (above current)
     # =========================
+
     async def _handle_ladder_sell(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # 🔒 master_enable 제거 → auto_sell만 가드
         if not self.settings.auto_sell:
             self._log("⛔ auto_sell=False: 라더 매도 차단"); return None
 
@@ -860,7 +878,7 @@ class AutoTrader:
         )
         self._log(f"🪜 (ladder-sell/{tick_mode}) tick={tick} prices={prices} qty_plan={qty_plan}")
 
-        # Simulation
+        # ===== Simulation =====
         if self.simulation and self.sim_engine:
             total = min(len(prices), len(qty_plan))
             for i in range(total):
@@ -885,12 +903,26 @@ class AutoTrader:
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "extra": {"slice": i+1, "total": total, "sim_oid": sim_oid},
                     })
+
+                    # ✅ 시뮬 라더-SELL도 JSON/CSV 로깅 추가
+                    self.logger.write_order_record({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "strategy": "ladder-sell",
+                        "action": "SELL",
+                        "stk_cd": stk_cd,
+                        "order_type": "limit",
+                        "limit_price": limit_price,
+                        "qty": qty,
+                        "status_label": "SIM_SUBMIT",
+                        "response": {"body": {"return_code": 0, "return_msg": "SIM"}},
+                    })
+
                 except Exception as e:
                     self._log(f"❌ (ladder-sell) sim submit 실패 → {e}")
                 await asyncio.sleep(self.ladder.interval_sec)
             return {"ladder_sell_submitted": total}
 
-        # Live
+        # ===== Live =====
         try:
             token = self._token_provider()
             if not token: raise RuntimeError("액세스 토큰이 비어있습니다.")
