@@ -24,6 +24,7 @@ from core.detail_information_getter import (
     DetailInformationGetter,
     SimpleMarketAPI,
     normalize_ka10080_rows,
+    _rows_to_df_ohlcv,
 )
 from core.macd_calculator import calculator, macd_bus
 
@@ -376,6 +377,16 @@ class Engine(QObject):
                         rows_inc_norm = normalize_ka10080_rows(rows_inc)
                         if rows_inc_norm:
                             calculator.apply_append(code=code, tf="5m", rows=rows_inc_norm)
+                            
+
+                        # 2. ✅ 매매 모니터에 최신 데이터 주입 (추가된 코드)
+                        try:
+                            df_push = _rows_to_df_ohlcv(rows_inc_norm, tz="Asia/Seoul")
+                            if self.monitor is not None and not df_push.empty:
+                                self.monitor.ingest_bars(code, "5m", df_push)
+                        except Exception as e:
+                            logger.error(f"모니터 데이터 주입 실패({code}): {e}")
+
             except asyncio.CancelledError:
                 raise
             except Exception as e:

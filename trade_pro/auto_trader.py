@@ -79,14 +79,11 @@ class TradeLogger:
 
     @staticmethod
     def _flatten_response(resp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        # 이 메서드는 slim 모드에서는 직접 사용되지 않지만, 호환성을 위해 유지합니다.
         if not isinstance(resp, dict):
             return {
-                "resp_status_code": None,
-                "resp_api_id": "",
-                "resp_cont_yn": "",
-                "resp_next_key": "",
-                "resp_return_code": None,
-                "resp_return_msg": "",
+                "resp_status_code": None, "resp_api_id": "", "resp_cont_yn": "",
+                "resp_next_key": "", "resp_return_code": None, "resp_return_msg": "",
             }
         header = resp.get("header") or {}
         body = resp.get("body") or {}
@@ -103,93 +100,103 @@ class TradeLogger:
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
+                # slim 모드와 full 모드에 따라 다른 헤더를 작성합니다.
                 if self._slim:
-                    # ★ 전략 분석용 최소 스키마
                     w.writerow([
-                        "ts","strategy","action","stk_cd","order_type","price","qty",
-                        "status","resp_code","resp_msg"
+                        "ts", "strategy", "action", "stk_cd", "order_type", "price", "qty",
+                        "status", "resp_code", "resp_msg"
                     ])
                 else:
-                    # 기존 풀 스키마(변경 없음)
                     w.writerow([
-                        "ts","session_id","uid","strategy","action","stk_cd","dmst_stex_tp",
-                        "cur_price","limit_price","qty","trde_tp",
-                        "tick_mode","tick_used",
-                        "slice_idx","slice_total","unit_amount","notional",
-                        "duration_ms","status_code",
-                        "status_label","success","order_id","order_id_hint","error_msg","note",
-                        "resp_status_code","resp_api_id","resp_cont_yn","resp_next_key",
-                        "resp_return_code","resp_return_msg",
+                        "ts", "session_id", "uid", "strategy", "action", "stk_cd", "dmst_stex_tp",
+                        "cur_price", "limit_price", "qty", "trde_tp",
+                        "tick_mode", "tick_used",
+                        "slice_idx", "slice_total", "unit_amount", "notional",
+                        "duration_ms", "status_code",
+                        "status_label", "success", "order_id", "order_id_hint", "error_msg", "note",
+                        "resp_status_code", "resp_api_id", "resp_cont_yn", "resp_next_key",
+                        "resp_return_code", "resp_return_msg",
                     ])
 
 
     def write_order_record(self, record: Dict[str, Any]):
         """
-        전략 분석용 슬림 버전: 핵심 정보만 CSV/JSONL 기록
+        주문 기록을 CSV와 JSONL 파일에 작성합니다.
+        내부 로직을 보강하여 시뮬레이션과 실제 주문 모두의 정보를 정확히 추출합니다.
         """
+        # slim 모드가 아니면 현재 로직을 실행하지 않습니다. (필요시 full 모드 로직 추가)
+        if not self._slim:
+            # self._log("Warning: Full log mode is not fully supported in this version.")
+            return
+
         csv_path, jsonl_path = self._paths()
         with self._lock:
-            # 새 헤더: 최소 컬럼
-            if not csv_path.exists() or csv_path.stat().st_size == 0:
-                with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                    w = csv.writer(f)
-                    w.writerow([
-                        "ts","strategy","action","stk_cd",
-                        "order_type","price","qty",
-                        "status","resp_code","resp_msg"
-                    ])
+            self._ensure_csv_header(csv_path)
 
+            # --- 데이터 추출 및 정규화 (보강된 로직) ---
             ts = record.get("ts") or datetime.now(timezone.utc).isoformat()
+            status = record.get("status") or record.get("status_label", "UNKNOWN")
 
-            # response body에서 리턴 코드/메시지 추출
-            resp = record.get("response") or {}
-            body = resp.get("body") or {}
-            return_code = body.get("return_code")
-            return_msg = body.get("return_msg", "")
+            # 1. 주문 유형(order_type) 결정
+            # record에 'order_type'이 직접 있으면 그 값을 최우선으로 사용합니다. (시뮬레이션 대응)
+            order_type = record.get("order_type")
+            if not order_type:
+                trde_tp = str(record.get("trde_tp", ""))
+                if trde_tp == "3":
+                    order_type = "market"
+                elif trde_tp in ("0", "00"):
+                    order_type = "limit"
+                else:
+                    order_type = trde_tp  # 기타 값 (e.g., "SIM")
 
-            # 주문 타입과 가격 결정
-            trde_tp = str(record.get("trde_tp") or "")
-            order_type = "market" if trde_tp == "3" else (
-                "limit" if trde_tp == "0" else trde_tp
-            )
-            price = record.get("limit_price") if order_type == "limit" else ""
+            # 2. 주문 가격(price) 결정
+            # record에 'price'가 직접 있으면 그 값을 최우선으로 사용합니다. (시뮬레이션 대응)
+            price = record.get("price")
+            if price is None:  # 키는 있지만 값이 None인 경우도 처리
+                price = record.get("limit_price") if order_type == "limit" else ""
 
-            # 상태 문자열
-            status = record.get("status_label") or (
-                f"HTTP_{record.get('status_code')}" if record.get("status_code") else ""
-            )
+            # 3. 응답 코드 및 메시지 결정
+            resp_code = record.get("resp_code")
+            resp_msg = record.get("resp_msg")
 
-            row = [
-                ts,
-                record.get("strategy"),
-                record.get("action"),
-                record.get("stk_cd"),
-                order_type,
-                price,
-                record.get("qty"),
-                status,
-                return_code,
-                return_msg,
-            ]
+            # 시뮬레이션 주문 처리
+            if status == "SIM_SUBMIT":
+                resp_code = 0 if resp_code is None else resp_code
+                resp_msg = "SIM" if resp_msg is None else resp_msg
+            # 실제 API 응답 처리
+            else:
+                resp_body = (record.get("response") or {}).get("body") or {}
+                if resp_code is None:
+                    resp_code = resp_body.get("return_code")
+                if resp_msg is None:
+                    resp_msg = resp_body.get("return_msg", "")
 
-            with open(csv_path, "a", newline="", encoding="utf-8") as f:
-                csv.writer(f).writerow(row)
-
-            # JSONL도 최소 필드만 기록
-            slim_json = {
+            # --- 최종 로그 데이터 생성 ---
+            log_entry = {
                 "ts": ts,
-                "strategy": record.get("strategy"),
-                "action": record.get("action"),
-                "stk_cd": record.get("stk_cd"),
+                "strategy": record.get("strategy", ""),
+                "action": record.get("action", ""),
+                "stk_cd": record.get("stk_cd", ""),
                 "order_type": order_type,
                 "price": price,
-                "qty": record.get("qty"),
+                "qty": record.get("qty", 0),
                 "status": status,
-                "resp_code": return_code,
-                "resp_msg": return_msg,
+                "resp_code": resp_code,
+                "resp_msg": resp_msg,
             }
-            with open(jsonl_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(slim_json, ensure_ascii=False) + "\n")
+
+            # CSV 및 JSONL 파일에 기록
+            try:
+                # CSV 쓰기
+                with open(csv_path, "a", newline="", encoding="utf-8") as f_csv:
+                    writer = csv.DictWriter(f_csv, fieldnames=log_entry.keys())
+                    writer.writerow(log_entry)
+                # JSONL 쓰기
+                with open(jsonl_path, "a", encoding="utf-8") as f_jsonl:
+                    f_jsonl.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            except IOError as e:
+                # self._log(f"Error writing to log file: {e}")
+                print(f"Error writing to log file: {e}") # GUI 환경이 아닐 경우 print 사용
 
 
 
