@@ -151,8 +151,11 @@ class AsyncBridge(QObject):
     minute_bars_received = Signal(str, list)
     symbol_name_updated = Signal(str, str)  # (code6, name)
 
-    # (선택) 주문/체결 이벤트 브릿지
+    # 주문/체결 이벤트 브릿지
     order_event = Signal(dict)
+    pnl_snapshot_ready = Signal(dict)
+    price_update = Signal(dict)      # 예: {"ts":..., "stock_code":"005930","price":70500}
+    fill_or_trade = Signal(dict)     # 예: {"ts":..., "side":"BUY","qty":1,"price":70000,...}
 
     def __init__(self):
         super().__init__()
@@ -533,6 +536,9 @@ def main():
 
     getter = DetailInformationGetter()
     engine = Engine(bridge, getter)
+    pos_manager = PositionManager()
+    wiring = PositionWiring(pos_manager, bridge)
+    wiring.setup_pnl_snapshot_flow(interval_sec=3)
 
     # UI
     ui = MainWindow(
@@ -541,12 +547,14 @@ def main():
         perform_filtering_cb=perform_filtering,
         project_root=os.getcwd(),
     )
+    bridge.pnl_snapshot_ready.connect(ui.on_pnl_snapshot)
 
     # 이벤트 배선
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
-    # 주문/체결 이벤트 필요 시:
-    # bridge.order_event.connect(ui.on_order_event)
+    # ✅ 추가: 포지션 갱신으로 이어지는 핵심 라인
+    bridge.price_update.connect(wiring.on_price_update)
+    bridge.fill_or_trade.connect(wiring.on_fill_or_trade)
 
     # 설정 로드
     store = SettingsStore()

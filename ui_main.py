@@ -627,16 +627,17 @@ class MainWindow(QMainWindow):
                 self.ax_equity.clear()
                 eq = port.get("equity_curve") or []
                 if eq:
-                    xs = [p.get("t") for p in eq][-20:]  # 최근 20개
+                    xs_raw = [p.get("t") for p in eq][-20:]
+                    # 문자열/타입 혼합 대비
+                    try:
+                        xs = [pd.to_datetime(x).to_pydatetime() for x in xs_raw]
+                    except Exception:
+                        xs = xs_raw  # 이미 datetime이면 그대로
                     ys = [float(p.get("equity", 0)) for p in eq][-20:]
                     self.ax_equity.plot(xs, ys, linewidth=1.8)
                     self.ax_equity.xaxis.set_major_formatter(DateFormatter("%Y-%m-%d"))
-
-                    if len(xs) > 5:
-                        step = max(1, len(xs)//5)
-                        self.ax_equity.set_xticks(xs[::step])
-                        for t in self.ax_equity.get_xticklabels():
-                            t.set_rotation(30)  # 글씨 겹치지 않게 기울임
+                    for t in self.ax_equity.get_xticklabels():
+                        t.set_rotation(30)  # 글씨 겹치지 않게 기울임
 
                 self.ax_equity.set_title(
                     "20일 손익",
@@ -672,6 +673,36 @@ class MainWindow(QMainWindow):
 
             # 전략 카드뷰
             self._update_strategy_cards(snap.get("by_condition") or {})
+
+            # --- 추가: 중앙 종목 리스트의 평균 매수가/매도가 업데이트 ---
+            
+            positions_by_symbol = snap.get("by_symbol") or {}
+            updated = False
+            for code6, pos_data in positions_by_symbol.items():
+                if not pos_data or not isinstance(pos_data, dict):
+                    continue
+
+                # self._result_rows에서 해당 종목을 찾습니다.
+                idx = self._result_index.get(code6)
+                if idx is not None:
+                    row = self._result_rows[idx]
+                    
+                    # 평균 매수가와 평균 매도가(실현된 경우)를 가져옵니다.
+                    avg_buy = pos_data.get("avg_buy_price")
+                    avg_sell = pos_data.get("avg_sell_price") # 매도 기록이 있을 때만 값이 존재
+
+                    # 기존 값과 다를 경우에만 업데이트하여 불필요한 렌더링을 방지합니다.
+                    if row.get("buy_price") != avg_buy:
+                        row["buy_price"] = avg_buy
+                        updated = True
+                    if avg_sell is not None and row.get("sell_price") != avg_sell:
+                        row["sell_price"] = avg_sell
+                        updated = True
+
+            # 변경된 내용이 있을 경우에만 HTML 테이블을 다시 그립니다.
+            if updated:
+                self._render_results_html()
+
         except Exception as e:
             self.append_log(f"[UI] on_pnl_snapshot 오류: {e}")
 
