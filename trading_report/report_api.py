@@ -1,224 +1,119 @@
-# -*- coding: utf-8 -*-
-"""
-trading_report/report_api.py
-- daily_report_generator.py의 내부 함수를 직접 가져와 리포트를 생성하는 프로그램용 API.
-- subprocess 없이 Python 함수 호출만으로 리포트 생성 가능.
-"""
+from typing import Any, Dict, List
+from trading_report.daily_report_generator import generate_report_context, Trade, _fmt
 
-from __future__ import annotations
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional, Dict, Any, Tuple, List
-from datetime import datetime
+def _build_strategy_table_html(strategy_kpis: List[Dict[str, Any]]) -> str:
+    """전략별 분석 데이터(dict list)로 HTML 테이블 행들을 생성합니다."""
+    rows = []
+    for kpi in strategy_kpis:
+        rows.append(f"""
+        <tr>
+            <td><strong>{kpi.get('strategy_name','—')}</strong></td>
+            <td>{kpi.get('total_trades','—')}</td>
+            <td>{_fmt(kpi.get('net_pnl_abs'), '원', is_int=True)}</td>
+            <td>{_fmt(kpi.get('win_rate'), '%')}</td>
+            <td>{_fmt(kpi.get('profit_factor'))}</td>
+            <td>{_fmt(kpi.get('max_drawdown_pct'), '%')}</td>
+        </tr>
+        """)
+    return "\n".join(rows) if rows else "<tr><td colspan='6'>데이터 없음</td></tr>"
 
-# ====== generator 모듈에서 필요한 함수들 직접 import ======
-# 파일 위치: trading_report/daily_report_generator.py
-from . import daily_report_generator as gen  # 같은 패키지 안에 있어야 함
+def _build_trade_log_html(trades: List[Trade]) -> str:
+    """거래 객체 리스트로 HTML 테이블 행들을 생성합니다."""
+    rows = []
+    for t in trades:
+        pnl_class = "trade-win" if t.pnl > 0 else "trade-loss"
+        rows.append(f"""
+        <tr class='{pnl_class}'>
+            <td>{t.symbol}</td>
+            <td>{t.strategy}</td>
+            <td>{_fmt(t.pnl_pct, '%')}</td>
+            <td>{_fmt(t.pnl, '원', is_int=True)}</td>
+            <td>{t.entry_ts.strftime('%H:%M')}</td>
+            <td>{t.exit_ts.strftime('%H:%M')}</td>
+            <td>{_fmt(t.holding_duration_min, '분', is_int=True)}</td>
+        </tr>
+        """)
+    return "\n".join(rows) if rows else "<tr><td colspan='7'>데이터 없음</td></tr>"
 
-try:
-    import pandas as pd  # for KST now (optional)
-except Exception:
-    pd = None
-
-
-# --------------------------------------------------------------------------------------
-# 경로 추정/유효성 모델
-# --------------------------------------------------------------------------------------
-@dataclass
-class DailyReportPaths:
-    system: Path
-    trades: Optional[Path]
-    template: Path
-    output: Path
-    reports_dir: Path
-
-
-def _is_kst_available() -> bool:
-    return pd is not None
-
-
-def _today_kst_str() -> str:
-    if _is_kst_available():
-        return pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def _resolve_project_root(root_like: str) -> Path:
+def get_report_html(date_str: str) -> str:
     """
-    실행 위치가 어긋나도 실제 프로젝트 루트를 찾아서 사용.
-    기준: candidate_stocks.csv 또는 trading_report/ 폴더 존재 여부
+    지정된 날짜의 분석 데이터를 기반으로 스타일이 적용된 최종 HTML 문자열을 생성합니다.
+    이 함수가 PyQt UI를 위한 유일한 인터페이스입니다.
     """
-    cand = Path(root_like or ".").resolve()
+    ctx = generate_report_context(date_str)
 
-    def _ok(p: Path) -> bool:
-        return (p / "candidate_stocks.csv").exists() or (p / "trading_report").exists()
+    if "error" in ctx:
+        return f"<h1>{ctx['date']} 리포트 생성 오류</h1><p>{ctx['error']}</p>"
 
-    if _ok(cand):
-        return cand
-    here = Path(__file__).resolve().parent.parent  # trading_report/ 상위
-    if _ok(here):
-        return here
-    if _ok(here.parent):
-        return here.parent
-    return cand
+    # 데이터로부터 HTML 테이블 부분을 동적으로 생성
+    strategy_rows_html = _build_strategy_table_html(ctx['strategy_kpis'])
+    trade_log_rows_html = _build_trade_log_html(ctx['trade_log'])
 
-
-def guess_paths(project_root: str, date_str: Optional[str] = None) -> DailyReportPaths:
+    css = """
+    <style>
+        body { font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; line-height: 1.7; color: #212529; background-color: #f8f9fa; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px 40px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+        h1, h2, h3 { color: #1a3a6c; border-bottom: 2px solid #e9ecef; padding-bottom: 10px; margin-top: 40px; }
+        h1 { font-size: 28px; text-align: center; border: none; }
+        h2 { font-size: 22px; }
+        h3 { font-size: 18px; border-bottom: none; color: #004a9e; }
+        .header-meta { text-align: center; color: #6c757d; margin-bottom: 40px; font-size: 14px; }
+        .kpi-table { width: 100%; border-collapse: collapse; }
+        .kpi-table td { padding: 12px; border: 1px solid #dee2e6; width: 25%; }
+        .kpi-table td:nth-child(odd) { background-color: #f8f9fa; font-weight: bold; color: #495057; }
+        .ai-section { background-color: #e9f5ff; padding: 20px; border-radius: 5px; margin-top: 15px; border-left: 5px solid #007bff; }
+        .ai-section ul { padding-left: 20px; margin: 0; }
+        .ai-section li { margin-bottom: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1em; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #004a9e; color: white; font-weight: bold; }
+        tr:nth-child(even) { background-color: #f8f9fa; }
+        .trade-win { color: #155724; background-color: #d4edda; }
+        .trade-loss { color: #721c24; background-color: #f8d7da; }
+    </style>
     """
-    질문에서 제공한 디렉토리 구조에 맞춰 기본 경로를 유추한다.
-    - system_results: ./data/system_results_YYYY-MM-DD.json
-    - trades(jsonl):  ./logs/trades/trade_YYYYMMDD.jsonl (없어도 OK)
-    - template:       ./trading_report/daily_report_template.md
-    - output:         ./reports/daily_YYYY-MM-DD.md
+
+    kpi = ctx['kpi']
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head><meta charset="UTF-8"><title>Daily Report - {ctx['date']}</title>{css}</head>
+    <body>
+        <div class="container">
+            <h1>퀀트 트레이딩 데일리 리포트</h1>
+            <p class="header-meta"><b>대상 날짜:</b> {ctx['date']} | <b>생성 시각:</b> {ctx['generated_at']}</p>
+            
+            <h2>Ⅰ. AI 애널리스트 총평</h2>
+            <div class="ai-section"><p>{ctx['ai']['summary']}</p></div>
+
+            <h2>Ⅱ. 전체 성과 대시보드</h2>
+            <table class="kpi-table">
+                <tr><td>순손익 (Net PnL)</td><td>{_fmt(kpi['net_pnl_abs'], '원', is_int=True)}</td><td>승률 (Win Rate)</td><td>{_fmt(kpi['win_rate'], '%')}</td></tr>
+                <tr><td>프로핏 팩터</td><td>{_fmt(kpi['profit_factor'])}</td><td>손익비</td><td>{_fmt(kpi['payoff_ratio'])}</td></tr>
+                <tr><td>최대 낙폭 (MDD)</td><td>{_fmt(kpi['max_drawdown_pct'], '%')}</td><td>샤프 지수</td><td>{_fmt(kpi['sharpe_ratio_annualized'])}</td></tr>
+                <tr><td>총 거래 횟수</td><td>{kpi['total_trades']} 회</td><td>평균 보유 시간</td><td>{_fmt(kpi['avg_holding_min'], '분', is_int=True)}</td></tr>
+            </table>
+
+            <h2>Ⅲ. AI 전략 분석 및 제언</h2>
+            <h3>심층 분석</h3>
+            <div class="ai-section"><p>{ctx['ai']['insight']}</p></div>
+            <h3>실행 계획 (Action Items)</h3>
+            <div class="ai-section"><ul><li>{ctx['ai']['action_items'].replace('-', '').strip().replace('\n', '</li><li>')}</li></ul></div>
+
+            <h2>Ⅳ. 전략별 성과 분석</h2>
+            <table>
+                <thead><tr><th>전략</th><th>거래 수</th><th>순손익 (PnL)</th><th>승률</th><th>프로핏 팩터</th><th>최대 낙폭 (MDD)</th></tr></thead>
+                <tbody>{strategy_rows_html}</tbody>
+            </table>
+
+            <h2>Ⅴ. 상세 거래 기록</h2>
+            <table>
+                <thead><tr><th>종목</th><th>전략</th><th>수익률</th><th>손익(원)</th><th>진입</th><th>청산</th><th>보유시간</th></tr></thead>
+                <tbody>{trade_log_rows_html}</tbody>
+            </table>
+        </div>
+    </body>
+    </html>
     """
-    root = _resolve_project_root(project_root)
-    reports_dir = (root / "reports"); reports_dir.mkdir(parents=True, exist_ok=True)
+    return html
 
-    day = (date_str or _today_kst_str())
-    ymd_dash = day
-    ymd_compact = day.replace("-", "")
-
-    system_path   = root / "logs" / "trades" / f"orders_{ymd_dash}.jsonl"
-    trades_path   = root / "logs" / "trades" / f"orders_{ymd_dash}.jsonl"
-    template_path = root / "trading_report" / "daily_report_template.md"
-    output_path = reports_dir / f"daily_{ymd_dash}.md"
-
-    return DailyReportPaths(
-        system=system_path,
-        trades=trades_path if trades_path.exists() else None,
-        template=template_path,
-        output=output_path,
-        reports_dir=reports_dir,
-    )
-
-
-# --------------------------------------------------------------------------------------
-# 리포트 생성 로직 (daily_report_generator의 main과 동일한 파이프라인을 함수화)
-# --------------------------------------------------------------------------------------
-def _build_context(
-    date_str: str,
-    mode: str,
-    system_data: Dict[str, Any],
-    trade_rows: List[Dict[str, Any]],
-    template_text: str,
-    use_ai: bool,
-) -> Tuple[Dict[str, Any], str]:
-    """generator의 파이프라인을 그대로 따라 컨텍스트와 최종 md 텍스트를 만든다."""
-    kpi = gen.derive_kpi(system_data, trade_rows)
-    timeline_rows = gen.build_timeline_rows(system_data)
-    s_rows_list, s_rows_md, s_scores_md = gen.group_by_strategy(system_data, trade_rows)
-    quality = gen.build_quality(trade_rows)
-
-    best, worst = gen.best_worst_trade(system_data)
-    busiest = gen.busiest_window(system_data)
-
-    if use_ai:
-        prompt_daily = f"[Daily Overview] date={date_str}\nKPI={kpi}\nQuality={quality}\nPlease summarize in Korean, 3~5 lines, no markdown."
-        daily_summary = gen.call_gemini_if_available(prompt_daily)
-        prompt_reflect = f"[Reflection] Provide 3~5 line reflection in Korean for improvements given KPI={kpi} and strategy_rows={s_rows_list[:5]}."
-        daily_reflection = gen.call_gemini_if_available(prompt_reflect)
-        prompt_insights = f"[Strategy Insights] Analyze per-strategy strengths/weaknesses in Korean. strategies={list( {k:v for k,v in enumerate(s_rows_list)} )}"
-        strategy_insights = gen.call_gemini_if_available(prompt_insights)
-        prompt_improve = f"[Improvements] Suggest concrete improvements per strategy in Korean."
-        strategy_improvements = gen.call_gemini_if_available(prompt_improve)
-        prompt_actions = f"[Action Items] Provide 3~5 bullet action items in Korean based on KPI and quality."
-        action_items = "- " + "\n- ".join(gen.call_gemini_if_available(prompt_actions).splitlines()[:5])
-    else:
-        # generator의 fallback 텍스트와 동등
-        daily_summary = "오전 추세 구간에서 추세추종 전략이 유효했고, 오후 변동성 축소로 역추세 전략 성과가 저하되었습니다."
-        daily_reflection = "- 추세추종 전략은 유지, 역추세 전략은 조건 완화/시간대 제한 검토.\n- 응답 지연이 큰 시간대(10~11시)에는 주문 슬로틀 적용 필요."
-        strategy_insights = "- MACD: 신호 일관성 양호\n- Reversal: 약세장에서 성과 저하\n- LadderBuy: 체결률 우수하나 지연 민감"
-        strategy_improvements = "- MACD: 유지\n- Reversal: 손절/재진입 로직 강화\n- LadderBuy: 배치 단위 축소, 가격 범위 조정"
-        action_items = "- MACD 오전 우선순위 유지\n- Reversal 조건 재조정\n- duration_ms>400 건 로그 분석"
-
-    ctx = dict(
-        generated_at = datetime.now(tz=gen.KST).strftime("%Y-%m-%d %H:%M:%S %Z") if hasattr(gen, "KST") else datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        date = date_str,
-        mode = mode,
-        kpi = kpi,
-        table = dict(
-            timeline_rows = timeline_rows,
-            strategy_rows = s_rows_md,
-            strategy_scores = s_scores_md,
-        ),
-        highlights = dict(
-            best_trade = best,
-            worst_trade = worst,
-            busiest_window = busiest,
-            fail_count = kpi.get("fail_count","—"),
-            max_latency_ms = kpi.get("max_latency_ms","—")
-        ),
-        quality = quality,
-        daily_summary = daily_summary,
-        daily_reflection = daily_reflection,
-        strategy_insights = strategy_insights,
-        strategy_improvements = strategy_improvements,
-        action_items = action_items,
-        meta = dict(
-            system_results_path = "N/A",
-            trade_jsonl_path = "—",
-        )
-    )
-
-    md = gen.render_template(template_text, ctx)
-    return ctx, md
-
-
-def run_daily_report(
-    project_root: str,
-    date_str: Optional[str] = None,
-    *,
-    system_path: Optional[str | Path] = None,
-    trades_path: Optional[str | Path] = None,
-    template_path: Optional[str | Path] = None,
-    output_path: Optional[str | Path] = None,
-    mode: str = "Live",
-    use_ai: bool = False,
-) -> Path:
-    """
-    데일리 리포트를 생성하고 출력 파일 경로를 반환.
-    - 인자를 비우면 프로젝트 구조를 기준으로 자동 경로 추정.
-    - daily_report_generator.py 내부 함수를 직접 사용 (subprocess 불필요).
-    """
-    day = date_str or _today_kst_str()
-    root = _resolve_project_root(project_root)
-
-    # 기본 경로 유추
-    guessed = guess_paths(str(root), day)
-
-    sys_p = Path(system_path) if system_path else guessed.system
-    trd_p = Path(trades_path) if trades_path else (guessed.trades if guessed.trades else None)
-    tpl_p = Path(template_path) if template_path else guessed.template
-    out_p = Path(output_path) if output_path else guessed.output
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-
-    # 필수 파일 확인: system + template
-    if not sys_p.exists():
-        raise FileNotFoundError(f"[trading_report] system_results 파일을 찾을 수 없습니다: {sys_p}")
-    if not tpl_p.exists():
-        raise FileNotFoundError(f"[trading_report] 템플릿 파일을 찾을 수 없습니다: {tpl_p}")
-
-    # 데이터 로드
-    system_data = gen.load_system_results(sys_p)
-    trade_rows: List[Dict[str, Any]] = gen.load_trade_jsonl(trd_p) if trd_p else []
-
-    # 템플릿 로드
-    template_text = Path(tpl_p).read_text(encoding="utf-8")
-
-    # 컨텍스트 + md 생성
-    ctx, md = _build_context(
-        date_str=day,
-        mode=mode,
-        system_data=system_data,
-        trade_rows=trade_rows,
-        template_text=template_text,
-        use_ai=use_ai,
-    )
-
-    # meta 실제 경로 기록(참고용)
-    ctx["meta"]["system_results_path"] = str(sys_p)
-    ctx["meta"]["trade_jsonl_path"] = str(trd_p) if trd_p else "—"
-
-    # 저장
-    out_p.write_text(md, encoding="utf-8")
-    return out_p

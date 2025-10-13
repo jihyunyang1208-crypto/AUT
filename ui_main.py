@@ -41,18 +41,13 @@ try:
     from core.macd_dialog import MacdDialog
 except Exception:
     MacdDialog = None
-from trading_report import run_daily_report
 import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import QFileDialog
 from PySide6.QtGui import QDesktopServices
 
-# trading_report API가 있으면 최우선 사용(없으면 자동으로 subprocess 대체)
-try:
-    from trading_report import run_daily_report as _run_daily_report_api  # type: ignore
-except Exception:
-    _run_daily_report_api = None  # fallback to subprocess
 
+from trading_report.report_dialog import ReportDialog
 # 설정 / 와이어링 (구버전 호환)
 try:
     from setting.settings_manager import SettingsStore, SettingsDialog
@@ -370,7 +365,7 @@ class MainWindow(QMainWindow):
                 # 📄 데일리 매매리포트 버튼 줄
         btn_row = QHBoxLayout()
         self.btn_daily_report = QPushButton("📄 데일리 매매리포트")
-        self.btn_daily_report.clicked.connect(self.on_click_daily_report)
+        self.btn_daily_report.clicked.connect(self.on_click_open_last_report)
         #self.btn_daily_report_open = QPushButton("열기")
         #self.btn_daily_report_open.clicked.connect(self.on_click_open_last_report)
         btn_row.addWidget(self.btn_daily_report)
@@ -966,8 +961,7 @@ class MainWindow(QMainWindow):
     def _guess_report_paths(self, date_str: str) -> dict:
         """
         질문에서 제공된 디렉토리 구조 기준 기본 경로를 유추.
-        - system:   ./data/system_results_YYYY-MM-DD.json
-        - trades:   ./logs/trades/trade_YYYYMMDD.jsonl (없어도 OK)
+        - trades:   ./logs/trades/orders_YYYY-MM-DD.jsonl
         - template: ./trading_report/daily_report_template.md
         - script:   ./trading_report/daily_report_generator.py (subprocess fallback)
         - output:   ./reports/daily_YYYY-MM-DD.md
@@ -976,16 +970,15 @@ class MainWindow(QMainWindow):
         reports_dir = (root / "reports"); reports_dir.mkdir(parents=True, exist_ok=True)
 
         ymd_dash = date_str
-        ymd_compact = date_str.replace("-", "")
 
-        system_path   = root / "logs" / "trades" / f"orders_{ymd_dash}.jsonl"
+        # 'system' 경로를 제거하고 'trades' 경로를 기본 데이터 소스로 사용합니다.
         trades_path   = root / "logs" / "trades" / f"orders_{ymd_dash}.jsonl"
         template_path = root / "trading_report" / "daily_report_template.md"
         script_path   = root / "trading_report" / "daily_report_generator.py"
         output_path   = reports_dir / f"daily_{ymd_dash}.md"
 
         return dict(
-            system=system_path,
+            # system 키 제거
             trades=trades_path,
             template=template_path,
             script=script_path,
@@ -1003,109 +996,21 @@ class MainWindow(QMainWindow):
     @Slot()
     def on_click_daily_report(self):
         """
-        1) trading_report.run_daily_report API가 있으면 그걸로 생성
-        2) 없으면 trading_report/daily_report_generator.py를 subprocess로 실행
+        사용자가 제공한 ReportDialog를 사용하여 리포트를 표시합니다.
         """
         try:
-            # 오늘 날짜(KST)
+            # ReportDialog에 전달할 오늘 날짜 문자열 생성
             now_kst = pd.Timestamp.now(tz="Asia/Seoul") if pd is not None else datetime.now()
             date_str = now_kst.strftime("%Y-%m-%d")
 
-            P = self._guess_report_paths(date_str)
-            system_p: Path   = P["system"]
-            trades_p: Path   = P["trades"]
-            template_p: Path = P["template"]
-            script_p: Path   = P["script"]
-            output_p: Path   = P["output"]
-            reports_dir: Path = P["reports_dir"]
-
-            # 필수: system_results
-            if not system_p.exists():
-                QMessageBox.information(
-                    self, "system_results 선택",
-                    f"파일이 없습니다:\n{system_p}\n\nsystem_results_YYYY-MM-DD.json을 선택해 주세요."
-                )
-                picked = self._pick_file("system_results JSON 선택", Path(self.project_root), "JSON Files (*.json);;All Files (*)")
-                if not picked:
-                    return
-                system_p = picked
-
-            # 템플릿
-            if not template_p.exists():
-                QMessageBox.information(
-                    self, "템플릿 선택",
-                    f"템플릿이 없습니다:\n{template_p}\n\nMarkdown 템플릿을 선택해 주세요."
-                )
-                picked = self._pick_file("Markdown 템플릿 선택", reports_dir, "Markdown (*.md);;All Files (*)")
-                if not picked:
-                    return
-                template_p = picked
-
-            # ===== 우선순위 1: API 직접 호출 =====
-            if _run_daily_report_api is not None:
-                try:
-                    out = _run_daily_report_api(
-                        project_root=self.project_root,
-                        date_str=date_str,
-                        system_path=str(system_p),
-                        trades_path=(str(trades_p) if trades_p.exists() else None),
-                        template_path=str(template_p),
-                        output_path=str(output_p),
-                        mode="Live",
-                        use_ai=False,  # 필요 시 True
-                    )
-                    self._last_report_path = str(out)
-                    self.append_log(f"✅ 리포트 생성 완료: {out}")
-                    self.status.showMessage(f"리포트 생성 완료: {Path(out).name}", 5000)
-                    if QMessageBox.question(self, "리포트 열기", "생성된 리포트를 열까요?") == QMessageBox.Yes:
-                        QDesktopServices.openUrl(QUrl.fromLocalFile(str(out)))
-                    return
-                except Exception as api_err:
-                    # API 실패 시 subprocess fallback 진행
-                    self.append_log(f"ℹ️ API 경로 실패, subprocess로 재시도: {api_err}")
-
-            # ===== 우선순위 2: subprocess 실행 =====
-            if not script_p.exists():
-                QMessageBox.information(
-                    self, "리포트 스크립트 선택",
-                    f"리포트 생성 스크립트를 찾지 못했습니다:\n{script_p}\n\n"
-                    "trading_report/daily_report_generator.py를 선택해 주세요."
-                )
-                picked = self._pick_file("리포트 스크립트 선택", Path(self.project_root), "Python (*.py);;All Files (*)")
-                if not picked:
-                    return
-                script_p = picked
-
-            args = [
-                sys.executable, str(script_p),
-                "--date", date_str,
-                "--system", str(system_p),
-                "--template", str(template_p),
-                "--output", str(output_p),
-                "--mode", "Live",
-                # "--use_ai"  # Gemini 코멘트 필요 시 주석 해제
-            ]
-            if trades_p.exists():
-                args.extend(["--trades", str(trades_p)])
-
-            self.append_log(f"🛠 리포트 생성 시작: {output_p.name}")
-            proc = subprocess.run(args, capture_output=True, text=True, cwd=str(Path(self.project_root).resolve()))
-            if proc.returncode != 0:
-                err = (proc.stderr or proc.stdout or "").strip()
-                self.append_log(f"❌ 리포트 생성 실패: {err}")
-                QMessageBox.critical(self, "리포트 실패", err or "리포트 생성에 실패했습니다.")
-                return
-
-            self._last_report_path = str(output_p)
-            self.append_log(f"✅ 리포트 생성 완료: {output_p}")
-            self.status.showMessage(f"리포트 생성 완료: {output_p.name}", 5000)
-
-            if QMessageBox.question(self, "리포트 열기", "생성된 리포트를 열까요?") == QMessageBox.Yes:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_p)))
+            # ReportDialog 인스턴스를 생성하고 실행합니다.
+            # 이 다이얼로그는 닫힐 때까지 부모창의 작업을 막는 모달(modal) 형태로 실행됩니다.
+            dialog = ReportDialog(date_str, self)
+            dialog.exec()
 
         except Exception as e:
             self.append_log(f"[UI] on_click_daily_report 오류: {e}")
-            QMessageBox.critical(self, "오류", str(e))
+            QMessageBox.critical(self, "리포트 오류", f"리포트를 표시하는 중 오류가 발생했습니다: {e}")
 
     @Slot()
     def on_click_open_last_report(self):
@@ -1119,9 +1024,23 @@ class MainWindow(QMainWindow):
                 if p.exists():
                     path = str(p)
                 else:
-                    QMessageBox.information(self, "안내", "최근 생성한 리포트가 없습니다.")
+                    # 리포트가 없을 때, 생성할지 물어보는 대화 상자 추가
+                    reply = QMessageBox.question(self, "리포트 생성",
+                                                 "당일 매매 리포트가 없습니다. 지금 생성하시겠습니까?",
+                                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    if reply == QMessageBox.Yes:
+                        self.on_click_daily_report()  # "예"를 누르면 리포트 생성 함수 호출
                     return
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+            if path and Path(path).exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            elif not getattr(self, "_last_report_path", None):
+                # on_click_daily_report 에서 리포트가 생성된 후 자동으로 열리기 때문에
+                # এখানে 특별히 처리할 필요가 없습니다.
+                pass
+            else:
+                 QMessageBox.information(self, "안내", "리포트 파일을 찾을 수 없습니다.")
+
         except Exception as e:
             self.append_log(f"[UI] on_click_open_last_report 오류: {e}")
 
