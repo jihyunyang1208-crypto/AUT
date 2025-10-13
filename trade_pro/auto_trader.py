@@ -41,7 +41,7 @@ class TradeSettings:
     # ✅ UI에서 직접 제어하는 시뮬레이션 스위치 (paper ≡ simulation)
     simulation_mode: Optional[bool] = None  # None이면 env/인자 기반으로 결정
     ladder_sell_enable: bool = False           # 라더 매도 전체 스위치
-
+    on_signal_use_ladder: bool = True          
 
 
 @dataclass
@@ -283,7 +283,7 @@ class AutoTrader:
         self._log(f"[AutoTrader] simulation_mode set to {self.simulation}")
 
     # ---------- Public dispatcher ----------
-
+    @staticmethod
     def _to_int(x, default=0):
         try:
             # "145000", 145000, "145000.0" 모두 허용
@@ -308,6 +308,48 @@ class AutoTrader:
         if not stk_cd:
             self._log("🚫 handle_signal: stk_cd 누락")
             return None
+
+        # ─────────────────────────────────────────────
+        # [간소화 핵심] mode 미지정 시, 설정 기반으로 자동 보강
+        #  - on_signal_use_ladder=True이면 BUY/SELL 모두 ladder 경로로 확정
+        #  - 필요한 필드(data)도 함께 채워 넣어 분기 일관성 보장
+        # ─────────────────────────────────────────────
+        if not mode and getattr(self.settings, "on_signal_use_ladder", True):
+            # 가격 추론 (cur_price 우선, 없으면 ord_uv)
+            try:
+                last_price = int(float(data.get("cur_price") or data.get("ord_uv") or 0))
+            except Exception:
+                last_price = 0
+            trde_tp = "3" if self.settings.order_type == "market" else "0"
+            tick = self._krx_tick(last_price) if last_price > 0 else 0
+
+            if signal == "BUY":
+                mode = "ladder_buy"
+                data.setdefault("cur_price", last_price)
+                data.setdefault("num_slices", int(self.ladder.num_slices))
+                data.setdefault("start_ticks_below", int(self.ladder.start_ticks_below))
+                data.setdefault("step_ticks", int(self.ladder.step_ticks))
+                data.setdefault("unit_amount", int(self.ladder.unit_amount))
+                data.setdefault("trde_tp", trde_tp)
+                if tick: data.setdefault("tick", int(tick))
+
+            elif signal == "SELL":
+                mode = "ladder_sell"
+                # 수량: PM 있으면 보유 전량, 없으면 1
+                qty = 1
+                if self.position_mgr:
+                    try:
+                        qty = max(1, int(self.position_mgr.get_qty(stk_cd)))
+                    except Exception:
+                        qty = 1
+                data.setdefault("cur_price", last_price)
+                data.setdefault("num_slices", int(self.ladder.num_slices))
+                data.setdefault("start_ticks_above", int(self.ladder.start_ticks_above))
+                data.setdefault("step_ticks", int(self.ladder.step_ticks))
+                data.setdefault("total_qty", int(qty))
+                data.setdefault("trde_tp", trde_tp)
+                if tick: data.setdefault("tick", int(tick))
+
 
         # (하위호환) 플래그식 라더 매수 진입
         if payload.get("ladder_buy") or data.get("ladder_buy"):
@@ -406,58 +448,12 @@ class AutoTrader:
         })
         return None
 
-    def make_on_signal_legacy(self, bridge: Optional[object] = None) -> Callable[[Any], None]:
-        if bridge is not None:
-            self.bridge = bridge
-
-        def _handler(sig_obj):
-            try:
-                side = str(getattr(sig_obj, "side", "")).upper()
-                symbol = str(getattr(sig_obj, "symbol", "")).strip()
-                price_attr = getattr(sig_obj, "price", 0)
-                last_price = int(float(price_attr)) if price_attr is not None else 0
-            except Exception:
-                return
-
-            if not symbol or last_price <= 0:
-                self._log("🚫 on_signal: 유효하지 않은 심볼/가격")
-                return
-
-            # 로그(bridge가 있을 때만)
-            try:
-                if self.bridge and hasattr(self.bridge, "log"):
-                    self.bridge.log.emit(f"📶 on_signal: {side} {symbol} @ {last_price}")
-            except Exception:
-                pass
-
-            if side == "BUY":
-                # 🔒 auto_buy 토글 존중 (master_enable 미사용)
-                if not self.settings.auto_buy:
-                    self._log("⛔ on_signal BUY 차단: auto_buy=False")
-                    return
-                payload = {"stk_cd": symbol, "dmst_stex_tp": "KRX", "cur_price": last_price}
-                asyncio.create_task(self._handle_ladder_buy(payload))
-            elif side == "SELL":
-                # 🔒 auto_sell 토글 존중 (master_enable 미사용)
-                if not self.settings.auto_sell:
-                    self._log("⛔ on_signal SELL 차단: auto_sell=False")
-                    return
-                data = {"dmst_stex_tp": "KRX", "stk_cd": symbol, "ord_qty": "1", "ord_uv": str(last_price), "trde_tp": "0", "cond_uv": ""}
-                asyncio.create_task(self._handle_simple_sell(data))
-            else:
-                self._emit_order_event({
-                    "type": "ORDER_EVENT","action": None,"symbol": symbol,
-                    "price": 0,"qty": 0,"status": f"UNHANDLED_SIDE:{side}",
-                    "ts": datetime.now(timezone.utc).isoformat(),"extra": {},
-                })
-        return _handler
 
     def make_on_signal(self, bridge: Optional[object] = None) -> Callable[[object], None]:
         """
-        ExitEntryMonitor → on_signal 에 주입할 핸들러 팩토리.
-        역할:
-        - TradeSignal 을 AutoTrader.handle_signal 의 payload 로 변환
-        - 주문 실행은 handle_signal 단일 경로로만 위임 (역할 중복 제거)
+         ExitEntryMonitor → on_signal 핸들러(얇은 어댑터).
+         - TradeSignal → handle_signal 이 기대하는 표준 payload(minimal)로 변환
+         - 정책/분기는 handle_signal에서 settings 기반으로 최종 결정
         """
         if bridge is not None:
             self.bridge = bridge
@@ -482,52 +478,25 @@ class AutoTrader:
             except Exception:
                 pass
 
-            # --- TradeSignal -> handle_signal payload 변환 ---
-            payload = {"signal": side, "data": {}}
 
-            if side == "BUY":
-                # handle_signal(BUY)는 ladder_like로 변환하므로 현재가만 있으면 됨
-                payload["data"] = {
+            # 최소 payload만 전달 → handle_signal이 설정 기반으로 모드/파라미터 보강
+            payload = {
+                "signal": side,
+                "data": {
                     "stk_cd": symbol,
                     "dmst_stex_tp": "KRX",
-                    "ord_uv": str(last_price),  # handle_signal 내부에서 cur_price로 사용
-                }
-
-            elif side == "SELL":
-                # SELL은 수량이 필요. PositionManager 있으면 전량/가용수량 사용, 없으면 1로 폴백
-                qty = 1
-                if self.position_mgr:
-                    try:
-                        q = int(self.position_mgr.get_qty(symbol))
-                        qty = max(1, q)
-                    except Exception:
-                        qty = 1
-
-                trde_tp = "3" if self.settings.order_type == "market" else "0"  # 시장/지정
-                payload["data"] = {
-                    "dmst_stex_tp": "KRX",
-                    "stk_cd": symbol,
-                    "ord_qty": str(qty),
-                    "ord_uv": str(last_price),  # 지정가일 때 사용, 시장가면 handle에서 무시 가능
-                    "trde_tp": trde_tp,
-                    "cond_uv": "",
-                }
-            else:
-                # 알 수 없는 사이드면 이벤트만 남기고 종료
-                self._emit_order_event({
-                    "type": "ORDER_EVENT","action": None,"symbol": symbol,
-                    "price": 0,"qty": 0,"status": f"UNHANDLED_SIDE:{side}",
-                    "ts": datetime.now(timezone.utc).isoformat(),"extra": {},
-                })
-                return
-
-            # --- 단일 경로로 주문 실행 위임 ---
+                    "ord_uv": str(last_price),  # handle_signal에서 cur_price로 해석/보강
+                },
+            }
             try:
                 # handle_signal 은 async 이므로 백그라운드 태스크로 디스패치
                 asyncio.create_task(self.handle_signal(payload))
             except RuntimeError:
                 # 이벤트 루프가 없는 환경이면 스레드에서 실행
-                threading.Thread(target=lambda: asyncio.run(self.handle_signal(payload)), daemon=True).start()
+                threading.Thread(
+                    target=lambda: asyncio.run(self.handle_signal(payload)),
+                    daemon=True
+                ).start()
 
         return _handler
 
@@ -945,7 +914,7 @@ class AutoTrader:
         else:
             tick = self._krx_tick(cur_price); tick_mode = "fixed"
 
-        num_slices = int(payload.get("num_slices") or 10)
+        num_slices = int(payload.get("num_slices") or self.ladder.num_slices)
         start_ticks_above = int(payload.get("start_ticks_above") or 1)
         step_ticks = int(payload.get("step_ticks") or 1)
 
