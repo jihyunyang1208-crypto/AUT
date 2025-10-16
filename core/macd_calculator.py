@@ -234,7 +234,8 @@ class MacdCalculator:
 
         logger.debug("[MACD] FULL emit: code=%s tf=%s points=%d last_t=%s",
                      code, tf, len(payload), (payload[-1]["t"] if payload else None))
-        macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "mode": "full", "series": payload})
+        interval_str = f"{tf}m"
+        macd_bus.macd_series_ready.emit({"code": code, "interval": interval_str, "series": payload})
 
     # ------------- public: APPEND -------------
     def apply_append(self, code: str, tf: str, rows: List[Dict[str, Any]]) -> None:
@@ -305,7 +306,9 @@ class MacdCalculator:
 
             logger.debug("[MACD] APPEND emit: code=%s tf=%s points=%d last_t=%s",
                          code, tf, len(appended_payload), appended_payload[-1]["t"])
-            macd_bus.macd_series_ready.emit({"code": code, "tf": tf, "mode": "append", "series": appended_payload})
+
+            interval_str = f"{tf}m"
+            macd_bus.macd_series_ready.emit({"code": code, "interval": interval_str, "series": payload})
 
 
 # 전역 계산기

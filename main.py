@@ -33,7 +33,8 @@ from ui_main import MainWindow
 
 # ---- trade_pro 모듈 ----
 from trade_pro.entry_exit_monitor import ExitEntryMonitor
-
+from trade_pro.position_manager import PositionManager
+from risk_management.position_wiring import PositionWiring
 # ---- 설정: settings_manager에 일원화 ----
 from setting.settings_manager import (
     SettingsStore, AppSettings, SettingsDialog,
@@ -170,6 +171,8 @@ class Engine(QObject):
         super().__init__(parent)
         self.bridge = bridge
         self.getter = getter
+
+        self.monitor: Optional[object] = None  # or: Optional["ExitEntryMonitor"]
 
         # 별도 asyncio 루프 스레드
         self.loop = asyncio.new_event_loop()
@@ -363,6 +366,7 @@ class Engine(QObject):
 
         async def job_5m():
             try:
+                # ① 초기 5분봉 로딩
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=need_5m)
                 rows5 = _extract_rows(res)
                 self.bridge.chart_rows_received.emit(code, "5m", rows5)
@@ -370,7 +374,16 @@ class Engine(QObject):
                     rows5_norm = normalize_ka10080_rows(rows5)
                     if rows5_norm:
                         calculator.apply_rows_full(code=code, tf="5m", rows=rows5_norm, need=need_5m)
+                        # 초기 데이터도 캐시에 주입
+                        try:
+                            df_push = _rows_to_df_ohlcv(rows5_norm, tz="Asia/Seoul")
+                            mon = getattr(self, "monitor", None) or getattr(self.bridge, "monitor", None)
+                            if mon is not None and not df_push.empty:
+                                mon.ingest_bars(code, "5m", df_push)
+                        except Exception as e:
+                            logger.error(f"모니터 데이터 주입 실패({code}): {e}")
 
+                # ② 증분 루프
                 while True:
                     await asyncio.sleep(_seconds_to_next_boundary(datetime.now(), poll_5m_step))
                     inc = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=5, need=60)
@@ -380,23 +393,23 @@ class Engine(QObject):
                         rows_inc_norm = normalize_ka10080_rows(rows_inc)
                         if rows_inc_norm:
                             calculator.apply_append(code=code, tf="5m", rows=rows_inc_norm)
-                            
-
-                        # 2. ✅ 매매 모니터에 최신 데이터 주입 (추가된 코드)
-                        try:
-                            df_push = _rows_to_df_ohlcv(rows_inc_norm, tz="Asia/Seoul")
-                            if self.monitor is not None and not df_push.empty:
-                                self.monitor.ingest_bars(code, "5m", df_push)
-                        except Exception as e:
-                            logger.error(f"모니터 데이터 주입 실패({code}): {e}")
+                            try:
+                                df_push = _rows_to_df_ohlcv(rows_inc_norm, tz="Asia/Seoul")
+                                mon = getattr(self, "monitor", None) or getattr(self.bridge, "monitor", None)
+                                if mon is not None and not df_push.empty:
+                                    mon.ingest_bars(code, "5m", df_push)
+                            except Exception as e:
+                                logger.error(f"모니터 데이터 주입 실패({code}): {e}")
 
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.info(f"⚠️ 5m 스트림 오류({code}): {e}  (type={type(e).__name__})")
 
+
         async def job_30m():
             try:
+                # 초기 30분봉 로딩
                 res = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=need_30m)
                 rows30 = _extract_rows(res)
                 self.bridge.chart_rows_received.emit(code, "30m", rows30)
@@ -404,7 +417,16 @@ class Engine(QObject):
                     rows30_norm = normalize_ka10080_rows(rows30)
                     if rows30_norm:
                         calculator.apply_rows_full(code=code, tf="30m", rows=rows30_norm, need=need_30m)
+                        # 초기 데이터도 모니터 캐시에 주입
+                        try:
+                            df_push = _rows_to_df_ohlcv(rows30_norm, tz="Asia/Seoul")
+                            mon = getattr(self, "monitor", None) or getattr(self.bridge, "monitor", None)
+                            if mon is not None and not df_push.empty:
+                                mon.ingest_bars(code, "30m", df_push)
+                        except Exception as e:
+                            logger.error(f"모니터 데이터 주입 실패({code}): {e}")
 
+                # 증분 루프
                 while True:
                     await asyncio.sleep(_seconds_to_next_boundary(datetime.now(), poll_30m_step))
                     inc = await asyncio.to_thread(self.getter.fetch_minute_chart_ka10080, code, tic_scope=30, need=60)
@@ -413,24 +435,48 @@ class Engine(QObject):
                         self.bridge.chart_rows_received.emit(code, "30m", rows_inc)
                         rows_inc_norm = normalize_ka10080_rows(rows_inc)
                         if rows_inc_norm:
-                            calculator.apply_append(code=code, tf="30m", rows=rows_inc_norm)  # ✅ 고쳐진 라인
+                            calculator.apply_append(code=code, tf="30m", rows=rows_inc_norm)
+                            try:
+                                df_push = _rows_to_df_ohlcv(rows_inc_norm, tz="Asia/Seoul")
+                                mon = getattr(self, "monitor", None) or getattr(self.bridge, "monitor", None)
+                                if mon is not None and not df_push.empty:
+                                    mon.ingest_bars(code, "30m", df_push)
+                            except Exception as e:
+                                logger.error(f"모니터 데이터 주입 실패({code}): {e}")
+
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.info(f"⚠️ 30m 스트림 오류({code}): {e}  (type={type(e).__name__})")
 
+
         async def job_1d():
             try:
+                # 오늘 날짜를 YYYYMMDD 형식으로 준비
                 today = date.today().strftime("%Y%m%d")
+                # 일봉 차트 데이터 요청
                 res = await asyncio.to_thread(self.getter.fetch_daily_chart_ka10081, code, base_dt=today, need=need_1d)
+                # 응답에서 rows 추출 후 UI로 전달
                 rows1d = _extract_rows(res)
                 self.bridge.chart_rows_received.emit(code, "1d", rows1d)
+
                 if rows1d:
+                    # 일봉 데이터의 MACD 초기값 적용
                     calculator.apply_rows_full(code=code, tf="1d", rows=rows1d, need=need_1d)
+                    # 초기 일봉 데이터도 모니터 캐시에 주입
+                    try:
+                        df_push = _rows_to_df_ohlcv(rows1d, tz="Asia/Seoul")
+                        mon = getattr(self, "monitor", None) or getattr(self.bridge, "monitor", None)
+                        if mon is not None and not df_push.empty:
+                            mon.ingest_bars(code, "1d", df_push)
+                    except Exception as e:
+                        logger.error(f"모니터 데이터 주입 실패({code}): {e}")
+
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.info(f"⚠️ 1d 초기화 오류({code}): {e}  (type={type(e).__name__})")
+
 
         def _submit(coro):
             return asyncio.run_coroutine_threadsafe(coro, self.loop)
@@ -575,7 +621,8 @@ def main():
         bar_close_window_start_sec=int(app_cfg.bar_close_window_start_sec),
         bar_close_window_end_sec=int(app_cfg.bar_close_window_end_sec),
     )
-
+    engine.monitor = monitor
+    bridge.monitor = monitor
     ui.show()
 
     # 1) 루프 시작 + 초기화

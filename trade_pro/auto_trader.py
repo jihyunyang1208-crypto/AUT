@@ -259,7 +259,7 @@ class AutoTrader:
 
         self.session_id = uuid.uuid4().hex[:12]
         self._log = log or (lambda m: print(str(m)))
-        self.logger = TradeLogger(log_fn=self._log)
+        self.logger = TradeLogger(log_fn=self._log, slim=True)
         self.bridge = bridge
         self.position_mgr = position_mgr
 
@@ -297,6 +297,31 @@ class AutoTrader:
             return int(float(x))
         except Exception:
             return int(default)
+
+
+    def submit_buy_order(self, code: str, qty: int, price: float, **kwargs) -> None:
+        """매수 주문 제출 시 PositionManager에 예약 후 주문 제출."""
+        # 1. 주문 전 pending 수량 증가
+        self.position_mgr.reserve_buy(code, qty)
+        # 2. 주문 제출 (예시 _submit_order는 실제 API 호출)
+        response = self._submit_order(code=code, side="BUY", qty=qty, price=price, **kwargs)
+        # 3. 주문 실패 시 대기 수량 해제
+        if not getattr(response, "ok", True):
+            self.position_mgr.release_buy(code, qty)
+
+    def submit_sell_order(self, code: str, qty: int, price: float, **kwargs) -> None:
+        """매도 주문 제출 시 PositionManager에 예약 후 주문 제출."""
+        self.position_mgr.reserve_sell(code, qty)
+        response = self._submit_order(code=code, side="SELL", qty=qty, price=price, **kwargs)
+        if not getattr(response, "ok", True):
+            self.position_mgr.release_sell(code, qty)
+
+    def on_order_fill(self, code: str, side: str, qty: int, price: float) -> None:
+        """체결 이벤트를 수신하면 PositionManager에 포지션 반영."""
+        if side.upper() == "BUY":
+            self.position_mgr.apply_fill_buy(code, qty, price)
+        elif side.upper() == "SELL":
+            self.position_mgr.apply_fill_sell(code, qty, price)
 
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

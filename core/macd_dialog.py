@@ -1,43 +1,40 @@
-# core/macd_dialog.py
+# core/macd_dialog.py 
+
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any
 import logging
-import pandas as pd
-import pyqtgraph as pg
+from typing import Dict, Any
 
+import pandas as pd
+# Matplotlib / PySide6 연동을 위한 import
 from PySide6.QtCore import Qt, Slot, QObject, Signal, QThread
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QSplitter, QWidget, QPushButton, QTextEdit, QHBoxLayout
 )
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.dates import DateFormatter
+from matplotlib.figure import Figure
 
-# 계산기/버스/조회 API
+# 기존 유틸리티 import
 from core.macd_calculator import macd_bus, get_points
 from utils.stock_info_manager import stock_info_manager
 from utils.gemini_client import GeminiClient
-
-# 결과(JSONL) 유틸 
-from utils.results_store import (
-    load_results_for_date, filter_by_symbol, to_dataframe, today_str,
-    load_orders_jsonl, results_path_for,  
-)
+from utils.results_store import load_orders_jsonl, results_path_for, today_str
 
 logger = logging.getLogger(__name__)
 
 
 # ==============================
-# Gemini 분석 워커
+# Gemini 분석 워커 (기존과 동일)
 # ==============================
 class BullishAnalysisWorker(QObject):
     analysis_ready = Signal(str)
-
     def __init__(self, gemini_client: GeminiClient, code: str, stock_name: str, parent=None):
         super().__init__(parent)
         self._client = gemini_client
         self._code = code
         self._name = stock_name
-
     @Slot()
     def run(self):
         try:
@@ -45,8 +42,8 @@ class BullishAnalysisWorker(QObject):
             response_text = self._client.run_briefing(extra_context=extra_context)
             self.analysis_ready.emit(response_text)
         except Exception as e:
-            logger.error("Gemini API call failed (model=%s): %s", self._client.model_name, e)
-            self.analysis_ready.emit("⚠️ AI 브리핑 실패: 모델 접근 불가/퇴역 또는 네트워크 문제로 보입니다.")
+            logger.error("Gemini API call failed: %s", e)
+            self.analysis_ready.emit("⚠️ AI 브리핑 실패: 모델 접근 불가 또는 네트워크 문제로 보입니다.")
 
 
 # ==============================
@@ -54,12 +51,7 @@ class BullishAnalysisWorker(QObject):
 # ==============================
 class MacdDialog(QDialog):
     COLS = ["TF", "Time", "MACD", "Hist", "ΔMACD", "ΔHist", "Cross"]
-    _ROW_OF = {"5m": 0, "30m": 1}
     _ANALYSIS_TEXT_CACHE: Dict[str, str] = {}
-
-    GRAPH_POINTS = 20
-
-    # 다이얼로그를 닫아도 유지하고 싶은 데이터 캐시
     _UI_CACHE_BY_CODE: Dict[str, pd.DataFrame] = {}
 
     def __init__(self, code: str, *, parent=None, bus=macd_bus):
@@ -69,31 +61,110 @@ class MacdDialog(QDialog):
         stock_name = stock_info_manager.get_name(self.code)
 
         self.setWindowFlags(self.windowFlags() | Qt.Window | Qt.WindowMinMaxButtonsHint)
-        self.setWindowTitle(f"MACD 상세 - {self.code}")
+        self.setWindowTitle(f"MACD 상세 - {stock_name} ({self.code})")
         self.setModal(False)
-        self.resize(1280, 900)          # ▶ 기본 크기 확대
+        self.resize(1280, 900)
         self.setMinimumSize(1100, 760)
 
-        # ====== 상단 타이틀/버튼 ======
+        # --- Gemini 분석기 준비 ---
+        self.gemini_client = GeminiClient(prompt_file="resources/bullish_analysis_prompt.md")
+
+        # --- UI 위젯 생성 ---
         self.lbl = QLabel(f"종목: <b>{stock_name} ({self.code})</b>")
         self.lbl.setTextFormat(Qt.RichText)
-
-        self.gemini_client = GeminiClient(prompt_file="resources/bullish_analysis_prompt.md")
-        self.bullish_analysis_btn = QPushButton("종목 분석")
-        self.bullish_analysis_btn.clicked.connect(self._on_bullish_analysis_clicked)
-
-        self.analysis_btn = QPushButton("종목 분석 결과 ▶")
-        self.analysis_btn.clicked.connect(self._on_analysis_toggle)
-
-        # ▶ 차트 토글
-        self.chart_visible = True
+        self.bullish_analysis_btn = QPushButton("✨ AI 종목 분석")
+        self.analysis_btn = QPushButton("분석 결과 보기 ▶")
         self.chart_toggle_btn = QPushButton("차트 숨기기 ▲")
+        self.refresh_results_btn = QPushButton("🔄 당일 결과 새로고침")
+
+        # --- 차트 위젯 (Matplotlib) ---
+        self.fig_5m, self.canvas_5m, self.ax_5m = self._create_chart_canvas()
+        self.fig_30m, self.canvas_30m, self.ax_30m = self._create_chart_canvas()
+
+        # --- 테이블 위젯 ---
+        self.table = self._create_macd_table()
+        self.results_table = self._create_results_table()
+
+        # --- 분석 결과 위젯 (초기 숨김) ---
+        self.analysis_widget, self.analysis_output = self._create_analysis_panel()
+        cached_text = MacdDialog._ANALYSIS_TEXT_CACHE.get(self.code)
+        if cached_text:
+            self.analysis_output.setText(cached_text)
+
+        # --- 레이아웃 구성 ---
+        self._setup_layout()
+
+        # --- 시그널 연결 ---
+        self.bullish_analysis_btn.clicked.connect(self._on_bullish_analysis_clicked)
+        self.analysis_btn.clicked.connect(self._on_analysis_toggle)
         self.chart_toggle_btn.clicked.connect(self._on_chart_toggle)
+        self.refresh_results_btn.clicked.connect(self._on_refresh_results_clicked)
 
-        self._is_analysis_loaded = False
-        self._is_analysis_visible = False
+        try:
+            # ✅ 데이터 버스를 on_series_data 슬롯에 직접 연결
+            self.bus.macd_series_ready.connect(self.on_series_data, Qt.UniqueConnection)
+        except (TypeError, RuntimeError):
+            pass # 이미 연결되었거나 다른 문제 발생 시 무시
 
-        # ====== 메인 레이아웃 ======
+        # --- 초기 데이터 로드 ---
+        self._refresh_all_data() # ✅ 테이블과 차트를 모두 초기화하는 함수 호출
+        self._load_and_show_results(use_cache_first=True)
+
+
+    # -----------------------------
+    # UI 구성 헬퍼 함수
+    # -----------------------------
+    def _create_chart_canvas(self):
+        """Matplotlib 차트와 캔버스를 생성하고 스타일을 지정합니다."""
+        fig = Figure(tight_layout=True, facecolor="#1e2126")
+        canvas = FigureCanvas(fig)
+        ax = fig.add_subplot(111, facecolor="#23272e")
+        ax.tick_params(colors="#e9edf1")
+        ax.title.set_color("#e9edf1")
+        ax.xaxis.label.set_color("#cfd6df")
+        ax.yaxis.label.set_color("#cfd6df")
+        for s in ax.spines.values(): s.set_color("#555")
+        return fig, canvas, ax
+
+    def _create_macd_table(self):
+        """MACD 데이터 표시용 테이블을 생성합니다."""
+        table = QTableWidget(3, len(self.COLS))
+        table.setHorizontalHeaderLabels(self.COLS)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setAlternatingRowColors(True)
+        self._set_item(table, 0, 0, "5m", center=True)
+        self._set_item(table, 1, 0, "30m", center=True)
+        self._set_item(table, 2, 0, "1d", center=True)
+        return table
+        
+    def _create_results_table(self):
+        """당일 트레이딩 결과 표시용 테이블을 생성합니다."""
+        table = QTableWidget(0, 7)
+        table.setHorizontalHeaderLabels(["Time", "Action", "Code", "Name", "Qty", "ReturnMsg", "Strategy"])
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setAlternatingRowColors(True)
+        return table
+
+    def _create_analysis_panel(self):
+        """AI 분석 결과 표시용 패널을 생성합니다."""
+        widget = QWidget()
+        widget.setMinimumHeight(200)
+        widget.hide()
+        layout = QVBoxLayout(widget)
+        layout.addWidget(QLabel("<b>✨ AI 종목 분석 결과</b>"))
+        output = QTextEdit()
+        output.setReadOnly(True)
+        layout.addWidget(output)
+        return widget, output
+
+    def _setup_layout(self):
+        """메인 UI 레이아웃을 구성합니다."""
         main_layout = QVBoxLayout(self)
 
         header_row = QHBoxLayout()
@@ -104,240 +175,169 @@ class MacdDialog(QDialog):
         header_row.addWidget(self.analysis_btn)
         main_layout.addLayout(header_row)
 
-        # ====== 상부: MACD 테이블 + 그래프 ======
-        self.top_split = QSplitter(Qt.Vertical)
+        main_splitter = QSplitter(Qt.Vertical)
 
-        # MACD 테이블 (5m/30m/1d)
-        self.table = QTableWidget(3, len(self.COLS), self)
-        self.table.setHorizontalHeaderLabels(self.COLS)
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.table.setAlternatingRowColors(True)
-        self._set_item(0, 0, "5m", center=True)
-        self._set_item(1, 0, "30m", center=True)
-        self._set_item(2, 0, "1d", center=True)
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0,0,0,0)
+        top_layout.addWidget(self.table)
 
-        # 그래프
-        self.graph_widget = pg.PlotWidget(title=f"MACD & Histogram ({self.GRAPH_POINTS} Recent)")
+        self.chart_splitter = QSplitter(Qt.Horizontal)
+        self.chart_splitter.addWidget(self.canvas_5m)
+        self.chart_splitter.addWidget(self.canvas_30m)
+        top_layout.addWidget(self.chart_splitter, 1)
 
-        self.graph_widget.setBackground('k')
-        self.graph_widget.getAxis('bottom').setPen('w')
-        self.graph_widget.getAxis('left').setPen('w')
-        self.graph_widget.getAxis('left').setTicks([])
-        self.graph_widget.plotItem.getAxis('bottom').setTicks([])
-        self.graph_widget.setMinimumHeight(160)  
-        self.top_split.addWidget(self.table)
-        self.top_split.addWidget(self.graph_widget)
-        
-        self.top_split.setStretchFactor(0, 2)
-        self.top_split.setStretchFactor(1, 1)
-
-        # ====== 하부: 오늘자 결과(JSONL) 표 ======
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
-
-        # 버튼/라벨 행
         btn_row = QHBoxLayout()
-        self.refresh_results_btn = QPushButton("당일 결과 새로고침")
-        self.refresh_results_btn.clicked.connect(self._on_refresh_results_clicked)
-        btn_row.addWidget(QLabel("<b>당일 트레이딩 기록</b>"))   # ▶ 텍스트 변경
+        btn_row.addWidget(QLabel("<b>당일 트레이딩 기록</b>"))
         btn_row.addStretch(1)
         btn_row.addWidget(self.refresh_results_btn)
         bottom_layout.addLayout(btn_row)
-
-        # 결과 표
-        self.results_table = QTableWidget(0, 6, self)
-        self.results_table.setHorizontalHeaderLabels(
-            ["Time", "Symbol", "Stock Code", "Name", "Qty", "ReturnMsg"]
-        )
-        self.results_table.verticalHeader().setVisible(False)
-        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.results_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.results_table.setAlternatingRowColors(True)
         bottom_layout.addWidget(self.results_table)
 
-        # ====== 전체 스플리터 구성 ======
-        splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(self.top_split)
-        splitter.addWidget(bottom_widget)
-        splitter.setSizes([120, 300])     # ↑차트 120px, ↓테이블 600px
+        main_splitter.addWidget(top_widget)
+        main_splitter.addWidget(bottom_widget)
+        main_splitter.setSizes([500, 250])
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        main_layout.addWidget(splitter)
-
-        # ====== 분석 결과 영역 (초기 숨김) ======
-        self.analysis_widget = QWidget()
-        self.analysis_widget.setMinimumHeight(200)
-        self.analysis_widget.hide()
-        analysis_layout = QVBoxLayout(self.analysis_widget)
-        analysis_layout.addWidget(QLabel("<b>종목 분석 결과</b>"))
-        self.analysis_output = QTextEdit()
-        self.analysis_output.setReadOnly(True)
-        analysis_layout.addWidget(self.analysis_output)
+        main_layout.addWidget(main_splitter, 1)
         main_layout.addWidget(self.analysis_widget)
-        cached_text = MacdDialog._ANALYSIS_TEXT_CACHE.get(self.code)
-        if cached_text:
-            self.analysis_output.setText(cached_text)
-        else:
-            self.analysis_output.clear()
-
-        # 초기 표시
-        self._refresh_all()
-        self._load_and_show_results(use_cache_first=True)
-
-        # 버스 구독 (중복 연결 방지)
-        try:
-            self.bus.macd_series_ready.connect(self._on_bus, Qt.UniqueConnection)
-        except TypeError:
-            pass
 
     # -----------------------------
-    # 내부 유틸
+    # 데이터 처리 및 차트 업데이트
     # -----------------------------
-    def _set_item(self, row: int, col: int, text: str, *, center: bool = False):
-        it = QTableWidgetItem(text)
-        it.setTextAlignment(Qt.AlignCenter if center else (Qt.AlignRight | Qt.AlignVCenter))
-        self.table.setItem(row, col, it)
+    @Slot(dict)
+    def on_series_data(self, data: dict):
+        """[핵심 슬롯] 실시간 데이터를 받아 해당 차트와 테이블을 업데이트합니다."""
+        # 디버깅을 위해 들어온 데이터 출력
+        print(f"[DEBUG] on_series_data received: {data.get('code')} / {data.get('interval')}")
 
-    @staticmethod
-    def _fmt(v: Optional[float], digits: int = 5) -> str:
-        try:
-            if v is None or (isinstance(v, float) and pd.isna(v)):
-                return "—"
-            return f"{float(v):.{digits}f}"
-        except Exception:
-            return "—"
+        if data.get("code") != self.code:
+            return
+        
+        interval = data.get("interval")
+        series = data.get("series", [])
+        if not series or interval not in ("5m", "30m"):
+            return
 
-    def _row_of(self, tf: str) -> Optional[int]:
-        s = str(tf).strip().lower()
-        if s in {"5", "5m", "5min", "m5"}:
-            return 0
-        if s in {"30", "30m", "30min", "m30"}:
-            return 1
-        if s in {"1d", "d", "day"}:
-            return 2
-        return self._ROW_OF.get(s)
+        # 1. 테이블 업데이트 (최신 데이터 기반)
+        self._update_table_from_series(interval, series)
 
+        # 2. 차트 업데이트
+        df = pd.DataFrame(series)
+        if df.empty or 'ts' not in df.columns:
+            return
+            
+        df['ts'] = pd.to_datetime(df['ts'])
+        df = df.tail(20)
+
+        if interval == "5m":
+            self.update_plot(self.ax_5m, self.canvas_5m, df['ts'], df['macd'], df['signal'], df['hist'], "MACD (5분봉)")
+        elif interval == "30m":
+            self.update_plot(self.ax_30m, self.canvas_30m, df['ts'], df['macd'], df['signal'], df['hist'], "MACD (30분봉)")
+
+    def update_plot(self, ax, canvas, dates, macd, signal, hist, title):
+        """지정된 축(ax)에 MACD 차트를 그리는 공통 함수 (X축 최적화 적용)"""
+        ax.clear()
+        if not dates.empty:
+            ax.plot(dates, macd, label='MACD', color='#60a5fa', linewidth=1.5)
+            ax.plot(dates, signal, label='Signal', color='#f59e0b', linewidth=1.2, linestyle='--')
+            
+            bar_colors = ['#22c55e' if h >= 0 else '#ef4444' for h in hist]
+            bar_width = (dates.iloc[1] - dates.iloc[0]) * 0.4 if len(dates) > 1 else 0.01
+            ax.bar(dates, hist, label='Hist', color=bar_colors, width=bar_width, alpha=0.7)
+            
+            # ▼▼▼ 수정된 부분 ▼▼▼
+            # X축 라벨 포맷 지정
+            ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
+            
+            # X축 라벨의 최대 개수를 6개로 제한하여 겹침 방지
+            max_ticks = 6
+            if len(dates) > max_ticks:
+                step = len(dates) // max_ticks
+                tick_indices = range(0, len(dates), step)
+                tick_dates = dates.iloc[tick_indices]
+                ax.set_xticks(tick_dates)
+            
+            ax.tick_params(axis='x', rotation=30, labelsize=8)
+            ax.legend(labelcolor="#e9edf1", facecolor="#2a2f36", edgecolor="#3a414b")
+        
+        ax.set_title(title, color='#e9edf1' )
+        ax.grid(True, linestyle='--', alpha=0.25, color="#555")
+        canvas.draw()
     # -----------------------------
-    # MACD 테이블 & 그래프
+    # 테이블 업데이트
     # -----------------------------
-    def _refresh_all(self):
+    def _refresh_all_data(self):
+        """(최초 실행용) 모든 시간대의 테이블과 차트를 캐시 데이터로 초기화합니다."""
         for tf in ("5m", "30m", "1d"):
-            self._refresh_row(tf)
+            self._update_ui_from_cache(tf)
+            
+    def _update_ui_from_cache(self, tf:str):
+        """캐시(get_points)에서 데이터를 가져와 테이블과 차트를 업데이트합니다."""
+        pts = get_points(self.code, tf, n=20) or []
+        self._update_table_from_series(tf, pts)
+        
+        if not pts: return
+        df = pd.DataFrame(pts)
+        df['ts'] = pd.to_datetime(df['ts'])
+        
+        if tf == "5m":
+            self.update_plot(self.ax_5m, self.canvas_5m, df['ts'], df['macd'], df['signal'], df['hist'], "MACD (5분봉)")
+        elif tf == "30m":
+            self.update_plot(self.ax_30m, self.canvas_30m, df['ts'], df['macd'], df['signal'], df['hist'], "MACD (30분봉)")
 
-    def _refresh_row(self, tf: str):
-        row = self._row_of(tf)
-        if row is None:
+    def _update_table_from_series(self, tf: str, series: list):
+        """주어진 데이터 시리즈로 MACD 테이블의 한 행을 업데이트합니다."""
+        row_map = {"5m": 0, "30m": 1, "1d": 2}
+        row = row_map.get(tf)
+        if row is None or not series:
             return
 
-        pts = get_points(self.code, tf, n=self.GRAPH_POINTS) or []
-        if not pts:
-            for c in range(1, len(self.COLS)):
-                self._set_item(row, c, "—", center=True)
-            return
-
-        last = pts[-1]
-        prev = pts[-2] if len(pts) > 1 else None
-
-        ts = last["ts"] if isinstance(last["ts"], pd.Timestamp) else pd.Timestamp(last["ts"])
-        if ts.tzinfo is None:
-            ts = ts.tz_localize("Asia/Seoul")
-        self._set_item(row, 1, ts.strftime("%Y-%m-%d %H:%M"), center=True)
-
+        last = series[-1]
+        prev = series[-2] if len(series) > 1 else None
+        
+        ts = pd.to_datetime(last["ts"]).tz_convert("Asia/Seoul")
+        self._set_item(self.table, row, 1, ts.strftime("%H:%M:%S" if tf != "1d" else "%m-%d"), center=True)
+        
         macd = float(last.get("macd", float("nan")))
         hist = float(last.get("hist", float("nan")))
-
-        self._set_item(row, 2, self._fmt(macd))
-        self._set_item(row, 3, self._fmt(hist))
-
-        def _delta(cur, prv):
-            if cur is None or prv is None:
-                return "—"
-            if any(pd.isna(x) for x in (cur, prv)):
-                return "—"
-            return f"{(float(cur) - float(prv)):+.5f}"
-
-        prev_macd = float(prev["macd"]) if prev else None
-        prev_hist = float(prev["hist"]) if prev else None
-
-        self._set_item(row, 4, _delta(macd, prev_macd))
-        self._set_item(row, 5, _delta(hist, prev_hist))
-
-        cross = "—"
-        if prev is not None and not any(pd.isna(x) for x in (hist, prev["hist"])):
-            was_above = float(prev["hist"]) > 0
-            now_above = hist > 0
-            if (not was_above) and now_above:
-                cross = "G-Cross"
-            elif was_above and (not now_above):
-                cross = "D-Cross"
-        self._set_item(row, 6, cross, center=True)
-
-        if tf == "5m" and self.chart_visible:
-            self._update_graph(pts)
-
-    def _update_graph(self, pts: List[Dict[str, Any]]):
-        """MACD 히스토그램과 MACD 라인을 스케일 조정 후 함께 표시."""
-        if len(pts) < 5:
-            return
-
-        self.graph_widget.clear()
-        zero_line = pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen('w', width=1, style=Qt.DashLine))
-        self.graph_widget.addItem(zero_line)
-
-        recent = pts[-self.GRAPH_POINTS:]
-        x_vals = list(range(len(recent)))
-
-        hist_values = [float(p.get("hist", float("nan"))) / 10.0 for p in recent]
-        macd_values = [float(p.get("macd", float("nan"))) / 100.0 for p in recent]
-
-        colors = [pg.mkColor('#3cb371') if (h is not None and not pd.isna(h) and h >= 0) else pg.mkColor('#dc143c')
-                  for h in hist_values]
-
-        bar_graph = pg.BarGraphItem(x=x_vals, height=hist_values, width=0.6, brushes=colors)
-        self.graph_widget.addItem(bar_graph)
-        self.graph_widget.plot(x_vals, macd_values, pen=pg.mkPen('c', width=2))
-        self.graph_widget.autoRange()
+        self._set_item(self.table, row, 2, self._fmt(macd))
+        self._set_item(self.table, row, 3, self._fmt(hist))
+        
+        if prev:
+            prev_macd = float(prev.get("macd", float("nan")))
+            prev_hist = float(prev.get("hist", float("nan")))
+            self._set_item(self.table, row, 4, self._fmt_delta(macd, prev_macd))
+            self._set_item(self.table, row, 5, self._fmt_delta(hist, prev_hist))
+            
+            cross = "—"
+            if pd.notna(hist) and pd.notna(prev_hist):
+                if prev_hist <= 0 and hist > 0: cross = "G-Cross"
+                elif prev_hist >= 0 and hist < 0: cross = "D-Cross"
+            self._set_item(self.table, row, 6, cross, center=True)
 
     # -----------------------------
-    # 차트 토글
+    # 이벤트 핸들러 (버튼 등)
     # -----------------------------
     @Slot()
     def _on_chart_toggle(self):
-        self.chart_visible = not self.chart_visible
-        self.graph_widget.setVisible(self.chart_visible)
-        self.chart_toggle_btn.setText("차트 숨기기 ▲" if self.chart_visible else "차트 보이기 ▼")
-        # 차트를 숨길 때 테이블 영역을 넓혀주기 위해 스플리터 비율 손봄
-        if self.chart_visible:
-            self.top_split.setStretchFactor(0, 1)
-            self.top_split.setStretchFactor(1, 1)
-        else:
-            self.top_split.setStretchFactor(0, 1)
-            self.top_split.setStretchFactor(1, 0)
-        self.resize(self.size())
+        is_visible = self.chart_splitter.isVisible()
+        self.chart_splitter.setVisible(not is_visible)
+        self.chart_toggle_btn.setText("차트 보이기 ▼" if is_visible else "차트 숨기기 ▲")
 
-    # -----------------------------
-    # 분석 패널 토글/로드
-    # -----------------------------
     @Slot()
     def _on_analysis_toggle(self):
-        self._is_analysis_visible = not self._is_analysis_visible
-        self.analysis_widget.setVisible(self._is_analysis_visible)
-        self.analysis_btn.setText("종목 분석 결과 ▼" if self._is_analysis_visible else "종목 분석 결과 ▶")
-        self.resize(self.minimumSizeHint())
+        is_visible = self.analysis_widget.isVisible()
+        self.analysis_widget.setVisible(not is_visible)
+        self.analysis_btn.setText("분석 결과 숨기기 ▲" if not is_visible else "분석 결과 보기 ▶")
 
     @Slot()
     def _on_bullish_analysis_clicked(self):
-        self.analysis_output.clear()
-        self.analysis_output.setText("종목 분석 중...")
-        if not self.analysis_widget.isVisible():
-            self.analysis_widget.show()
-            self.resize(self.minimumSizeHint())
-
+        self.analysis_output.setText("✨ AI가 종목을 분석하고 있습니다. 잠시만 기다려주세요...")
+        self.analysis_widget.show()
+        self.analysis_btn.setText("분석 결과 숨기기 ▲")
+        
         self.worker_thread = QThread()
         self.worker = BullishAnalysisWorker(self.gemini_client, self.code, stock_info_manager.get_name(self.code))
         self.worker.moveToThread(self.worker_thread)
@@ -348,156 +348,69 @@ class MacdDialog(QDialog):
     @Slot(str)
     def _on_analysis_ready(self, result: str):
         self.analysis_output.setText(result)
-        MacdDialog._ANALYSIS_TEXT_CACHE[self.code] = self.analysis_output.toPlainText()
-
-        self._is_analysis_loaded = True
-        self._is_analysis_visible = True
-        self.analysis_widget.show()
-        self.analysis_btn.setText("종목 분석 결과 ▼")
+        MacdDialog._ANALYSIS_TEXT_CACHE[self.code] = result
         try:
             self.worker_thread.quit()
             self.worker_thread.wait()
-        except Exception:
-            pass
-
-    # -----------------------------
-    # 오늘자 결과(JSONL) 표 로딩/표시
-    # -----------------------------
-    def _load_and_show_results(self, *, use_cache_first: bool = True):
-        code = self.code
-        df: Optional[pd.DataFrame] = None
-        if use_cache_first:
-            df = self._UI_CACHE_BY_CODE.get(f"orders:{code}")
-
-        if df is None:
-            # 오늘자 orders_YYYY-MM-DD.jsonl 로드
-            orders_path = results_path_for(today_str())
-            df = load_orders_jsonl(orders_path)  # ts_kst, code 등 포함된 DF
-            # 이 다이얼로그의 종목만 필터
-            if not df.empty and "code" in df.columns:
-                df = df[df["code"] == code].copy()
-            else:
-                df = df.iloc[0:0]
-            # 캐시
-            self._UI_CACHE_BY_CODE[f"orders:{code}"] = df
-
-        self._populate_results_table(df)
-
-    def _extract_return_msg(self, row: pd.Series) -> str:
-        """CSV/JSONL 어디서 오든 return_msg를 안전 추출."""
-        # 1) 납작 필드(TradeLogger CSV 확장) 우선
-        for key in ("resp_return_msg", "return_msg"):
-            if key in row and pd.notna(row[key]) and str(row[key]).strip():
-                return str(row[key])
-        # 2) JSONL 원본 구조: response.body.return_msg
-        try:
-            resp = row.get("response", None)
-            if isinstance(resp, dict):
-                body = resp.get("body", {})
-                msg = body.get("return_msg", "")
-                if msg:
-                    return str(msg)
-        except Exception:
-            pass
-        return ""
-
-    def _populate_results_table(self, df: pd.DataFrame):
-        self.results_table.setRowCount(0)
-        if df is None or df.empty:
-            return
-
-        # 필요한 컬럼이 없을 수 있으니 보정
-        for need in ["ts_kst", "symbol", "stk_cd", "code", "qty", "condition_name", "resp_return_msg", "return_msg", "response"]:
-            if need not in df.columns:
-                df[need] = None
-
-        # 시간 정렬 (ts_kst가 있으면 그걸로)
-        if "ts_kst" in df.columns:
-            try:
-                df = df.sort_values("ts_kst", kind="mergesort")
-            except Exception:
-                pass
-
-        for _, row in df.iterrows():
-            r = self.results_table.rowCount()
-            self.results_table.insertRow(r)
-
-            # Time
-            ts = row["ts_kst"]
-            if isinstance(ts, pd.Timestamp):
-                ts_text = ts.strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                # ts(문자열)만 있을 수 있으니 폴백
-                ts_text = str(row.get("ts") or "")
-
-            # Symbol / Stock Code
-            code6 = str(row.get("code") or "")
-            symbol = str(row.get("symbol") or row.get("stk_cd") or code6 or "")
-            stock_code = code6
-
-            # Name
-            name = stock_info_manager.get_name(code6) if code6 else ""
-
-            # Qty
-            qty = row.get("qty")
-            qty_text = "" if pd.isna(qty) else str(int(qty)) if str(qty).isdigit() else str(qty)
-
-            # ReturnMsg
-            return_msg = self._extract_return_msg(row)
-
-            # Condition
-            cond = row.get("condition_name")
-            cond_text = "" if pd.isna(cond) or cond is None else str(cond)
-
-            cells = [
-                ts_text, symbol, stock_code, name, qty_text, return_msg, cond_text
-            ]
-            for c, text in enumerate(cells):
-                it = QTableWidgetItem(text)
-                # 가운데 정렬: Time / Symbol / Stock Code / Name / Qty / Condition
-                if c in (0, 1, 2, 3, 4, 6):
-                    align = Qt.AlignCenter
-                else:
-                    align = Qt.AlignLeft | Qt.AlignVCenter
-                it.setTextAlignment(align)
-                self.results_table.setItem(r, c, it)
-
-        self.results_table.scrollToBottom()
+        except RuntimeError: pass
 
     @Slot()
     def _on_refresh_results_clicked(self):
-        orders_path = results_path_for(today_str())
-        df = load_orders_jsonl(orders_path)
-        if not df.empty and "code" in df.columns:
-            df = df[df["code"] == self.code].copy()
-        else:
-            df = df.iloc[0:0]
-        self._UI_CACHE_BY_CODE[f"orders:{self.code}"] = df
+        self._load_and_show_results(use_cache_first=False)
+
+    # -----------------------------
+    # 결과 테이블 로딩 및 표시
+    # -----------------------------
+    def _load_and_show_results(self, *, use_cache_first: bool = True):
+        df = self._UI_CACHE_BY_CODE.get(f"orders:{self.code}") if use_cache_first else None
+        if df is None:
+            orders_path = results_path_for(today_str())
+            df_all = load_orders_jsonl(orders_path)
+            df = df_all[df_all["code"] == self.code].copy() if not df_all.empty else pd.DataFrame()
+            self._UI_CACHE_BY_CODE[f"orders:{self.code}"] = df
         self._populate_results_table(df)
 
-    # -----------------------------
-    # MACD 버스 이벤트 핸들러
-    # -----------------------------
-    @Slot(dict)
-    def _on_bus(self, payload: dict):
-        try:
-            if str(payload.get("code", ""))[-6:].zfill(6) != self.code:
-                return
-            tf = str(payload.get("tf", "")).lower()
-            if tf not in {"5m", "30m", "1d"}:
-                return
-            self._refresh_row(tf)
-        except Exception:
-            pass
+    def _populate_results_table(self, df: pd.DataFrame):
+        self.results_table.setRowCount(0)
+        if df is None or df.empty: return
+
+        df = df.sort_values("ts_kst", kind="mergesort") if "ts_kst" in df.columns else df
+        
+        for _, row in df.iterrows():
+            r = self.results_table.rowCount()
+            self.results_table.insertRow(r)
+            ts_text = row["ts_kst"].strftime("%H:%M:%S") if pd.notna(row.get("ts_kst")) else ""
+            code_val = row.get("code", "")
+            cells = [
+                ts_text,
+                row.get("action", ""),
+                code_val,
+                stock_info_manager.get_name(code_val),
+                str(row.get("qty", "")),
+                row.get("resp_msg", ""),
+                row.get("strategy", "")
+            ]
+            for c, text in enumerate(cells):
+                self._set_item(self.results_table, r, c, str(text), center=True)
+        self.results_table.scrollToBottom()
 
     # -----------------------------
-    # 종료 처리
+    # 포맷팅 및 종료 처리
     # -----------------------------
+    def _set_item(self, table, row, col, text, *, center=False):
+        it = QTableWidgetItem(text)
+        it.setTextAlignment(Qt.AlignCenter if center else (Qt.AlignRight | Qt.AlignVCenter))
+        table.setItem(row, col, it)
+
+    def _fmt(self, v):
+        return f"{float(v):.2f}" if pd.notna(v) else "—"
+    
+    def _fmt_delta(self, cur, prv):
+        return f"{(float(cur) - float(prv)):+.2f}" if pd.notna(cur) and pd.notna(prv) else "—"
+
     def closeEvent(self, e):
         MacdDialog._ANALYSIS_TEXT_CACHE[self.code] = self.analysis_output.toPlainText()
-
         try:
-            self.bus.macd_series_ready.disconnect(self._on_bus)
-        except Exception:
-            pass
+            self.bus.macd_series_ready.disconnect(self.on_series_data)
+        except (TypeError, RuntimeError): pass
         super().closeEvent(e)

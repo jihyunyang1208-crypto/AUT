@@ -297,13 +297,6 @@ class DetailInformationGetter:
         valid_tf = tf if tf in ("5m", "30m", "1d") else "5m"
         calculator.apply_rows_full(code=code6, tf=valid_tf, rows=tail, need=max_points)
 
-        # ② ✅ 매매 모니터로 5분봉 DF 푸시
-        if monitor is not None:
-            try:
-                df_push = _rows_to_df_ohlcv(tail, tz="Asia/Seoul")
-                monitor.ingest_bars(code6, tf, df_push)
-            except Exception:
-                logger.warning("[KA10080] push to monitor failed: %s %s", code6, tf, exc_info=True)
 
         logger.debug("[MACD] emitted to bus for %s (%s), points=%d", code6, tf, len(tail))
         return {"code": code6, "tf": tf, "count": len(tail)}
