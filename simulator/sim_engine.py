@@ -10,8 +10,7 @@ class SimEngine:
       - on_market_update(event)로 체결 시뮬
       - AutoTrader의 position_mgr 및 이벤트 emition은 AutoTrader 쪽에서 처리
     """
-    def __init__(self, log_fn: Callable[[str], None]):
-        self._log = log_fn
+    def __init__(self):
         self._orders: Dict[str, dict] = {}
 
     # ---- 주문 제출 ----
@@ -27,7 +26,7 @@ class SimEngine:
             "strategy": strategy,
             "ts": time.time(),
         }
-        self._log(f"[sim] limit BUY {stk_cd} x{qty} @ {limit_price} (oid={oid})")
+        logger.info(f"[sim] limit BUY {stk_cd} x{qty} @ {limit_price} (oid={oid})")
         return oid
 
     def submit_limit_sell(self, *, stk_cd: str, limit_price: Optional[int], qty: int,
@@ -42,7 +41,7 @@ class SimEngine:
             "strategy": strategy,
             "ts": time.time(),
         }
-        self._log(f"[sim] limit SELL {stk_cd} x{qty} @ {limit_price if limit_price is not None else 'MKT'} (oid={oid})")
+        logger.info(f"[sim] limit SELL {stk_cd} x{qty} @ {limit_price if limit_price is not None else 'MKT'} (oid={oid})")
         return oid
 
     # ---- 마켓 이벤트로 체결 시뮬 ----
@@ -63,15 +62,15 @@ class SimEngine:
             side = od.get("side")
             limit = int(od.get("limit") or 0)
             if side == "BUY" and last and (limit > 0) and (last <= limit):
-                self._log(f"[sim] filled BUY {od['stk_cd']} x{od['qty']} @ {limit} (oid={oid})")
+                logger.info(f"[sim] filled BUY {od['stk_cd']} x{od['qty']} @ {limit} (oid={oid})")
                 done.append(oid)
             elif side == "SELL":
                 # 시장가로 저장된 경우(limit==0) → 틱이 오면 즉시 체결
                 if limit == 0 and last > 0:
-                    self._log(f"[sim] filled SELL(MKT) {od['stk_cd']} x{od['qty']} @ {last} (oid={oid})")
+                    logger.info(f"[sim] filled SELL(MKT) {od['stk_cd']} x{od['qty']} @ {last} (oid={oid})")
                     done.append(oid)
                 elif last and last >= limit and limit > 0:
-                    self._log(f"[sim] filled SELL {od['stk_cd']} x{od['qty']} @ {limit} (oid={oid})")
+                    logger.info(f"[sim] filled SELL {od['stk_cd']} x{od['qty']} @ {limit} (oid={oid})")
                     done.append(oid)
 
         for oid in done:

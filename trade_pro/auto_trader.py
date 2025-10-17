@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Literal, Tuple
+import logging
+
+logger = logging.getLogger(__name__)  # 모듈별 로거
 
 import requests
 
@@ -27,21 +30,18 @@ try:
 except Exception as _e:  # pragma: no cover
     SimEngine = None  # type: ignore
 
-
 # =========================
 # Settings / Data Classes
 # =========================
 @dataclass
 class TradeSettings:
-    # Legacy defaults (안전)  ← 필드는 유지(하위호환), 로직에서는 master_enable 미사용
     master_enable: bool = False
     auto_buy: bool = True
     auto_sell: bool = False
     order_type: Literal["limit", "market"] = "limit"
-    # ✅ UI에서 직접 제어하는 시뮬레이션 스위치 (paper ≡ simulation)
     simulation_mode: Optional[bool] = None  # None이면 env/인자 기반으로 결정
-    ladder_sell_enable: bool = False           # 라더 매도 전체 스위치
-    on_signal_use_ladder: bool = True          
+    ladder_sell_enable: bool = False        # 라더 매도 전체 스위치
+    on_signal_use_ladder: bool = True       # 신호 수신 시 기본 라더 분기 사용
 
 
 @dataclass
@@ -61,14 +61,12 @@ class LadderSettings:
 # =========================
 class TradeLogger:
     def __init__(self, log_dir: str = "logs/trades", file_prefix: str = "orders",
-                 log_fn: Optional[Callable[[str], None]] = None,
-                 slim: bool = False):  # ★ 추가
+                 slim: bool = False):
         self.log_dir = Path(log_dir)
         self.file_prefix = file_prefix
-        self._log = log_fn or (lambda m: None)
         self._lock = threading.Lock()
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self._slim = bool(slim)  # ★ 추가
+        self._slim = bool(slim)
 
     def _paths(self) -> Tuple[Path, Path]:
         day = datetime.now().strftime("%Y-%m-%d")
@@ -79,7 +77,6 @@ class TradeLogger:
 
     @staticmethod
     def _flatten_response(resp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        # 이 메서드는 slim 모드에서는 직접 사용되지 않지만, 호환성을 위해 유지합니다.
         if not isinstance(resp, dict):
             return {
                 "resp_status_code": None, "resp_api_id": "", "resp_cont_yn": "",
@@ -100,7 +97,6 @@ class TradeLogger:
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             with open(csv_path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                # slim 모드와 full 모드에 따라 다른 헤더를 작성합니다.
                 if self._slim:
                     w.writerow([
                         "ts", "strategy", "action", "stk_cd", "order_type", "price", "qty",
@@ -118,27 +114,19 @@ class TradeLogger:
                         "resp_return_code", "resp_return_msg",
                     ])
 
-
     def write_order_record(self, record: Dict[str, Any]):
-        """
-        주문 기록을 CSV와 JSONL 파일에 작성합니다.
-        내부 로직을 보강하여 시뮬레이션과 실제 주문 모두의 정보를 정확히 추출합니다.
-        """
-        # slim 모드가 아니면 현재 로직을 실행하지 않습니다. (필요시 full 모드 로직 추가)
         if not self._slim:
-            # self._log("Warning: Full log mode is not fully supported in this version.")
+            logger.info("Warning: Full log mode is not fully supported in this version.")
             return
 
         csv_path, jsonl_path = self._paths()
         with self._lock:
             self._ensure_csv_header(csv_path)
 
-            # --- 데이터 추출 및 정규화 (보강된 로직) ---
             ts = record.get("ts") or datetime.now(timezone.utc).isoformat()
             status = record.get("status") or record.get("status_label", "UNKNOWN")
 
-            # 1. 주문 유형(order_type) 결정
-            # record에 'order_type'이 직접 있으면 그 값을 최우선으로 사용합니다. (시뮬레이션 대응)
+            # 1) order_type
             order_type = record.get("order_type")
             if not order_type:
                 trde_tp = str(record.get("trde_tp", ""))
@@ -147,23 +135,19 @@ class TradeLogger:
                 elif trde_tp in ("0", "00"):
                     order_type = "limit"
                 else:
-                    order_type = trde_tp  # 기타 값 (e.g., "SIM")
+                    order_type = trde_tp
 
-            # 2. 주문 가격(price) 결정
-            # record에 'price'가 직접 있으면 그 값을 최우선으로 사용합니다. (시뮬레이션 대응)
+            # 2) price
             price = record.get("price")
-            if price is None:  # 키는 있지만 값이 None인 경우도 처리
+            if price is None:
                 price = record.get("limit_price") if order_type == "limit" else ""
 
-            # 3. 응답 코드 및 메시지 결정
+            # 3) resp
             resp_code = record.get("resp_code")
             resp_msg = record.get("resp_msg")
-
-            # 시뮬레이션 주문 처리
             if status == "SIM_SUBMIT":
                 resp_code = 0 if resp_code is None else resp_code
                 resp_msg = "SIM" if resp_msg is None else resp_msg
-            # 실제 API 응답 처리
             else:
                 resp_body = (record.get("response") or {}).get("body") or {}
                 if resp_code is None:
@@ -171,7 +155,6 @@ class TradeLogger:
                 if resp_msg is None:
                     resp_msg = resp_body.get("return_msg", "")
 
-            # --- 최종 로그 데이터 생성 ---
             log_entry = {
                 "ts": ts,
                 "strategy": record.get("strategy", ""),
@@ -185,20 +168,16 @@ class TradeLogger:
                 "resp_msg": resp_msg,
             }
 
-            # CSV 및 JSONL 파일에 기록
             try:
-                # CSV 쓰기
+                logger.debug("[AT] log.write.start slim=True")
+                logger.debug(f"[AT] log.write.entry {log_entry}")
                 with open(csv_path, "a", newline="", encoding="utf-8") as f_csv:
                     writer = csv.DictWriter(f_csv, fieldnames=log_entry.keys())
                     writer.writerow(log_entry)
-                # JSONL 쓰기
                 with open(jsonl_path, "a", encoding="utf-8") as f_jsonl:
                     f_jsonl.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
             except IOError as e:
-                # self._log(f"Error writing to log file: {e}")
-                print(f"Error writing to log file: {e}") # GUI 환경이 아닐 경우 print 사용
-
-
+                logger.info(f"Error writing to log file: {e}")
 
     # Legacy-compatible alias
     def log(self, record: Dict[str, Any], response: Optional[Dict[str, Any]] = None, note: str = ""):
@@ -214,7 +193,27 @@ class TradeLogger:
 # =========================
 # AutoTrader
 # =========================
+DEBUG_TAG = "[AT]"
+
 class AutoTrader:
+    # ---------- Debug helpers ----------
+    def _dbg(self, msg: str, **kw) -> None:
+        if logger.isEnabledFor(logging.DEBUG):
+            if kw:
+                kv = " ".join([f"{k}={v!r}" for k, v in kw.items()])
+                logger.debug(f"{DEBUG_TAG} {msg} | {kv}")
+            else:
+                logger.debug(f"{DEBUG_TAG} {msg}")
+
+    def _dbg_ret(self, label: str, ret: Any = None, **kw) -> None:
+        if logger.isEnabledFor(logging.DEBUG):
+            base = f"{DEBUG_TAG} return:{label}"
+            if kw:
+                base += " | " + " ".join([f"{k}={v!r}" for k, v in kw.items()])
+            if ret is not None:
+                base += f" | ret={ret!r}"
+            logger.debug(base)
+
     def __init__(
         self,
         *,
@@ -223,7 +222,7 @@ class AutoTrader:
         token_provider: Optional[Callable[[], str]] = None,
         base_url_provider: Optional[Callable[[], str]] = None,
         endpoint: str = "/api/dostk/ordr",
-        paper_mode: Optional[bool] = None,   # 하위호환 입력 (simulation 별칭)
+        paper_mode: Optional[bool] = None,
         log: Optional[Callable[[str], None]] = None,
         bridge: Optional[object] = None,
         position_mgr: Optional[PositionManager] = None,
@@ -235,7 +234,6 @@ class AutoTrader:
         self._base_url_provider = base_url_provider or (lambda: os.getenv("HTTP_API_BASE", "https://api.kiwoom.com").rstrip("/"))
         self._endpoint = endpoint
 
-        # ----- Simulation mode 통합 (paper ≡ simulation) -----
         env_mode = (os.getenv("TRADE_MODE") or "").strip().lower()
         env_pm = _parse_bool(os.getenv("PAPER_MODE"), default=False)
         env_sim = _parse_bool(os.getenv("SIMULATION_MODE"), default=False)
@@ -249,7 +247,6 @@ class AutoTrader:
         else:
             self.simulation = bool(env_pm or env_sim)
 
-        # deprecate alias (내부 사용 X, 호환 위해 유지)
         self.paper_mode = self.simulation
 
         if use_mock is not None:
@@ -258,8 +255,7 @@ class AutoTrader:
             self._use_mock = _parse_bool(os.getenv("USE_MOCK_API"), default=False)
 
         self.session_id = uuid.uuid4().hex[:12]
-        self._log = log or (lambda m: print(str(m)))
-        self.logger = TradeLogger(log_fn=self._log, slim=True)
+        self.trade_logger = TradeLogger(slim=True)
         self.bridge = bridge
         self.position_mgr = position_mgr
 
@@ -268,16 +264,21 @@ class AutoTrader:
         if self.simulation:
             if SimEngine is None:
                 raise RuntimeError("SimEngine 모듈(simulator/sim_engine.py)을 찾을 수 없습니다.")
-            self.sim_engine = SimEngine(self._log)
+            self.sim_engine = SimEngine()
 
-        # dedupe for websocket fills
         self._seen_exec_keys: set[tuple[str, Optional[str]]] = set()
         self._exec_lock = threading.Lock()
 
         self._api_id_buy = "kt10000"
         self._api_id_sell = "kt10001"
 
-        self._log(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} use_mock={self._use_mock}")
+        logger.info(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} use_mock={self._use_mock}")
+        self._dbg("__init__",
+                  simulation=self.simulation, use_mock=self._use_mock,
+                  order_type=self.settings.order_type,
+                  auto_buy=self.settings.auto_buy, auto_sell=self.settings.auto_sell,
+                  ladder_sell_enable=self.settings.ladder_sell_enable,
+                  on_signal_use_ladder=self.settings.on_signal_use_ladder)
 
     # ---------- 런타임 토글 ----------
     def set_simulation_mode(self, on: bool) -> None:
@@ -286,74 +287,62 @@ class AutoTrader:
         if self.simulation and self.sim_engine is None:
             if SimEngine is None:
                 raise RuntimeError("SimEngine 모듈(simulator/sim_engine.py)을 찾을 수 없습니다.")
-            self.sim_engine = SimEngine(self._log)
-        self._log(f"[AutoTrader] simulation_mode set to {self.simulation}")
+            self.sim_engine = SimEngine()
+        logger.info(f"[AutoTrader] simulation_mode set to {self.simulation}")
+        self._dbg("set_simulation_mode", simulation=self.simulation, has_sim_engine=bool(self.sim_engine))
 
-    # ---------- Public dispatcher ----------
+    # ---------- Public utils ----------
     @staticmethod
     def _to_int(x, default=0):
         try:
-            # "145000", 145000, "145000.0" 모두 허용
             return int(float(x))
         except Exception:
             return int(default)
 
-
     def submit_buy_order(self, code: str, qty: int, price: float, **kwargs) -> None:
-        """매수 주문 제출 시 PositionManager에 예약 후 주문 제출."""
-        # 1. 주문 전 pending 수량 증가
         self.position_mgr.reserve_buy(code, qty)
-        # 2. 주문 제출 (예시 _submit_order는 실제 API 호출)
         response = self._submit_order(code=code, side="BUY", qty=qty, price=price, **kwargs)
-        # 3. 주문 실패 시 대기 수량 해제
         if not getattr(response, "ok", True):
             self.position_mgr.release_buy(code, qty)
 
     def submit_sell_order(self, code: str, qty: int, price: float, **kwargs) -> None:
-        """매도 주문 제출 시 PositionManager에 예약 후 주문 제출."""
         self.position_mgr.reserve_sell(code, qty)
         response = self._submit_order(code=code, side="SELL", qty=qty, price=price, **kwargs)
         if not getattr(response, "ok", True):
             self.position_mgr.release_sell(code, qty)
 
     def on_order_fill(self, code: str, side: str, qty: int, price: float) -> None:
-        """체결 이벤트를 수신하면 PositionManager에 포지션 반영."""
         if side.upper() == "BUY":
             self.position_mgr.apply_fill_buy(code, qty, price)
         elif side.upper() == "SELL":
             self.position_mgr.apply_fill_sell(code, qty, price)
 
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        모니터가 최종 결정을 내려준다는 가정.
-        이 함수는 오직 '집행'만 수행한다.
-        - 구버전/신버전 모두 호환: top-level / payload['data'] 모두 지원
-        - mode/signal 또한 양쪽에서 탐색
-        """
         data   = payload.get("data") or payload
         signal = str(payload.get("signal") or data.get("signal") or "").upper()
         mode   = str(payload.get("mode")   or data.get("mode")   or "").lower()
 
-        # 공통 기본값
         dmst_stex_tp = str(data.get("dmst_stex_tp") or "KRX").upper()
         stk_cd       = str(data.get("stk_cd") or "").strip()
         if not stk_cd:
-            self._log("🚫 handle_signal: stk_cd 누락")
+            logger.info("🚫 handle_signal: stk_cd 누락")
+            self._dbg_ret("handle_signal.block", reason="stk_cd_missing")
             return None
 
-        # ─────────────────────────────────────────────
-        # [간소화 핵심] mode 미지정 시, 설정 기반으로 자동 보강
-        #  - on_signal_use_ladder=True이면 BUY/SELL 모두 ladder 경로로 확정
-        #  - 필요한 필드(data)도 함께 채워 넣어 분기 일관성 보장
-        # ─────────────────────────────────────────────
+        self._dbg("handle_signal.enter",
+                  raw_signal=payload.get("signal") or (payload.get("data") or {}).get("signal"),
+                  raw_mode=payload.get("mode") or (payload.get("data") or {}).get("mode"),
+                  stk_cd=stk_cd)
+
+        # 자동 라우팅(모드 보강)
         if not mode and getattr(self.settings, "on_signal_use_ladder", True):
-            # 가격 추론 (cur_price 우선, 없으면 ord_uv)
             try:
                 last_price = int(float(data.get("cur_price") or data.get("ord_uv") or 0))
             except Exception:
                 last_price = 0
             trde_tp = "3" if self.settings.order_type == "market" else "0"
             tick = self._krx_tick(last_price) if last_price > 0 else 0
+            self._dbg("handle_signal.autofill.enabled", last_price=last_price, trde_tp=trde_tp, tick=tick)
 
             if signal == "BUY":
                 mode = "ladder_buy"
@@ -364,10 +353,14 @@ class AutoTrader:
                 data.setdefault("unit_amount", int(self.ladder.unit_amount))
                 data.setdefault("trde_tp", trde_tp)
                 if tick: data.setdefault("tick", int(tick))
+                self._dbg("handle_signal.autofill.BUY",
+                          num_slices=data.get("num_slices"),
+                          start_ticks_below=data.get("start_ticks_below"),
+                          step_ticks=data.get("step_ticks"),
+                          unit_amount=data.get("unit_amount"))
 
             elif signal == "SELL":
                 mode = "ladder_sell"
-                # 수량: PM 있으면 보유 전량, 없으면 1
                 qty = 1
                 if self.position_mgr:
                     try:
@@ -381,17 +374,29 @@ class AutoTrader:
                 data.setdefault("total_qty", int(qty))
                 data.setdefault("trde_tp", trde_tp)
                 if tick: data.setdefault("tick", int(tick))
+                self._dbg("handle_signal.autofill.SELL",
+                          total_qty=data.get("total_qty"),
+                          num_slices=data.get("num_slices"),
+                          start_ticks_above=data.get("start_ticks_above"),
+                          step_ticks=data.get("step_ticks"))
+
+                # 🔽 옵션: 보유 0이면 ladder_sell 대신 simple_sell로 강등
+                if self.position_mgr:
+                    try:
+                        cur_qty = int(self.position_mgr.get_qty(stk_cd))
+                    except Exception:
+                        cur_qty = 0
+                    if cur_qty <= 0:
+                        mode = "simple_sell"
 
 
-        # (하위호환) 플래그식 라더 매수 진입
         if payload.get("ladder_buy") or data.get("ladder_buy"):
             mode = "ladder_buy"
             signal = "BUY"
 
-        # ─────────────────────────────────────────────
         # Ladder BUY
-        # ─────────────────────────────────────────────
         if mode == "ladder_buy" and signal == "BUY":
+            self._dbg("handle_signal.branch", branch="ladder_buy")
             lb = {
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
@@ -404,12 +409,13 @@ class AutoTrader:
                 "tick": int(data.get("tick") or 0),
                 "target_total_qty": data.get("target_total_qty"),
             }
-            return await self._handle_ladder_buy(lb)
+            ret = await self._handle_ladder_buy(lb)
+            self._dbg_ret("handle_signal.ladder_buy", ret=ret)
+            return ret
 
-        # ─────────────────────────────────────────────
         # Ladder SELL
-        # ─────────────────────────────────────────────
         if mode == "ladder_sell" and signal == "SELL":
+            self._dbg("handle_signal.branch", branch="ladder_sell")
             ls = {
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
@@ -422,12 +428,13 @@ class AutoTrader:
                 "trde_tp": str(data.get("trde_tp") or "0"),
                 "tick": int(data.get("tick") or 0),
             }
-            return await self._handle_ladder_sell(ls)
+            ret = await self._handle_ladder_sell(ls)
+            self._dbg_ret("handle_signal.ladder_sell", ret=ret)
+            return ret
 
-        # ─────────────────────────────────────────────
-        # Simple SELL (원샷)
-        # ─────────────────────────────────────────────
+        # Simple SELL
         if mode == "simple_sell" and signal == "SELL":
+            self._dbg("handle_signal.branch", branch="simple_sell")
             ss = {
                 "dmst_stex_tp": dmst_stex_tp,
                 "stk_cd": stk_cd,
@@ -436,12 +443,13 @@ class AutoTrader:
                 "trde_tp": str(data.get("trde_tp") or "0"),
                 "cond_uv": str(data.get("cond_uv") or ""),
             }
-            return await self._handle_simple_sell(ss)
+            ret = await self._handle_simple_sell(ss)
+            self._dbg_ret("handle_signal.simple_sell", ret=ret)
+            return ret
 
-        # ─────────────────────────────────────────────
-        # Fallback: BUY → 1슬라이스 라더 / SELL → 단발 매도
-        # ─────────────────────────────────────────────
+        # Fallbacks
         if signal == "BUY" and not mode:
+            self._dbg("handle_signal.fallback", to="ladder_buy_oneshot")
             lb = {
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
@@ -452,9 +460,12 @@ class AutoTrader:
                 "unit_amount": int(data.get("unit_amount") or self.ladder.unit_amount),
                 "trde_tp": str(data.get("trde_tp") or self._resolve_trde_tp()),
             }
-            return await self._handle_ladder_buy(lb)
+            ret = await self._handle_ladder_buy(lb)
+            self._dbg_ret("handle_signal.fallback_ladder_buy", ret=ret)
+            return ret
 
         if signal == "SELL" and not mode:
+            self._dbg("handle_signal.fallback", to="simple_sell")
             ss = {
                 "dmst_stex_tp": dmst_stex_tp,
                 "stk_cd": stk_cd,
@@ -463,11 +474,10 @@ class AutoTrader:
                 "trde_tp": str(data.get("trde_tp") or "0"),
                 "cond_uv": str(data.get("cond_uv") or ""),
             }
-            return await self._handle_simple_sell(ss)
+            ret = await self._handle_simple_sell(ss)
+            self._dbg_ret("handle_signal.fallback_simple_sell", ret=ret)
+            return ret
 
-        # ─────────────────────────────────────────────
-        # 미처리
-        # ─────────────────────────────────────────────
         self._emit_order_event({
             "type": "ORDER_EVENT",
             "action": signal or "UNKNOWN",
@@ -478,15 +488,10 @@ class AutoTrader:
             "ts": datetime.now(timezone.utc).isoformat(),
             "extra": payload,
         })
+        self._dbg_ret("UNHANDLED_MODE", mode=mode, signal=signal, stk_cd=stk_cd)
         return None
 
-
     def make_on_signal(self, bridge: Optional[object] = None) -> Callable[[object], None]:
-        """
-         ExitEntryMonitor → on_signal 핸들러(얇은 어댑터).
-         - TradeSignal → handle_signal 이 기대하는 표준 payload(minimal)로 변환
-         - 정책/분기는 handle_signal에서 settings 기반으로 최종 결정
-        """
         if bridge is not None:
             self.bridge = bridge
 
@@ -496,35 +501,33 @@ class AutoTrader:
                 symbol = str(getattr(sig_obj, "symbol", "")).strip()
                 price_attr = getattr(sig_obj, "price", 0)
                 last_price = int(float(price_attr)) if price_attr is not None else 0
-            except Exception:                
+            except Exception:
                 return
+
+            self._dbg("on_signal.recv", side=side, symbol=symbol, last_price=last_price)
 
             if not symbol or last_price <= 0:
-                self._log("🚫 on_signal: 유효하지 않은 심볼/가격")
+                logger.info("🚫 on_signal: 유효하지 않은 심볼/가격")
                 return
 
-            # 브리지 로그(선택)
             try:
                 if self.bridge and hasattr(self.bridge, "log"):
                     self.bridge.log.emit(f"📶 on_signal: {side} {symbol} @ {last_price}")
             except Exception:
                 pass
 
-
-            # 최소 payload만 전달 → handle_signal이 설정 기반으로 모드/파라미터 보강
             payload = {
                 "signal": side,
                 "data": {
                     "stk_cd": symbol,
                     "dmst_stex_tp": "KRX",
-                    "ord_uv": str(last_price),  # handle_signal에서 cur_price로 해석/보강
+                    "ord_uv": str(last_price),
                 },
             }
+            self._dbg("on_signal.dispatch", payload_minimal=True, signal=side, stk_cd=symbol, ord_uv=last_price)
             try:
-                # handle_signal 은 async 이므로 백그라운드 태스크로 디스패치
                 asyncio.create_task(self.handle_signal(payload))
             except RuntimeError:
-                # 이벤트 루프가 없는 환경이면 스레드에서 실행
                 threading.Thread(
                     target=lambda: asyncio.run(self.handle_signal(payload)),
                     daemon=True
@@ -602,31 +605,33 @@ class AutoTrader:
             return "3"
         return "0"
 
-
     def _ticks_above_from_target(self, cur_price: int, target_price: int) -> int:
-        """Sell - 현재가 대비 목표가가 몇 틱 위인지 계산(최소 1틱)."""
         if cur_price <= 0 or target_price <= 0:
             return 1
         tick = self._krx_tick(cur_price)
-        # 목표가를 틱 격자에 맞추고, 최소 1틱은 위로
         snapped = self._snap_to_tick(int(target_price), tick)
         diff = max(1, math.ceil((snapped - cur_price) / tick))
         return diff
 
-
     # =========================
-    # Ladder BUY 
+    # Ladder BUY
     # =========================
     async def _handle_ladder_buy(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        self._dbg("_handle_ladder_buy.enter", auto_buy=self.settings.auto_buy,
+                  stk_cd=str(payload.get("stk_cd")), cur_price=payload.get("cur_price"),
+                  trde_tp=str(payload.get("trde_tp")))
+
         if not self.settings.auto_buy:
-            self._log("⛔ auto_buy=False: 사다리 매수 차단")
+            logger.info("⛔ auto_buy=False: 사다리 매수 차단")
+            self._dbg_ret("ladder_buy.block", reason="auto_buy=False")
             return None
 
         stk_cd = str(payload.get("stk_cd") or "").strip()
         cur_price = int(payload.get("cur_price") or 0)
         dmst_stex_tp = (payload.get("dmst_stex_tp") or "KRX").upper()
         if not stk_cd or cur_price <= 0:
-            self._log("🚫 (ladder) 종목코드 또는 현재가가 유효하지 않습니다.")
+            logger.info("🚫 (ladder) 종목코드 또는 현재가가 유효하지 않습니다.")
+            self._dbg_ret("ladder_buy.block", reason="invalid_symbol_or_price", stk_cd=stk_cd, cur_price=cur_price)
             return None
 
         if "tick" in payload and int(payload["tick"]) > 0:
@@ -652,15 +657,17 @@ class AutoTrader:
             except Exception:
                 remaining_cap = None
 
+        self._dbg("ladder_buy.params",
+                  tick=tick, tick_mode=tick_mode, unit_amount=unit_amount,
+                  num_slices=num_slices, start_ticks_below=start_ticks_below,
+                  step_ticks=step_ticks, target_total_qty=target_total_qty,
+                  remaining_cap=remaining_cap)
+
         prices = self._compute_ladder_prices_fixed(
             cur_price=cur_price, tick=tick, count=num_slices,
             start_ticks_below=start_ticks_below, step_ticks=step_ticks
         )
-        if self.bridge and hasattr(self.bridge, "log"):
-            try:
-                self.bridge.log.emit(f"🪜 (ladder/{tick_mode}) tick={tick} prices={prices}")
-            except Exception:
-                pass
+        self._dbg("ladder_buy.prices", count=len(prices), first=prices[:3], last=prices[-3:])
 
         # ===== Simulation =====
         if self.simulation and self.sim_engine:
@@ -669,7 +676,8 @@ class AutoTrader:
                 qty = max(min_qty, math.floor(unit_amount / limit_price))
                 if remaining_cap is not None:
                     if remaining_cap <= 0:
-                        self._log("ℹ️ (ladder) target_total_qty 도달 → 남은 주문 스킵")
+                        logger.info("ℹ️ (ladder) target_total_qty 도달 → 남은 주문 스킵")
+                        self._dbg("ladder_buy.slice.skip", reason="remaining_cap<=0", i=i, total=total)
                         break
                     qty = min(qty, remaining_cap)
                     remaining_cap -= qty
@@ -681,10 +689,10 @@ class AutoTrader:
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "extra": {"reason": "qty==0", "slice": i, "total": total},
                     })
+                    self._dbg("ladder_buy.slice.skip", reason="qty==0", i=i, total=total)
                     continue
 
                 try:
-                    # 시장가 지원 시 시장가, 아니면 지정가
                     if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_buy"):
                         sim_oid = self.sim_engine.submit_market_buy(
                             stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="ladder"
@@ -697,7 +705,10 @@ class AutoTrader:
                         )
                         shown_price = limit_price
 
-                    self._log(f"🧪 (sim) [{i}/{total}] BUY {stk_cd} {qty}주 @ {shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
+                    logger.info(f"🧪 (sim) [{i}/{total}] BUY {stk_cd} {qty}주 @ {shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
+                    self._dbg("ladder_buy.slice", i=i, total=total, limit_price=limit_price, qty=qty, trde_tp=trde_tp)
+                    self._dbg("ladder_buy.slice.submit", status="SIM_SUBMIT", sim_oid=sim_oid)
+
                     self._emit_order_event({
                         "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
                         "price": shown_price,"qty": qty,"status": "SIM_SUBMIT",
@@ -705,25 +716,26 @@ class AutoTrader:
                         "extra": {"slice": i, "total": total, "sim_oid": sim_oid, "trde_tp": trde_tp},
                     })
 
-                    # ✅ 시뮬에서도 JSON/CSV 로깅 추가
                     order_type = "market" if trde_tp == "3" else "limit"
-                    self.logger.write_order_record({
+                    self.trade_logger.write_order_record({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "strategy": "ladder",
                         "action": "BUY",
                         "stk_cd": stk_cd,
                         "order_type": order_type,
-                        "limit_price": shown_price,   # logger가 price로 매핑
+                        "limit_price": shown_price,
                         "qty": qty,
                         "status_label": "SIM_SUBMIT",
                         "response": {"body": {"return_code": 0, "return_msg": "SIM"}},
                     })
 
                 except Exception as e:
-                    self._log(f"❌ (ladder) sim submit 실패 → {e}")
+                    logger.info(f"❌ (ladder) sim submit 실패 → {e}")
+                    self._dbg("ladder_buy.slice.error", i=i, err=str(e))
 
                 await asyncio.sleep(self.ladder.interval_sec)
 
+            self._dbg_ret("ladder_buy", ladder_count=len(prices))
             return {"ladder_submitted": total}
 
         # ===== Live =====
@@ -732,7 +744,8 @@ class AutoTrader:
             if not token:
                 raise RuntimeError("액세스 토큰이 비어있습니다.")
         except Exception as e:
-            self._log(f"🚫 토큰 조회 실패: {e}")
+            logger.info(f"🚫 토큰 조회 실패: {e}")
+            self._dbg_ret("ladder_buy.block", reason="token_error", err=str(e))
             return None
 
         results: List[Dict[str, Any]] = []
@@ -741,7 +754,8 @@ class AutoTrader:
             qty = max(min_qty, math.floor(unit_amount / limit_price))
             if remaining_cap is not None:
                 if remaining_cap <= 0:
-                    self._log("ℹ️ (ladder) target_total_qty 도달 → 남은 주문 스킵")
+                    logger.info("ℹ️ (ladder) target_total_qty 도달 → 남은 주문 스킵")
+                    self._dbg("ladder_buy.slice.skip", reason="remaining_cap<=0", i=i, total=total)
                     break
                 qty = min(qty, remaining_cap)
                 remaining_cap -= qty
@@ -752,6 +766,7 @@ class AutoTrader:
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "extra": {"reason": "qty==0", "slice": i, "total": total},
                 })
+                self._dbg("ladder_buy.slice.skip", reason="qty==0", i=i, total=total)
                 continue
 
             data = {
@@ -766,6 +781,7 @@ class AutoTrader:
             uid = uuid.uuid4().hex
             tick_used = tick
             try:
+                self._dbg("ladder_buy.http.submit", i=i, limit_price=limit_price, qty=qty)
                 start = time.perf_counter()
                 resp = await asyncio.to_thread(self._fn_kt10000, token=token, data=data, cont_yn="N", next_key="")
                 duration_ms = int((time.perf_counter() - start) * 1000)
@@ -788,7 +804,9 @@ class AutoTrader:
                     "duration_ms": duration_ms,"status_code": code,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
-                self.logger.write_order_record(record)
+                self.trade_logger.write_order_record(record)
+
+                self._dbg("ladder_buy.http.resp", i=i, status_code=code, duration_ms=duration_ms)
 
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
@@ -799,6 +817,7 @@ class AutoTrader:
                 if self.bridge and hasattr(self.bridge, "log"):
                     try: self.bridge.log.emit(f"💥 (LIVE)(ladder) [{i}/{total}] 주문 실패: {e}")
                     except Exception: pass
+                self._dbg("ladder_buy.http.error", i=i, err=str(e))
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
                     "price": limit_price,"qty": qty,"status": "ERROR",
@@ -806,38 +825,54 @@ class AutoTrader:
                     "extra": {"slice": i, "total": total, "error": str(e)},
                 })
 
+                # ✅ 가상 체결: 주문 제출 직후 포지션 즉시 반영
+                if self.position_mgr:
+                    fill_price = shown_price or cur_price  # 시장가는 shown_price==0 → cur_price 사용
+                    try:
+                        self.position_mgr.apply_fill_buy(stk_cd, qty, fill_price)
+                    except Exception:
+                        pass
+
             await asyncio.sleep(self.ladder.interval_sec)
 
         ok = sum(1 for r in results if (r.get("status_code") or 0) // 100 == 2)
-        self._log(f"🧾 (ladder) 완료: 성공 {ok}/{len(results)} (계단수={len(prices)})")
+        logger.info(f"🧾 (ladder) 완료: 성공 {ok}/{len(results)} (계단수={len(prices)})")
+        self._dbg_ret("ladder_buy", ladder_count=len(prices))
         return {"ladder_results": results}
 
     # =========================
     # Simple SELL
     # =========================
     async def _handle_simple_sell(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # 🔒 master_enable 제거 → auto_sell만 가드
-        if not self.settings.auto_sell:
-            self._log("⛔ auto_sell=False: 매도 차단")
-            return None
-
         stk_cd = str(payload.get("stk_cd") or "").strip()
         dmst_stex_tp = (payload.get("dmst_stex_tp") or "KRX").upper()
         trde_tp = str(payload.get("trde_tp") or "0")  # '0': limit, '3': market
         qty = int(payload.get("ord_qty") or 0)
         limit_price = int(payload.get("ord_uv") or 0) if trde_tp == "0" else None
 
+        self._dbg("_handle_simple_sell.enter", auto_sell=self.settings.auto_sell,
+                  stk_cd=stk_cd, trde_tp=trde_tp, qty=qty, limit_price=limit_price)
+
+        if not self.settings.auto_sell:
+            logger.info("⛔ auto_sell=False: 매도 차단")
+            self._dbg_ret("simple_sell.block", reason="auto_sell=False")
+            return None
         if not stk_cd:
-            self._log("🚫 (sell) 종목코드 없음"); return None
+            logger.info("🚫 (sell) 종목코드 없음")
+            self._dbg_ret("simple_sell.block", reason="no_symbol")
+            return None
         if qty <= 0:
-            self._log("🚫 (sell) 수량 0 이하"); return None
+            logger.info("🚫 (sell) 수량 0 이하")
+            self._dbg_ret("simple_sell.block", reason="qty<=0")
+            return None
         if trde_tp == "0" and (limit_price is None or limit_price <= 0):
-            self._log("🚫 (sell) 지정가인데 가격 없음"); return None
+            logger.info("🚫 (sell) 지정가인데 가격 없음")
+            self._dbg_ret("simple_sell.block", reason="limit_without_price")
+            return None
 
         # ✅ Simulation
         if self.simulation and self.sim_engine:
             try:
-                # ✅ 시장가면 submit_market_sell 우선 사용 (없으면 제한가로 폴백)
                 if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_sell"):
                     sim_oid = self.sim_engine.submit_market_sell(
                         stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="simple-sell"
@@ -853,7 +888,9 @@ class AutoTrader:
                     )
                     shown_price = (0 if trde_tp == "3" else (limit_price or 0))
 
-                self._log(f"🧪 (sim sell) {stk_cd} {qty}주 @{shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
+                logger.info(f"🧪 (sim sell) {stk_cd} {qty}주 @{shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
+                self._dbg("simple_sell.sim.submit", trde_tp=trde_tp, shown_price=shown_price, qty=qty, sim_oid=sim_oid)
+
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
                     "price": shown_price,"qty": qty,"status": "SIM_SUBMIT",
@@ -871,10 +908,25 @@ class AutoTrader:
                     "status_code": 299,"status_label": "SIM_SUBMIT","success": True,"order_id": sim_oid,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
-                self.logger.write_order_record(record)
+                self.trade_logger.write_order_record(record)
+                self._dbg_ret("simple_sell.sim", ok=True, order_id=sim_oid)
                 return {"sell_result": {"simulated": True, "order_id": sim_oid}}
+            
+                # ✅ 가상 체결: 주문 제출 직후 포지션 즉시 반영
+                if self.position_mgr:
+                    # 시장가면 shown_price==0 → limit_price(있으면) 사용, 둘 다 0이면 0으로 기록
+                    price_for_fill = shown_price or (limit_price or 0)
+                    try:
+                        self.position_mgr.apply_fill_sell(stk_cd, qty, price_for_fill)
+                    except Exception:
+                        pass
+
+                self._dbg_ret("simple_sell.sim", ok=True, order_id=sim_oid)
+                return {"sell_result": {"simulated": True, "order_id": sim_oid}}
+
             except Exception as e:
-                self._log(f"❌ (sim sell) 실패 → {e}")
+                logger.info(f"❌ (sim sell) 실패 → {e}")
+                self._dbg("simple_sell.sim.error", err=str(e))
                 return None
 
         # ===== LIVE =====
@@ -883,7 +935,8 @@ class AutoTrader:
             if not token:
                 raise RuntimeError("액세스 토큰이 비어있습니다.")
         except Exception as e:
-            self._log(f"🚫 토큰 조회 실패: {e}")
+            logger.info(f"🚫 토큰 조회 실패: {e}")
+            self._dbg_ret("simple_sell.block", reason="token_error", err=str(e))
             return None
 
         data = {
@@ -894,6 +947,7 @@ class AutoTrader:
 
         uid = uuid.uuid4().hex
         try:
+            self._dbg("simple_sell.http.submit", trde_tp=trde_tp, qty=qty, limit_price=limit_price)
             start = time.perf_counter()
             resp = await asyncio.to_thread(self._fn_kt10001, token=token, data=data, cont_yn="N", next_key="")
             duration_ms = int((time.perf_counter() - start) * 1000)
@@ -907,17 +961,21 @@ class AutoTrader:
                 "unit_amount": None,"notional": None,"duration_ms": duration_ms,
                 "status_code": code,"ts": datetime.now(timezone.utc).isoformat(),
             }
-            self.logger.write_order_record(record)
+            self.trade_logger.write_order_record(record)
 
-            self._log(f"✅ (sell) {stk_cd} {qty}주 @{limit_price or 'MKT'} → Code={code}")
+            logger.info(f"✅ (sell) {stk_cd} {qty}주 @{limit_price or 'MKT'} → Code={code}")
+            self._dbg("simple_sell.http.resp", status_code=code, duration_ms=duration_ms)
+
             self._emit_order_event({
                 "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
                 "price": limit_price or 0,"qty": qty,"status": f"HTTP_{code}",
                 "ts": record["ts"],"extra": {"resp": resp, "trde_tp": trde_tp},
             })
+            self._dbg_ret("simple_sell.http", status_code=code)
             return {"sell_result": resp}
         except Exception as e:
-            self._log(f"❌ (sell) {stk_cd} 실패 → {e}")
+            logger.info(f"❌ (sell) {stk_cd} 실패 → {e}")
+            self._dbg("simple_sell.http.error", err=str(e))
             self._emit_order_event({
                 "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
                 "price": limit_price or 0,"qty": qty,"status": "ERROR",
@@ -929,17 +987,23 @@ class AutoTrader:
     # =========================
     # Ladder SELL (above current)
     # =========================
-
     async def _handle_ladder_sell(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if not self.settings.auto_sell:
-            self._log("⛔ auto_sell=False: 라더 매도 차단"); return None
-
         stk_cd = str(payload.get("stk_cd") or "").strip()
         cur_price = int(payload.get("cur_price") or 0)
         dmst_stex_tp = (payload.get("dmst_stex_tp") or "KRX").upper()
         trde_tp = str(payload.get("trde_tp") or "0")
+
+        self._dbg("_handle_ladder_sell.enter", auto_sell=self.settings.auto_sell,
+                  stk_cd=stk_cd, cur_price=cur_price, trde_tp=trde_tp)
+
+        if not self.settings.auto_sell:
+            logger.info("⛔ auto_sell=False: 라더 매도 차단")
+            self._dbg_ret("ladder_sell.block", reason="auto_sell=False")
+            return None
         if not stk_cd or cur_price <= 0:
-            self._log("🚫 (ladder-sell) 종목코드 또는 현재가가 유효하지 않습니다."); return None
+            logger.info("🚫 (ladder-sell) 종목코드 또는 현재가가 유효하지 않습니다.")
+            self._dbg_ret("ladder_sell.block", reason="invalid_symbol_or_price", stk_cd=stk_cd, cur_price=cur_price)
+            return None
 
         if "tick" in payload and int(payload["tick"]) > 0:
             tick = int(payload["tick"]); tick_mode = "fixed"
@@ -959,27 +1023,44 @@ class AutoTrader:
             _, pend_sell = self.position_mgr.get_pending(stk_cd)
             sellable = max(0, cur_qty - int(pend_sell))
             if sellable <= 0:
-                self._log("ℹ️ (ladder-sell) 매도 가능 수량 없음")
+                logger.info("ℹ️ (ladder-sell) 매도 가능 수량 없음")
+                self._dbg_ret("ladder_sell.block", reason="no_sellable_qty", cur_qty=cur_qty, pend_sell=pend_sell)
                 return {"ladder_sell_results": []} if not self.simulation else {"ladder_sell_submitted": 0}
             base = sellable // num_slices ; rem = sellable % num_slices
             qty_plan = [(base + 1 if i < rem else base) for i in range(num_slices)]
         else:
             if slice_qty is not None:
                 sq = int(slice_qty)
-                if sq <= 0: self._log("🚫 (ladder-sell) slice_qty ≤ 0"); return None
+                if sq <= 0:
+                    logger.info("🚫 (ladder-sell) slice_qty ≤ 0")
+                    self._dbg_ret("ladder_sell.block", reason="slice_qty<=0")
+                    return None
                 qty_plan = [sq] * num_slices
             else:
-                if total_qty is None: self._log("🚫 (ladder-sell) slice_qty 또는 total_qty 필요"); return None
+                if total_qty is None:
+                    logger.info("🚫 (ladder-sell) slice_qty 또는 total_qty 필요")
+                    self._dbg_ret("ladder_sell.block", reason="qty_param_missing")
+                    return None
                 tq = int(total_qty)
-                if tq <= 0: self._log("🚫 (ladder-sell) total_qty ≤ 0"); return None
+                if tq <= 0:
+                    logger.info("🚫 (ladder-sell) total_qty ≤ 0")
+                    self._dbg_ret("ladder_sell.block", reason="total_qty<=0")
+                    return None
                 base = tq // num_slices ; rem = tq % num_slices
                 qty_plan = [(base + 1 if i < rem else base) for i in range(num_slices)]
+
+        self._dbg("ladder_sell.params", tick=tick, num_slices=num_slices,
+                  start_ticks_above=start_ticks_above, step_ticks=step_ticks,
+                  slice_qty=slice_qty, total_qty=total_qty)
+
+        self._dbg("ladder_sell.qty_plan", total=sum(qty_plan),
+                  plan=qty_plan[:10] + (["..."] if len(qty_plan) > 10 else []))
 
         prices = self._compute_ladder_prices_fixed_up(
             cur_price=cur_price, tick=tick, count=num_slices,
             start_ticks_above=start_ticks_above, step_ticks=step_ticks
         )
-        self._log(f"🪜 (ladder-sell/{tick_mode}) tick={tick} prices={prices} qty_plan={qty_plan}")
+        self._dbg("ladder_sell.prices", count=len(prices), first=prices[:3], last=prices[-3:])
 
         # ===== Simulation =====
         if self.simulation and self.sim_engine:
@@ -993,13 +1074,17 @@ class AutoTrader:
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "extra": {"reason": "qty==0", "slice": i+1, "total": total},
                     })
+                    self._dbg("ladder_sell.slice.skip", reason="qty==0", i=i+1)
                     continue
                 try:
                     sim_oid = self.sim_engine.submit_limit_sell(
                         stk_cd=stk_cd, limit_price=limit_price, qty=qty,
                         parent_uid=uuid.uuid4().hex, strategy="ladder-sell",
                     )
-                    self._log(f"🧪 (sim) [SELL {i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
+                    logger.info(f"🧪 (sim) [SELL {i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
+                    self._dbg("ladder_sell.slice", i=i+1, total=total, limit_price=limit_price, qty=qty)
+                    self._dbg("ladder_sell.slice.submit", status="SIM_SUBMIT", sim_oid=sim_oid)
+
                     self._emit_order_event({
                         "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
                         "price": limit_price,"qty": qty,"status": "SIM_SUBMIT",
@@ -1007,8 +1092,7 @@ class AutoTrader:
                         "extra": {"slice": i+1, "total": total, "sim_oid": sim_oid},
                     })
 
-                    # ✅ 시뮬 라더-SELL도 JSON/CSV 로깅 추가
-                    self.logger.write_order_record({
+                    self.trade_logger.write_order_record({
                         "ts": datetime.now(timezone.utc).isoformat(),
                         "strategy": "ladder-sell",
                         "action": "SELL",
@@ -1021,8 +1105,18 @@ class AutoTrader:
                     })
 
                 except Exception as e:
-                    self._log(f"❌ (ladder-sell) sim submit 실패 → {e}")
+                    logger.info(f"❌ (ladder-sell) sim submit 실패 → {e}")
+                    self._dbg("ladder_sell.slice.error", i=i+1, err=str(e))
+                
+                # ✅ 가상 체결: 주문 제출 직후 포지션 즉시 반영
+                if self.position_mgr and qty > 0:
+                    try:
+                        self.position_mgr.apply_fill_sell(stk_cd, qty, limit_price)
+                    except Exception:
+                        pass
+
                 await asyncio.sleep(self.ladder.interval_sec)
+            self._dbg_ret("ladder_sell", slices=total)
             return {"ladder_sell_submitted": total}
 
         # ===== Live =====
@@ -1030,7 +1124,9 @@ class AutoTrader:
             token = self._token_provider()
             if not token: raise RuntimeError("액세스 토큰이 비어있습니다.")
         except Exception as e:
-            self._log(f"🚫 토큰 조회 실패: {e}"); return None
+            logger.info(f"🚫 토큰 조회 실패: {e}")
+            self._dbg_ret("ladder_sell.block", reason="token_error", err=str(e))
+            return None
 
         results: List[Dict[str, Any]] = []
         total = min(len(prices), len(qty_plan))
@@ -1044,6 +1140,7 @@ class AutoTrader:
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "extra": {"reason": "qty==0", "slice": i+1, "total": total},
                 })
+                self._dbg("ladder_sell.slice.skip", reason="qty==0", i=i+1)
                 continue
 
             data = {
@@ -1055,13 +1152,14 @@ class AutoTrader:
             uid = uuid.uuid4().hex
             tick_used = tick
             try:
+                self._dbg("ladder_sell.http.submit", i=i+1, limit_price=limit_price, qty=qty)
                 start = time.perf_counter()
                 resp = await asyncio.to_thread(self._fn_kt10001, token=token, data=data, cont_yn="N", next_key="")
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 code = resp.get("status_code")
                 results.append(resp)
 
-                self._log(f"✅ (ladder-sell) [{i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}")
+                logger.info(f"✅ (ladder-sell) [{i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}")
 
                 record = {
                     "session_id": self.session_id,"uid": uid,"strategy": "ladder-sell","action": "SELL",
@@ -1073,7 +1171,9 @@ class AutoTrader:
                     "duration_ms": duration_ms,"status_code": code,
                     "ts": datetime.now(timezone.utc).isoformat(),
                 }
-                self.logger.write_order_record(record)
+                self.trade_logger.write_order_record(record)
+
+                self._dbg("ladder_sell.http.resp", i=i+1, status_code=code, duration_ms=duration_ms)
 
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
@@ -1081,7 +1181,8 @@ class AutoTrader:
                     "ts": record["ts"],"extra": {"slice": i+1, "total": total, "resp": resp},
                 })
             except Exception as e:
-                self._log(f"❌ (ladder-sell) [{i+1}/{total}] {stk_cd} 실패 → {e}")
+                logger.info(f"❌ (ladder-sell) [{i+1}/{total}] {stk_cd} 실패 → {e}")
+                self._dbg("ladder_sell.http.error", i=i+1, err=str(e))
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
                     "price": limit_price,"qty": qty,"status": "ERROR",
@@ -1089,6 +1190,7 @@ class AutoTrader:
                     "extra": {"slice": i+1, "total": total, "error": str(e)},
                 })
 
+        self._dbg_ret("ladder_sell", slices=len(prices))
         return {"ladder_sell_results": results}
 
     # =========================
@@ -1103,18 +1205,23 @@ class AutoTrader:
         unit_amount: int | None = None,
         order_type: Literal["limit", "market"] | None = None,
     ) -> Optional[Dict[str, Any]]:
-        # 🔒 master_enable 제거 → auto_buy만 가드
+        self._dbg("buy_immediate.enter", auto_buy=self.settings.auto_buy,
+                  stk_cd=stk_cd, last_price=last_price, order_type=order_type)
+
         if not self.settings.auto_buy:
-            self._log("⛔ [immediate] auto_buy 비활성 → 매수 차단")
+            logger.info("⛔ [immediate] auto_buy 비활성 → 매수 차단")
+            self._dbg_ret("buy_immediate.block", reason="auto_buy=False")
             return None
 
         try:
             p = int(float(last_price))
         except Exception:
-            self._log("🚫 [immediate] last_price 변환 실패")
+            logger.info("🚫 [immediate] last_price 변환 실패")
+            self._dbg_ret("buy_immediate.block", reason="price_cast_fail")
             return None
         if not stk_cd or p <= 0:
-            self._log("🚫 [immediate] 종목코드/가격 유효하지 않음")
+            logger.info("🚫 [immediate] 종목코드/가격 유효하지 않음")
+            self._dbg_ret("buy_immediate.block", reason="invalid_params", stk_cd=stk_cd, price=p)
             return None
 
         payload = {
@@ -1127,15 +1234,21 @@ class AutoTrader:
             "unit_amount": int(unit_amount) if unit_amount else self.ladder.unit_amount,
         }
 
+        self._dbg("buy_immediate.dispatch", payload=payload, temp_order_type=order_type or self.settings.order_type)
+
         if order_type in ("limit", "market"):
             old = self.settings.order_type
             try:
                 self.settings.order_type = order_type
-                return await self._handle_ladder_buy(payload)
+                ret = await self._handle_ladder_buy(payload)
+                self._dbg_ret("buy_immediate")
+                return ret
             finally:
                 self.settings.order_type = old
         else:
-            return await self._handle_ladder_buy(payload)
+            ret = await self._handle_ladder_buy(payload)
+            self._dbg_ret("buy_immediate")
+            return ret
 
     # =========================
     # WebSocket events mapping
@@ -1145,6 +1258,8 @@ class AutoTrader:
             msg_type = str(raw.get("type") or raw.get("event") or "").upper()
         except Exception:
             return
+
+        self._dbg("ws.recv", msg_type=msg_type, raw_type=raw.get("type") or raw.get("event"))
 
         if msg_type in ("FILL", "PARTIAL_FILL", "EXECUTION_REPORT", "TRADE"):
             info = self._map_fill(raw)
@@ -1194,11 +1309,13 @@ class AutoTrader:
             ts = raw.get("ts") or raw.get("time") or ""
         except Exception:
             return None
-        return {
+        info = {
             "side": side, "symbol": sym, "fill_qty": qty, "fill_price": price,
             "exec_id": exec_id, "part_seq": None if part_seq in (None, "") else str(part_seq),
             "order_id": raw.get("order_id"), "ts": ts,
         }
+        self._dbg("ws.fill.mapped", info=info)
+        return info
 
     def _map_cancel(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
@@ -1208,7 +1325,9 @@ class AutoTrader:
             ts = raw.get("ts") or raw.get("time") or ""
         except Exception:
             return None
-        return {"symbol": sym, "qty": qty, "order_id": order_id, "ts": ts, "raw": raw}
+        info = {"symbol": sym, "qty": qty, "order_id": order_id, "ts": ts, "raw": raw}
+        self._dbg("ws.cancel.mapped", info=info)
+        return info
 
     def _map_reject(self, raw: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         try:
@@ -1218,12 +1337,16 @@ class AutoTrader:
             ts = raw.get("ts") or raw.get("time") or ""
         except Exception:
             return None
-        return {"symbol": sym, "qty": qty, "reason": reason, "ts": ts, "raw": raw}
+        info = {"symbol": sym, "qty": qty, "reason": reason, "ts": ts, "raw": raw}
+        self._dbg("ws.reject.mapped", info=info)
+        return info
 
     def _dedupe_fill(self, info: Dict[str, Any]) -> bool:
         key = (info["exec_id"], info.get("part_seq"))
         with self._exec_lock:
-            if key in self._seen_exec_keys:
+            accept = key not in self._seen_exec_keys
+            self._dbg("ws.fill.dedupe", exec_id=info["exec_id"], part_seq=info.get("part_seq"), accept=accept)
+            if not accept:
                 return False
             self._seen_exec_keys.add(key)
             return True
@@ -1233,6 +1356,7 @@ class AutoTrader:
             return
         side = info["side"]; sym = info["symbol"]
         qty = int(info["fill_qty"]); price = float(info["fill_price"])
+        self._dbg("pm.apply_fill", side=side, sym=sym, qty=qty, price=price)
         if side == "BUY":
             try: self.position_mgr.apply_fill_buy(sym, qty, price)
             except Exception: pass
@@ -1274,28 +1398,36 @@ class AutoTrader:
         host = self._base_url()
         url = host + self._endpoint
         headers = self._headers(token, cont_yn, next_key, api_id=self._api_id_buy)
+        logger.debug(f"{DEBUG_TAG} http.req api_id={self._api_id_buy} url={url}")
         response = requests.post(url, headers=headers, json=data, timeout=10)
         header_subset = {k: response.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}
         try:
             body = response.json()
         except Exception:
             body = {"raw": response.text}
+        logger.debug(f"{DEBUG_TAG} http.resp api_id={self._api_id_buy} status={response.status_code} "
+                     f"headers={{'api-id': header_subset.get('api-id'),'cont-yn': header_subset.get('cont-yn'),'next-key': bool(header_subset.get('next-key'))}}")
         return {"status_code": response.status_code, "header": header_subset, "body": body}
 
     def _fn_kt10001(self, token: str, data: Dict[str, Any], cont_yn: str = "N", next_key: str = "") -> Dict[str, Any]:
         host = self._base_url()
         url = host + self._endpoint  # same endpoint, different api-id
         headers = self._headers(token, cont_yn, next_key, api_id=self._api_id_sell)
+        logger.debug(f"{DEBUG_TAG} http.req api_id={self._api_id_sell} url={url}")
         response = requests.post(url, headers=headers, json=data, timeout=10)
         header_subset = {k: response.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}
         try:
             body = response.json()
         except Exception:
             body = {"raw": response.text}
+        logger.debug(f"{DEBUG_TAG} http.resp api_id={self._api_id_sell} status={response.status_code} "
+                     f"headers={{'api-id': header_subset.get('api-id'),'cont-yn': header_subset.get('cont-yn'),'next-key': bool(header_subset.get('next-key'))}}")
         return {"status_code": response.status_code, "header": header_subset, "body": body}
 
     # ---------- UI event emit ----------
     def _emit_order_event(self, evt: Dict[str, Any]) -> None:
+        self._dbg("emit.order_event", status=evt.get("status"), type=evt.get("type"),
+                  action=evt.get("action"), symbol=evt.get("symbol"), price=evt.get("price"), qty=evt.get("qty"))
         try:
             if self.bridge and hasattr(self.bridge, "order_event"):
                 self.bridge.order_event.emit(evt)

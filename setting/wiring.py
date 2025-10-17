@@ -59,11 +59,25 @@ class AppWiring:
 
         # --- 시뮬/실거래 분기 ---
         try:
+            sim_mode = getattr(cfg, "sim_mode", None)
+            if sim_mode is None:
+                sim_mode = (getattr(cfg, "mode", "").upper() == "SIMULATION")
+            sim_mode = bool(sim_mode)
+
+            # ✅ 올바른 토글: 내부 상태+엔진 일괄 세팅
+            if hasattr(self.trader, "set_simulation_mode"):
+                self.trader.set_simulation_mode(sim_mode)
+            else:
+                # 최후수단: 직접 필드 세팅 + 엔진 보장 (권장 X, 임시)
+                self.trader.simulation = sim_mode
+                if sim_mode and getattr(self.trader, "sim_engine", None) is None and hasattr(self.trader, "set_simulation_mode"):
+                    self.trader.set_simulation_mode(sim_mode)
+
+            # (paper_mode는 optional, 필요 시 유지)
             if hasattr(self.trader, "paper_mode"):
-                self.trader.paper_mode = bool(cfg.sim_mode)
-            if cfg.api_base_url and hasattr(self.trader, "_base_url"):
-                logger.info("[Wiring] api_base_url override requested -> %s (실제 사용은 AutoTrader 구현에 따름)",
-                            cfg.api_base_url)
+                self.trader.paper_mode = sim_mode
+
+            logger.info("[Wiring] simulation=%s", sim_mode)
         except Exception as e:
             logger.warning("[Wiring] sim/apply failed: %s", e)
 

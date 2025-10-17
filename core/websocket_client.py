@@ -1,7 +1,7 @@
 # websocket_client.py
 import asyncio
 import websockets
-from websockets import exceptions as ws_excsss
+from websockets import exceptions 
 import json
 import time
 from typing import Optional, Any, Dict, List, Callable
@@ -73,9 +73,10 @@ class WebSocketClient:
         self._reader_task: Optional[asyncio.Task]= None
         self._hb_task: Optional[asyncio.Task]= None
         self._writer_task: Optional[asyncio.Task] = None
-        self._connect_lock = asyncio.Lock()
+        self._connect_lock = None            
         self._connecting: bool = False        # ← NEW: 중복 접속 가드
         self._suspend_reconnect_until: float = 0.0  # ← NEW: R10001 이후 재연결 유예
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
 
         # 🔧 start()/stop() 실행 제어용 상태 추가
@@ -83,8 +84,10 @@ class WebSocketClient:
         self._runner_thread = None            # 전용 스레드 모드
         self._runner_task = None              # 외부 루프 모드
         self._stopped = False
-        self._outbox: asyncio.Queue[str] = asyncio.Queue()
+        self._outbox = None
+        self._loop_id = None   
 
+              
         self.market_api = market_api
         self.refresh_token_cb = refresh_token_cb
 
@@ -115,38 +118,65 @@ class WebSocketClient:
 
     def self_bridge(self, bridge):
         self.bridge = bridge
-        logger.info("[%s] bridge set: %s", self.tag, type(self.bridge).__name__ if bridge else None)
+        logger.info("bridge set: %s", type(self.bridge).__name__ if bridge else None)
     def attach_bridge(self, bridge):
         self.bridge = bridge
         logger.info("bridge attached via attach_bridge()")
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None):
-        with self._start_lock:  # threading.Lock()
+        with self._start_lock:
             self._stopped = False
 
-            # 외부 루프가 이미 돌고 있으면 그 위에 태스크로 기동
             if loop and loop.is_running():
+                self._loop = loop
                 if getattr(self, "_runner_task", None) and not self._runner_task.done():
                     logger.debug("start(): runner already active on external loop")
                     return
+                # 외부 루프 사용 시에도 primitives는 그 루프에서 '한 번만' 생성
+                if self._connect_lock is None:
+                    self._connect_lock = asyncio.Lock()
+                if self._outbox is None:
+                    self._outbox = asyncio.Queue()
                 self._runner_task = loop.create_task(self._run_client(), name="ws-runner")
                 logger.info("started on existing loop")
                 return
 
-            # 전용 스레드 모드
             if self._runner_thread and self._runner_thread.is_alive():
                 logger.debug("start(): runner thread already alive")
                 return
 
             def _runner():
-                asyncio.run(self._run_client())
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self._loop = loop  # ★ 루프 보관!
+
+                # ★★ 러너 루프에서 primitives '한 번만' 생성
+                self._connect_lock = asyncio.Lock()
+                self._outbox = asyncio.Queue()
+
+                self._runner_task = loop.create_task(self._run_client(), name="ws-runner")
+                try:
+                    loop.run_forever()
+                finally:
+                    pending = asyncio.all_tasks(loop)
+                    for t in pending:
+                        t.cancel()
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    loop.close()
 
             t = threading.Thread(target=_runner, daemon=True)
             t.start()
             self._runner_thread = t
             logger.info("started on dedicated thread")
 
+    def _ensure_async_primitives(self):
+        if self._connect_lock is None:
+            self._connect_lock = asyncio.Lock()
+        if self._outbox is None:
+            self._outbox = asyncio.Queue()
+
     async def _run_client(self):
+        self._ensure_async_primitives()      
         backoff = 1.0
         while not getattr(self, "_stopped", False):
 
@@ -173,9 +203,8 @@ class WebSocketClient:
         # 종료 정리
         try:
             await self._cleanup()
-        except Exception:
-            logger.error("Cleanup failed: %s", e)
-
+        except Exception as e:                     
+            logger.error("Cleanup failed: %s", e)  
         logger.info("ws runner stopped")
 
     async def _cleanup(self):
@@ -200,57 +229,69 @@ class WebSocketClient:
 
 
     def stop(self):
-        """런너 종료 신호. (외부 루프 태스크 or 전용 스레드 모두 커버)"""
         with self._start_lock:
+            if self._stopped:
+                return
             self._stopped = True
-
-            # 외부 루프 태스크 취소
-            if self._runner_task and not self._runner_task.done():
-                self._runner_task.cancel()
+            self.keep_running = False  # ← 권장: 수신 루프 빠르게 탈출
+            owns_loop = bool(self._runner_thread and self._runner_thread.is_alive())
+            if self._loop and self._loop.is_running():
+                def _shutdown():
+                    async def _do():
+                        await self._cleanup()
+                    asyncio.create_task(_do())
+                    if owns_loop:
+                        self._loop.stop()
+                self._loop.call_soon_threadsafe(_shutdown)
+            if not owns_loop and self._runner_task and not self._runner_task.done():
+                try:
+                    self._runner_task.cancel()
+                except Exception:
+                    pass
             self._runner_task = None
-
-            # 소켓이 열려 있으면 비동기 정리(리더/하트비트에서 마저 정리됨)
-            # 전용 스레드 모드에서는 _run_client 루프가 자연 종료
-
-            logger.info("stop() signaled")
 
     # --------------------------
     # WebSocket 연결/송수신
     # --------------------------
     async def connect(self) -> bool:
-        # 중복 호출/중복 로그인 방지
+        self._ensure_async_primitives()      
         async with self._connect_lock:
             if self._connecting or self.connected:
                 return False
-            
             if time.time() < self._suspend_reconnect_until:
                 return False
-            
             self._connecting = True
-
         try:
-            self.websocket = await websockets.connect(self.uri)
+            self.websocket = await websockets.connect(
+                self.uri, ping_interval=30, ping_timeout=10, close_timeout=5, max_queue=None
+            )
             self.connected = True
-            self.bridge.log.emit("🟢 WebSocket 연결 성공")
+            if self.bridge and hasattr(self.bridge, "log"):
+                self.bridge.log.emit("🟢 WebSocket 연결 성공")
 
-            await self.send_message({"trnm": "LOGIN", "token": self.token})
 
+            # 이전 태스크 정리 후 새 태스크 시작
             await self._cleanup_tasks()
-            
             self._reader_task = asyncio.create_task(self.receive_messages(), name="ws-reader")
             self._hb_task = asyncio.create_task(self._heartbeat(), name="ws-hb")
             self._writer_task = asyncio.create_task(self._drain_outbox(), name="ws-writer")
+            # 로그인 전송
+            await self.send_message({"trnm": "LOGIN", "token": self.token})
 
             return True
         except Exception as e:
-            self.bridge.log.emit("❌ WebSocket 연결 실패: %s", e, exc_info=True)
+            logger.warning("❌ WebSocket 연결 실패: %s", e)  
+            try:
+                if self.bridge and hasattr(self.bridge, "log"):
+                    self.bridge.log.emit(f"❌ WebSocket 연결 실패: {type(e).__name__}", str(e))
+            except Exception as emit_e:
+                logger.error("bridge.log.emit failed: %s", emit_e)
             self.connected = False
             return False
         finally:
             self._connecting = False
 
     async def _cleanup_tasks(self):
-        """연결 시 기존 태스크를 정리하는 전용 메서드"""
         tasks = [self._reader_task, self._hb_task, self._writer_task]
         for task in tasks:
             if task and not task.done():
@@ -274,24 +315,29 @@ class WebSocketClient:
     """
 
     async def _enqueue(self, payload: dict | str):
+        self._ensure_async_primitives() 
         msg = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         try:
             self._outbox.put_nowait(msg)
         except asyncio.QueueFull:
             logger.warning("outbox full; dropping message: %s", msg[:120])
 
+    def send(self, payload: dict | str) -> None:
+        if not self._loop or not self._loop.is_running():
+            raise RuntimeError("WebSocketClient loop not ready yet")
+        asyncio.run_coroutine_threadsafe(self._enqueue(payload), self._loop)
+
     async def send_message(self, payload: dict | str):
-        # 예전: if not connected: await self.connect()  ❌ 제거
+        # 내부 코루틴에서 쓰는 용도라면 그대로 _enqueue 호출
         await self._enqueue(payload)
 
     async def _drain_outbox(self):
+        self._ensure_async_primitives()
         try:
             while True:
                 msg = await self._outbox.get()
                 if not self.connected or not self.websocket:
-                    # 끊긴 상태면 잠깐 재대기
                     await asyncio.sleep(0.2)
-                    # 메시지는 버리지 않고 while에서 다시 체크
                     await self._outbox.put(msg)
                     continue
                 try:
@@ -299,16 +345,14 @@ class WebSocketClient:
                     logger.debug("Message sent: %s", msg)
                 except Exception as e:
                     logger.debug("writer send failed: %s", e)
-                    # 재시도 위해 메시지 되밀기
                     await asyncio.sleep(0.2)
                     await self._outbox.put(msg)
-                    break
+                    # break  ❌
+                    continue  # ✅ 계속 돌아라
         except asyncio.CancelledError:
             logger.info("Writer task cancelled")
         except Exception as e:
             logger.error("Writer task failed: %s", e)
-        finally:
-            pass
 
     async def _heartbeat(self):
         """Periodically sends a PING to keep the connection alive."""
@@ -326,6 +370,9 @@ class WebSocketClient:
             self.connected = False
 
     async def wait_for_condition_list(self, timeout=10):
+        if self._reader_task and not self._reader_task.done():
+            raise RuntimeError("wait_for_condition_list cannot be used while reader is running.")
+
         if not self.websocket:
             return {}
         start = time.time()
@@ -428,7 +475,7 @@ class WebSocketClient:
                         price = _pick_first(values, ["10", "cur_prc", "price", "stck_prpr"], default="0")
 
                         if not code:
-                            logger.debug("⚠️ 종목코드 없음. 응답 구조 확인 필요:", item)
+                            logger.debug("⚠️ 종목코드 없음. 응답 구조 확인 필요: %s", item)
                             continue
 
                         self.stock_code_to_name[code] = name
@@ -521,11 +568,12 @@ class WebSocketClient:
     # 내부 콜백/유틸
     # --------------------------
     async def disconnect(self):
-        self.keep_running = False
-        if self.connected and self.websocket:
-            await self.websocket.close()
-            self.connected = False
-            logger.debug("Disconnected from WebSocket server")
+        if self.websocket:
+            try:
+                await self.websocket.close()
+            except Exception:
+                pass
+        self.connected = False
 
     # -------- 신규 감지 시: 코드/상세를 분리 콜백 (KA10001만 사용) --------
     async def _emit_code_and_detail(self, base_payload: dict):
@@ -642,12 +690,6 @@ class WebSocketClient:
                 code6, detail.get("stock_name"), filled_from_ka10001, applied_from_base
             )
 
-            # 요약 로그
-            summary_keys = [
-                "stock_code", "stock_name", "condition_name",
-                "cur_prc", "flu_rt", "open_pric", "high_pric",
-                "low_pric", "now_trde_qty", "cntr_str", "open_pric_pre"
-            ]
 
             # 2) 상세 emit
             try:

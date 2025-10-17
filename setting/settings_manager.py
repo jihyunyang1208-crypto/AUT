@@ -57,10 +57,8 @@ class AppSettings:
     master_enable: bool = True
     auto_buy: bool = True
     auto_sell: bool = True
-    # Pro 모드(룰 기반) 스위치
     buy_pro: bool = False
     sell_pro: bool = False
-
     # 주문 타입(지정가/시장가)
     order_type: Literal["limit", "market"] = "limit"
 
