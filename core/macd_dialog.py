@@ -237,34 +237,43 @@ class MacdDialog(QDialog):
             self.update_plot(self.ax_30m, self.canvas_30m, df['ts'], df['macd'], df['signal'], df['hist'], "MACD (30분봉)")
 
     def update_plot(self, ax, canvas, dates, macd, signal, hist, title):
-        """지정된 축(ax)에 MACD 차트를 그리는 공통 함수 (X축 최적화 적용)"""
-        ax.clear()
-        if not dates.empty:
-            ax.plot(dates, macd, label='MACD', color='#60a5fa', linewidth=1.5)
-            ax.plot(dates, signal, label='Signal', color='#f59e0b', linewidth=1.2, linestyle='--')
+            """지정된 축(ax)에 MACD 차트를 그리는 공통 함수 (데이터 인덱스 기반으로 변경)"""
+            ax.clear()
+            if not dates.empty:
+                # ▼▼▼ 1. X축을 위한 숫자 인덱스 생성 ▼▼▼
+                x_indices = range(len(dates))
+
+                # ▼▼▼ 2. 시간(dates) 대신 인덱스(x_indices)를 사용해 플로팅 ▼▼▼
+                ax.plot(x_indices, macd, label='MACD', color='#60a5fa', linewidth=1.5)
+                ax.plot(x_indices, signal, label='Signal', color='#f59e0b', linewidth=1.2, linestyle='--')
+                
+                bar_colors = ['#22c55e' if h >= 0 else '#ef4444' for h in hist]
+                # ▼▼▼ 3. 막대 너비를 고정 값으로 변경하여 일관성 유지 ▼▼▼
+                ax.bar(x_indices, hist, label='Hist', color=bar_colors, width=0.8, alpha=0.7)
+                
+                # ▼▼▼ 4. X축 눈금(ticks) 위치와 라벨을 직접 설정 ▼▼▼
+                max_ticks = 6
+                if len(dates) > max_ticks:
+                    # 눈금을 표시할 인덱스 위치 계산
+                    step = len(dates) // max_ticks
+                    tick_positions = x_indices[::step]
+                    # 해당 위치의 시간 텍스트 라벨 생성
+                    tick_labels = [d.strftime('%H:%M') for d in dates.iloc[tick_positions]]
+                else:
+                    # 데이터가 적으면 모든 데이터의 라벨 표시
+                    tick_positions = x_indices
+                    tick_labels = [d.strftime('%H:%M') for d in dates]
+
+                ax.set_xticks(tick_positions)
+                ax.set_xticklabels(tick_labels, rotation=30, ha='right', fontsize=8) # ha='right'로 정렬 개선
+
+                ax.legend(labelcolor="#e9edf1", facecolor="#2a2f36", edgecolor="#3a414b")
             
-            bar_colors = ['#22c55e' if h >= 0 else '#ef4444' for h in hist]
-            bar_width = (dates.iloc[1] - dates.iloc[0]) * 0.4 if len(dates) > 1 else 0.01
-            ax.bar(dates, hist, label='Hist', color=bar_colors, width=bar_width, alpha=0.7)
-            
-            # ▼▼▼ 수정된 부분 ▼▼▼
-            # X축 라벨 포맷 지정
-            ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
-            
-            # X축 라벨의 최대 개수를 6개로 제한하여 겹침 방지
-            max_ticks = 6
-            if len(dates) > max_ticks:
-                step = len(dates) // max_ticks
-                tick_indices = range(0, len(dates), step)
-                tick_dates = dates.iloc[tick_indices]
-                ax.set_xticks(tick_dates)
-            
-            ax.tick_params(axis='x', rotation=30, labelsize=8)
-            ax.legend(labelcolor="#e9edf1", facecolor="#2a2f36", edgecolor="#3a414b")
+            ax.set_title(title, color='#e9edf1')
+            ax.grid(True, linestyle='--', alpha=0.25, color="#555")
+            canvas.draw()
         
-        ax.set_title(title, color='#e9edf1' )
-        ax.grid(True, linestyle='--', alpha=0.25, color="#555")
-        canvas.draw()
+        
     # -----------------------------
     # 테이블 업데이트
     # -----------------------------

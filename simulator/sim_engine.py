@@ -2,6 +2,8 @@
 from __future__ import annotations
 import time, uuid
 from typing import Callable, Dict, Any, Optional, List
+import logging
+logger = logging.getLogger(__name__)
 
 class SimEngine:
     """

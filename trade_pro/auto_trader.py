@@ -732,6 +732,13 @@ class AutoTrader:
                 except Exception as e:
                     logger.info(f"❌ (ladder) sim submit 실패 → {e}")
                     self._dbg("ladder_buy.slice.error", i=i, err=str(e))
+                
+                if self.position_mgr:
+                    fill_price = shown_price or cur_price  # 시장가면 shown_price==0 → cur_price 사용
+                    try:
+                        self.position_mgr.apply_fill_buy(stk_cd, qty, fill_price)
+                    except Exception:
+                        pass
 
                 await asyncio.sleep(self.ladder.interval_sec)
 
@@ -825,13 +832,6 @@ class AutoTrader:
                     "extra": {"slice": i, "total": total, "error": str(e)},
                 })
 
-                # ✅ 가상 체결: 주문 제출 직후 포지션 즉시 반영
-                if self.position_mgr:
-                    fill_price = shown_price or cur_price  # 시장가는 shown_price==0 → cur_price 사용
-                    try:
-                        self.position_mgr.apply_fill_buy(stk_cd, qty, fill_price)
-                    except Exception:
-                        pass
 
             await asyncio.sleep(self.ladder.interval_sec)
 
@@ -1249,6 +1249,22 @@ class AutoTrader:
             ret = await self._handle_ladder_buy(payload)
             self._dbg_ret("buy_immediate")
             return ret
+
+    def _submit_order(self, *, code: str, side: str, qty: int, price: float, trde_tp: Optional[str] = None):
+        trde_tp = trde_tp or self._resolve_trde_tp()  # '0' 지정가, '3' 시장가
+        token = self._token_provider()
+        if not token:
+            raise RuntimeError("액세스 토큰이 비어있습니다.")
+        data = {
+            "dmst_stex_tp": "KRX",
+            "stk_cd": code,
+            "ord_qty": str(int(qty)),
+            "ord_uv": str(0 if trde_tp == "3" else int(price)),
+            "trde_tp": trde_tp,
+            "cond_uv": "",
+        }
+        fn = self._fn_kt10000 if side.upper() == "BUY" else self._fn_kt10001
+        return fn(token=token, data=data, cont_yn="N", next_key="")
 
     # =========================
     # WebSocket events mapping

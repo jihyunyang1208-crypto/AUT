@@ -541,37 +541,47 @@ class ExitEntryMonitor:
                 logger.debug(f"[Monitor] custom disabled or intrabar not allowed → skip immediate ({sym})")
                 return
 
-            # 5분봉 확보 (유효성만 가드)
-            df5 = await self._get_5m(sym, count=200)
-            if df5 is None or df5.empty or len(df5) < 2:
-                logger.debug(f"[Monitor] {sym} 즉시트리거: 5m 없음/부족 → skip")
-                return
-
-            ref_ts = df5.index[-1]
-            last_close = float(df5["Close"].iloc[-1])
+            now_ts = ts or pd.Timestamp.now(tz=self.tz)
 
             # === BUY 평가 ===
             if self.custom.auto_buy:
-                if self.custom.buy_pro:
-                    ctx_buy = {
-                        "side": "BUY",
-                        "symbol": sym,
-                        "price": last_close,
-                        "df5": df5,
-                        "ts": ref_ts,
-                        "source": source,
-                        "condition_name": condition_name,
-                    }
-                    try:
-                        ok_buy = bool(self._buy_rule_fn(ctx_buy))
-                    except Exception as e:
-                        logger.warning(f"[Monitor] BUY rule error: {e} → pass-through(True)")
-                        ok_buy = True
-                    if ok_buy:
-                        self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY-Pro) {condition_name}")
-                else:
-                    # Pro OFF → 즉시 발행
-                    self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY) {condition_name}")
+                # 🔵 Pro 전략 OFF: 5분봉 조회 없이 즉시 신호 발행
+                if not self.custom.buy_pro:
+                    # 전달받은 price가 유효하면, 5분봉 조회 없이 즉시 신호 발행
+                    if price is not None and price > 0:
+                        logger.debug(f"[Monitor] {sym} 즉시신호(BUY): 5분봉 조회 생략")
+                        self._emit("BUY", sym, now_ts, price, reason or f"즉시신호(BUY) {condition_name}")
+                    # 만약을 위해 가격이 전달되지 않은 경우, 기존 방식으로 데이터 조회
+                    else:
+                        logger.warning(f"[Monitor] {sym} 즉시신호(BUY): price 누락, 5분봉 조회로 대체")
+                        df5_fallback = await self._get_5m(sym, count=2)
+                        if df5_fallback is not None and not df5_fallback.empty:
+                            fallback_price = float(df5_fallback["Close"].iloc[-1])
+                            fallback_ts = df5_fallback.index[-1]
+                            self._emit("BUY", sym, fallback_ts, fallback_price, reason or f"즉시신호(BUY) {condition_name}")
+                    return # BUY 처리 후 함수 종료
+
+                # ✨ 3. Pro 전략이 ON일 때만 5분봉 데이터 조회
+                df5 = await self._get_5m(sym, count=200)
+                if df5 is None or df5.empty or len(df5) < 2:
+                    logger.debug(f"[Monitor] {sym} 즉시트리거(Pro): 5m 없음/부족 → skip")
+                    return
+
+                last_close = float(df5["Close"].iloc[-1])
+                ref_ts = df5.index[-1]
+
+                ctx_buy = {
+                    "side": "BUY", "symbol": sym, "price": last_close, "df5": df5,
+                    "ts": ref_ts, "source": source, "condition_name": condition_name,
+                }
+                try:
+                    ok_buy = bool(self._buy_rule_fn(ctx_buy))
+                except Exception as e:
+                    logger.warning(f"[Monitor] BUY rule error: {e} → pass-through(True)")
+                    ok_buy = True
+                
+                if ok_buy:
+                    self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY-Pro) {condition_name}")
 
             # === SELL 평가 ===
             if self.custom.auto_sell:
