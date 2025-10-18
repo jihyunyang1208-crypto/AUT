@@ -1,8 +1,17 @@
-# core/app_wiring.py
+# core/wiring.py (Final Version)
 from __future__ import annotations
 
 import logging
+import os
+from typing import Callable
 from .settings_manager import AppSettings
+
+# 브로커 생성 및 기타 의존성
+try:
+    from broker.factory import create_broker 
+except ImportError:
+    logging.getLogger(__name__).critical("Failed to import broker.factory. Hot-swap disabled.")
+    def create_broker(*args, **kwargs): return None # 안전한 폴백
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +24,27 @@ class AppWiring:
     def __init__(self, *, trader, monitor):
         self.trader = trader
         self.monitor = monitor
+
+    def _broker_identity(b):
+        # 1) callable name()
+        nm = getattr(b, "name", None)
+        if callable(nm):
+            try:
+                v = nm()
+                if v: return str(v).strip().lower()
+            except Exception:
+                pass
+        # 2) name 속성
+        v = getattr(b, "name", None)
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+        # 3) vendor 속성
+        v = getattr(b, "vendor", None)
+        if isinstance(v, str) and v.strip():
+            return v.strip().lower()
+        # 4) 클래스명 fallback
+        return b.__class__.__name__.lower()
+
 
     def apply_settings(self, cfg: AppSettings):
         # --- 공통 스위치 ---
@@ -45,7 +75,7 @@ class AppWiring:
         if hasattr(self.monitor, "tz"):
             self.monitor.tz = cfg.timezone or "Asia/Seoul"
 
-        # --- 라더(사다리) 매수 설정 적용 ✅ ---
+        # --- 라더(사다리) 매수 설정 적용 ---
         try:
             if hasattr(self.trader, "ladder") and self.trader.ladder is not None:
                 # 안전 가드
@@ -56,6 +86,62 @@ class AppWiring:
                 logger.info("[Wiring] Ladder config applied: unit_amount=%s, num_slices=%s", ua, ns)
         except Exception as e:
             logger.warning("[Wiring] apply ladder settings failed: %s", e)
+
+        # --- 매수/매도 브로커(증권사/시뮬) 설정 적용 (HOT-SWAP) ---
+        if hasattr(self.trader, "broker"):
+            try:
+                # 1. 설정값에서 벤더 추출
+                vendor = None
+                for key in ("broker_vendor", "broker", "dealer"):
+                    if hasattr(cfg, key):
+                        v = getattr(cfg, key)
+                        if isinstance(v, str) and v.strip():
+                            vendor = v.strip()
+                            break
+
+                if vendor:
+                    # A. 현재 브로커 이름 확인
+                    cur_name = None
+                    try:
+                        if self.trader.broker and hasattr(self.trader.broker, "name") and callable(self.trader.broker.name):
+                            cur_name = self.trader.broker.name()
+                    except Exception:
+                        pass # cur_name remains None
+
+                    # B. Provider 준비
+                    # AutoTrader에서 사용하는 _token_provider를 가져옴
+                    token_provider = getattr(self.trader, "_token_provider", None) 
+                    base_url_provider: Callable[[], str] = lambda: getattr(cfg, "api_base_url", "") or os.getenv("HTTP_API_BASE", "")
+
+                    # C. 새 브로커 생성
+                    new_broker = create_broker(
+                        token_provider=token_provider,
+                        dealer=vendor,
+                        base_url_provider=base_url_provider
+                    )
+                    
+                    if new_broker is None:
+                         raise RuntimeError("create_broker returned None.")
+
+                    new_name = getattr(new_broker, "name", None)
+                    if callable(new_name):
+                        new_name = new_broker.name()
+
+                    # D. 브로커 교체 (이름이 다를 경우에만)
+                    cur_id = self._broker_identity(self.trader.broker) 
+                    new_id = self._broker_identity(new_broker)
+
+                    if cur_id != new_id:
+                        self.trader.broker = new_broker
+                        logger.info("[Wiring] broker set to '%s' (was: %s)", new_id, cur_id or "None")
+                    else:
+                        logger.info("[Wiring] broker unchanged: '%s'", cur_id)
+                else:
+                    logger.info("[Wiring] broker vendor not specified; keeping current")
+            except Exception as e:
+                # 이 에러는 핫스왑이 실패했음을 의미하며, 기존 브로커가 유지됩니다.
+                logger.critical("[Wiring] BROKER HOT-SWAP FAILED. Using existing broker. Error: %s", e)
+
 
         # --- 시뮬/실거래 분기 ---
         try:
@@ -80,6 +166,7 @@ class AppWiring:
             logger.info("[Wiring] simulation=%s", sim_mode)
         except Exception as e:
             logger.warning("[Wiring] sim/apply failed: %s", e)
+
 
         # --- 로그 ---
         logger.info(

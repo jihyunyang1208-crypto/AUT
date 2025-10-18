@@ -1,7 +1,13 @@
 # broker/kiwoom.py
 import requests
+import logging # <-- logging 모듈 추가
 from typing import Dict, Any, Optional
-from .base import Broker, OrderRequest, OrderResponse
+from .base import Broker, OrderRequest, OrderResponse 
+
+# --- 로깅 설정 ---
+logger = logging.getLogger(__name__)
+DEBUG_TAG = "[KIWOOM_REST_BROKER]"
+# -----------------
 
 class KiwoomRestBroker(Broker):
     def __init__(self, *, token_provider, base_url: Optional[str] = None, api_id_buy="kt10000", api_id_sell="kt10001", timeout=10):
@@ -33,10 +39,23 @@ class KiwoomRestBroker(Broker):
             "trde_tp": req.trde_tp,
             "cond_uv": req.cond_uv,
         }
+        
+        # --- DEBUG LOG: 요청 전송 ---
+        logger.debug(f"{DEBUG_TAG} HTTP.REQ | API_ID={api_id} | URL={url}")
+        logger.debug(f"{DEBUG_TAG} HTTP.REQ | PAYLOAD={body}")
+        # ---------------------------
+
         r = requests.post(url, headers=self._headers(token, api_id), json=body, timeout=self._timeout)
         header_subset = {k: r.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}
+        
         try:
             body_js = r.json()
         except Exception:
             body_js = {"raw": r.text}
+            
+        # --- DEBUG LOG: 응답 수신 ---
+        logger.debug(f"{DEBUG_TAG} HTTP.RESP | STATUS={r.status_code} | HEADERS={header_subset}")
+        logger.debug(f"{DEBUG_TAG} HTTP.RESP | BODY={body_js}")
+        # ---------------------------
+
         return OrderResponse(status_code=r.status_code, header=header_subset, body=body_js)

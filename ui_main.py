@@ -62,7 +62,7 @@ from PySide6.QtWidgets import QFileDialog
 
 from trading_report.report_dialog import ReportDialog
 
-# 설정 / 와이어링 (구버전 호환)
+# 설정 / 와이어링 
 try:
     from setting.settings_manager import SettingsStore, SettingsDialog
     from setting.wiring import AppWiring
@@ -76,6 +76,7 @@ except Exception:
 
 # 포지션 관리 및 리스크 집계 모듈
 from trade_pro.position_manager import PositionManager
+from trade_pro.auto_trader import AutoTrader
 from risk_management.shared_wallet_pnl import SharedWalletPnL  # 사용하지 않지만 호환성 위해 남겨둠
 from risk_management.position_wiring import PositionWiring  # 사용하지 않지만 호환성 위해 남겨둠
 # RiskDashboard 모듈 가져오기: 리스크 대시보드를 별도 모듈에서 관리
@@ -155,11 +156,14 @@ class MainWindow(QMainWindow):
         self.resize(1280, 860)
 
         # 멤버 주입
+        self.trader = AutoTrader()
+        self.monitor = None
         self.bridge = bridge
         self.engine = engine
         self.perform_filtering_cb = perform_filtering_cb or (lambda: None)
         self.project_root = self._resolve_project_root(project_root)
-        self.wiring = wiring
+        self.wiring = AppWiring(trader=self.trader, monitor=self.monitor)
+
         self.stock_info = StockInfoManager() if StockInfoManager else None 
 
         # 포지션 매니저: 외부에서 주입하거나 새 인스턴스를 생성
@@ -227,6 +231,9 @@ class MainWindow(QMainWindow):
         # 앱 설정 로드 및 적용
         self.store = SettingsStore() if SettingsStore else None
         self.app_cfg = self.store.load() if self.store else type("Cfg", (), {})()
+
+        if getattr(self.app_cfg, "broker_vendor", ""):
+            os.environ["BROKER_VENDOR"] = self.app_cfg.broker_vendor  
         if self.wiring and hasattr(self.wiring, "apply_settings"):
             try:
                 self.wiring.apply_settings(self.app_cfg)
@@ -483,6 +490,15 @@ class MainWindow(QMainWindow):
                     self.store.save(self.app_cfg)
             except Exception:
                 pass
+
+            try:
+                store = SettingsStore()
+                # self.cfg 가 최신인지 보장: 세션 중 변경사항이 self.cfg 에 반영되어 있어야 함
+                store.save(self.cfg)
+            except Exception as e:
+                logging.getLogger(__name__).exception("Failed to save settings on close: %s", e)
+
+
             # 엔진 종료/스트림 정리
             if self.engine is not None and hasattr(self.engine, "shutdown"):
                 try:
@@ -862,20 +878,19 @@ class MainWindow(QMainWindow):
         if not SettingsDialog:
             QMessageBox.information(self, "안내", "SettingsDialog 모듈이 없습니다.")
             return
-        dlg = SettingsDialog(self, self.app_cfg)
+        store = SettingsStore() 
+        dlg = SettingsDialog(self, store.load())
+
         if dlg.exec() == QDialog.Accepted:
             new_cfg = dlg.get_settings()
-            if self.store:
-                try:
-                    self.store.save(new_cfg)
-                except Exception:
-                    pass
-            self.app_cfg = new_cfg
-            if self.wiring and hasattr(self.wiring, "apply_settings"):
-                try:
-                    self.wiring.apply_settings(new_cfg)
-                except Exception:
-                    pass
+            store.save(new_cfg)
+
+            # ✅ wiring이 없으면 지금 만든다
+            if not getattr(self, "wiring", None):
+                logging.getLogger(__name__).warning("wiring was None; initializing now")
+                self.wiring = AppWiring(trader=self.trader, monitor=getattr(self, "monitor", None))
+
+            self.wiring.apply_settings(new_cfg)  # 🔄 브로커 핫스왑/시뮬토글 등
             self.append_log("⚙️ 설정이 적용되었습니다.")
 
     def on_click_daily_report(self) -> None:

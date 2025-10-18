@@ -17,7 +17,6 @@ import logging
 
 logger = logging.getLogger(__name__)  # 모듈별 로거
 
-import requests
 
 # --- Optional import: PositionManager (graceful if missing) ---
 try:
@@ -220,7 +219,6 @@ class AutoTrader:
         ladder: Optional[LadderSettings] = None,
         token_provider: Optional[Callable[[], str]] = None,
         base_url_provider: Optional[Callable[[], str]] = None,
-        endpoint: str = "/api/dostk/ordr",
         paper_mode: Optional[bool] = None,
         log: Optional[Callable[[str], None]] = None,
         bridge: Optional[object] = None,
@@ -230,8 +228,7 @@ class AutoTrader:
         self.settings = settings or TradeSettings()
         self.ladder = ladder or LadderSettings()
         self._token_provider = token_provider or (lambda: os.getenv("ACCESS_TOKEN", ""))
-        self._base_url_provider = base_url_provider or (lambda: os.getenv("HTTP_API_BASE", "https://api.kiwoom.com").rstrip("/"))
-        self._endpoint = endpoint  # (브로커로 이관됨, 더 이상 사용하지 않음)
+        self._base_url_provider = base_url_provider
 
         env_mode = (os.getenv("TRADE_MODE") or "").strip().lower()
         env_pm = _parse_bool(os.getenv("PAPER_MODE"), default=False)
@@ -258,8 +255,10 @@ class AutoTrader:
         self.bridge = bridge
         self.position_mgr = position_mgr
 
-        # ✨ 브로커 주입(환경설정/ENV 기반)
-        self.broker: Broker = create_broker(token_provider=self._token_provider)
+        self.broker: Broker = create_broker(
+            token_provider=self._token_provider,
+            base_url_provider=(self._base_url_provider or (lambda: os.getenv("HTTP_API_BASE", ""))),
+        )
 
 
         self._seen_exec_keys: set[tuple[str, Optional[str]]] = set()
@@ -291,18 +290,23 @@ class AutoTrader:
             return int(default)
 
     def submit_buy_order(self, code: str, qty: int, price: float, **kwargs) -> None:
-        self.position_mgr.reserve_buy(code, qty)
+        if self.position_mgr:
+            self.position_mgr.reserve_buy(code, qty)
         response = self._submit_order(code=code, side="BUY", qty=qty, price=price, **kwargs)
-        if not getattr(response, "ok", True):
+
+        if self.position_mgr and not getattr(response, "ok", True):
             self.position_mgr.release_buy(code, qty)
 
     def submit_sell_order(self, code: str, qty: int, price: float, **kwargs) -> None:
-        self.position_mgr.reserve_sell(code, qty)
+        if self.position_mgr:
+            self.position_mgr.reserve_sell(code, qty)
         response = self._submit_order(code=code, side="SELL", qty=qty, price=price, **kwargs)
-        if not getattr(response, "ok", True):
+        if self.position_mgr and not getattr(response, "ok", True):
             self.position_mgr.release_sell(code, qty)
 
     def on_order_fill(self, code: str, side: str, qty: int, price: float) -> None:
+        if not self.position_mgr:
+            return
         if side.upper() == "BUY":
             self.position_mgr.apply_fill_buy(code, qty, price)
         elif side.upper() == "SELL":
@@ -655,7 +659,7 @@ class AutoTrader:
             start_ticks_below=start_ticks_below, step_ticks=step_ticks
         )
         self._dbg("ladder_buy.prices", count=len(prices), first=prices[:3], last=prices[-3:])
-
+        mode_label = "(SIM)" if self.simulation else "(LIVE)"
 
 
         results: List[Dict[str, Any]] = []
@@ -699,12 +703,9 @@ class AutoTrader:
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 code = resp.get("status_code")
                 results.append(resp)
-
+                
                 if self.bridge and hasattr(self.bridge, "log"):
-                    try:
-                        self.bridge.log.emit(f"✅ (LIVE)(ladder) [{i}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}")
-                    except Exception:
-                        pass
+                    self.bridge.log.emit(f"✅ {mode_label}(ladder) [{i}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}") 
 
                 record = {
                     "session_id": self.session_id,"uid": uid,"strategy": "ladder","action": "BUY",
@@ -727,8 +728,7 @@ class AutoTrader:
                 })
             except Exception as e:
                 if self.bridge and hasattr(self.bridge, "log"):
-                    try: self.bridge.log.emit(f"💥 (LIVE)(ladder) [{i}/{total}] 주문 실패: {e}")
-                    except Exception: pass
+                    self.bridge.log.emit(f"💥 {mode_label}(ladder) [{i}/{total}] 주문 실패: {e}")
                 self._dbg("ladder_buy.http.error", i=i, err=str(e))
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,

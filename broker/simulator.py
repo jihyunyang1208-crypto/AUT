@@ -24,4 +24,4 @@ class SimulatorBroker(Broker):
             "fee": round((px * req.ord_qty) * self.fee_bps / 10000.0, 4),
             "ts": time.time(),
         }
-        return OrderResponse(status_code=200, header={"sim": "1"}, body=body)
+        return OrderResponse(status_code=999, header={"sim": "1"}, body=body)

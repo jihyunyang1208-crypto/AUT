@@ -1,6 +1,9 @@
+# setting/settings_manager.py (Final Version)
 from __future__ import annotations
 
 import os
+import json
+
 from dataclasses import dataclass, asdict
 from typing import Optional, Literal
 
@@ -76,6 +79,9 @@ class AppSettings:
     sim_mode: bool = False              # ✅ UI 시뮬레이션 스위치 (paper ≡ simulation)
     api_base_url: str = ""
 
+    # 브로커(증권사/시뮬) 선택: sim | mirae | kiwoom | kis
+    broker_vendor: Literal["sim", "mirae", "kiwoom", "kis"] = "kiwoom"
+
     # 라더(사다리) 매수 기본 설정
     ladder_unit_amount: int = 100_000
     ladder_num_slices: int = 10
@@ -108,11 +114,17 @@ class AppSettings:
             sim = False  # default
 
         api = _normalize_base_url(_s("HTTP_API_BASE", ""))
+        
+        # 브로커 초기 디폴트(.env 있으면 그것, 없으면 'kiwoom')
+        broker = (_s("BROKER_VENDOR", "") or _s("BROKER_TYPE", "")).strip().lower()
+        if broker not in ("sim", "mirae", "kiwoom", "kis"):
+             broker = "kiwoom"
 
         return cls(
             sim_mode=bool(sim),
             api_base_url=api,
             order_type=_order_type_from_env(),
+            broker_vendor=broker,
         )
 
 
@@ -128,15 +140,30 @@ class SettingsStore:
     def load(self) -> AppSettings:
         """
         1) .env에서 기본값(AppSettings.from_env) 생성
-        2) QSettings의 dict와 병합 (있으면 덮어쓰기)
-        3) 구버전 호환 키(auto_buy/auto_sell 등)도 반영
+        2) QSettings의 JSON과 병합 (있으면 덮어쓰기)
+        3) 구버전 호환 키(auto_buy/auto_sell/broker_vendor)도 반영
         """
         base = AppSettings.from_env()
         raw = self.qs.value(self.KEY, None)
 
+        # bytes → str
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                raw = raw.decode("utf-8")
+            except Exception:
+                raw = None
+
+        # str(JSON) → dict
+        if isinstance(raw, str) and raw.strip():
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = None
+
         if isinstance(raw, dict):
-            merged = asdict(base)
+            merged = asdict(base)     # ← 누락됐던 부분
             merged.update(raw)
+
             # 타입 안정화
             return AppSettings(
                 master_enable=bool(merged.get("master_enable", True)),
@@ -144,7 +171,7 @@ class SettingsStore:
                 auto_sell=bool(merged.get("auto_sell", True)),
                 buy_pro=bool(merged.get("buy_pro", False)),
                 sell_pro=bool(merged.get("sell_pro", False)),
-                order_type=("market" if merged.get("order_type", "limit") == "market" else "limit"),
+                order_type=("market" if str(merged.get("order_type", "limit")) == "market" else "limit"),
                 use_macd30_filter=bool(merged.get("use_macd30_filter", False)),
                 macd30_timeframe=str(merged.get("macd30_timeframe", "30m")),
                 macd30_max_age_sec=int(merged.get("macd30_max_age_sec", 1800)),
@@ -156,32 +183,83 @@ class SettingsStore:
                 ladder_unit_amount=int(merged.get("ladder_unit_amount", 100_000)),
                 ladder_num_slices=int(merged.get("ladder_num_slices", 10)),
                 timezone=str(merged.get("timezone", "Asia/Seoul")),
+                broker_vendor=(
+                    str(merged.get("broker_vendor", base.broker_vendor)).strip().lower()
+                    if str(merged.get("broker_vendor", "")).strip().lower() in ("sim","mirae","kiwoom","kis")
+                    else base.broker_vendor
+                ),
             )
 
-        # --- 구버전 호환 (개별 키) ---
+        # --- 구버전 호환 (개별 키 로드 및 base에 반영) ---
         auto_buy = self.qs.value("auto_buy", None, type=bool)
         auto_sell = self.qs.value("auto_sell", None, type=bool)
+        broker_vendor = self.qs.value("broker_vendor", None, type=str)
+
         if auto_buy is not None:
             base.auto_buy = bool(auto_buy)
         if auto_sell is not None:
             base.auto_sell = bool(auto_sell)
+        if isinstance(broker_vendor, str) and broker_vendor.strip().lower() in ("sim","mirae","kiwoom","kis"):
+            base.broker_vendor = broker_vendor.strip().lower()
 
         return base
 
+
     def save(self, cfg: AppSettings):
+        """
+        설정 저장:
+        - QSettings(JSON 직렬화)
+        - 런타임 환경변수(os.environ)
+        - .env 파일 반영 (영구 유지)
+        """
         cfg.api_base_url = _normalize_base_url(cfg.api_base_url)
-        self.qs.setValue(self.KEY, asdict(cfg))
+
+        # 1️⃣ QSettings (JSON 직렬화 저장)
+        self.qs.setValue(self.KEY, json.dumps(asdict(cfg), ensure_ascii=False))
         self.qs.setValue("auto_buy", cfg.auto_buy)
         self.qs.setValue("auto_sell", cfg.auto_sell)
+        self.qs.setValue("broker_vendor", cfg.broker_vendor)
 
-        # 즉시 환경변수 반영
+        # 2️⃣ 런타임 환경변수 반영 (현재 프로세스에만 유효)
         if cfg.api_base_url:
             os.environ["HTTP_API_BASE"] = cfg.api_base_url
-        if hasattr(cfg, "ws_uri") and cfg.ws_uri:
+        if getattr(cfg, "broker_vendor", ""):
+            os.environ["BROKER_VENDOR"] = cfg.broker_vendor
+        if getattr(cfg, "ws_uri", ""):
             os.environ["WS_URI"] = cfg.ws_uri
+
+        # 3️⃣ .env 파일에 영구 반영
+        try:
+            from pathlib import Path
+
+            env_path = Path(".env")
+            if env_path.exists():
+                lines = env_path.read_text(encoding="utf-8").splitlines()
+            else:
+                lines = []
+
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith("BROKER_VENDOR="):
+                    lines[i] = f"BROKER_VENDOR={cfg.broker_vendor}"
+                    found = True
+                    break
+
+            if not found:
+                lines.append(f"BROKER_VENDOR={cfg.broker_vendor}")
+
+            env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to update .env file: {e}")
+
+        # 4️⃣ QSettings 즉시 플러시
+        self.qs.sync()
+
 
 # ===================== (신규) 로그인 탭 =====================
 class _LoginTab(QWidget):
+    # ... (생략: _LoginTab 클래스 코드는 변경 없음)
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
@@ -238,18 +316,9 @@ class _LoginTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "실패", f"토큰 발급 실패:\n{e}")
 
-
 # ===================== 설정 다이얼로그 =====================
 class SettingsDialog(QDialog):
-    """
-    (호환 보장)
-    - 생성자 서명: SettingsDialog(parent: QWidget|None, cfg: AppSettings)
-    - .env 값은 기본값(AppSettings.from_env)로 로딩되고,
-      사용자가 다이얼로그에서 조정하면 QSettings에 저장됩니다.
-    - order_type(지정가/시장가) 필드(ComboBox)
-    - 라더 매수 기본값(1회 금액, 분할 수) 편집 가능
-    - (신규) 로그인 탭 추가: APP_KEY/APP_SECRET 저장 및 토큰 발급 테스트
-    """
+
     GEOM_KEY = "ui/settings_dialog_geometry_v1"
 
     def __init__(self, parent: QWidget | None, cfg: AppSettings):
@@ -298,10 +367,25 @@ class SettingsDialog(QDialog):
         self.cmb_order_type = QComboBox()
         self.cmb_order_type.addItems(["지정가", "시장가"])
         self.cmb_order_type.setToolTip("기본 주문 타입")
+
+        self.cmb_broker = QComboBox()
+        self._broker_items = [
+            ("시뮬레이터", "sim"),
+            ("미래에셋", "mirae"),
+            ("키움", "kiwoom"),
+            ("한국투자", "kis"),
+        ]
+        for label, _code in self._broker_items:
+            self.cmb_broker.addItem(label)
+
         self.cb_sim = QCheckBox("시뮬레이션 모드 (SIM_MODE/PAPER_MODE 대체)")
         self.le_api = QLineEdit(); self.le_api.setPlaceholderText("API Base URL (비우면 .env/기본값)")
         url_regex = QRegularExpression(r"^$|^https?://[^\s/$.?#].[^\s]*$")
         self.le_api.setValidator(QRegularExpressionValidator(url_regex))
+        
+        # ✅ UI에 브로커 선택 항목 추가 (이전에 누락되었던 부분)
+        fo.addRow("브로커(증권사)", self.cmb_broker)
+        
         fo.addRow("주문 타입", self.cmb_order_type)
         fo.addRow("시뮬레이션 모드", self.cb_sim)
         fo.addRow("API Base", self.le_api)
@@ -397,6 +481,14 @@ class SettingsDialog(QDialog):
         # 주문 타입 매핑
         self.cmb_order_type.setCurrentText("시장가" if c.order_type == "market" else "지정가")
 
+        # 브로커 선택 매핑: 설정값(c.broker_vendor)을 UI에 표시
+        cur_code = (c.broker_vendor or "kiwoom").lower()
+        idx = 0
+        for i, (_label, code) in enumerate(self._broker_items):
+            if code == cur_code:
+                idx = i; break
+        self.cmb_broker.setCurrentIndex(idx)
+
         self.cb_macd.setChecked(c.use_macd30_filter)
         self.cmb_macd_tf.setCurrentText(c.macd30_timeframe or "30m")
         self.sp_macd_age.setValue(int(c.macd30_max_age_sec))
@@ -425,6 +517,10 @@ class SettingsDialog(QDialog):
         # 주문 타입 매핑
         order_txt = self.cmb_order_type.currentText()
         c.order_type = "market" if order_txt == "시장가" else "limit"
+        # 브로커 선택 매핑: UI에서 선택된 값을 설정 객체에 저장
+        bi = max(0, self.cmb_broker.currentIndex())
+        _, code = self._broker_items[bi]
+        c.broker_vendor = code  # "sim" | "mirae" | "kiwoom" | "kis"
 
         c.use_macd30_filter = self.cb_macd.isChecked()
         c.macd30_timeframe = self.cmb_macd_tf.currentText()
@@ -467,6 +563,7 @@ class SettingsDialog(QDialog):
 
 
 # ===================== AutoTrader 연동 헬퍼 =====================
+# ... (생략: to_trade_settings, to_ladder_settings, apply_to_autotrader)
 def to_trade_settings(cfg: AppSettings):
     """
     AppSettings → AutoTrader.TradeSettings 변환
