@@ -308,7 +308,7 @@ class MacdCalculator:
                          code, tf, len(appended_payload), appended_payload[-1]["t"])
 
             interval_str = f"{tf}m"
-            macd_bus.macd_series_ready.emit({"code": code, "interval": interval_str, "series": payload})
+            macd_bus.macd_series_ready.emit({"code": code, "interval": interval_str, "series": appended_payload})
 
 
 # 전역 계산기

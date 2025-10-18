@@ -521,110 +521,92 @@ class ExitEntryMonitor:
     ):
         """
         조건검색식에서 종목이 편입될 때 호출됨.
-        - 고급 커스텀 허용(intrabar)일 때 즉시 평가/발행
-        - BUY/SELL 모두 독립적으로 평가 (모두 통과 시 모두 발행)
-        - MACD30 필터 및 5분봉 마감창 의존 제거 (df5 유효성만 가드)
-        - Pro 토글:
-            * buy_pro=True  → buy_rule_fn(ctx) 통과 시 발행
-            * buy_pro=False → 즉시 발행
-            * sell_pro=True → sell_rule_fn(ctx) 통과 시 발행(기본: +3% & 이전봉 패턴)
-            * sell_pro=False→ 즉시 발행
+        - SELL 평가는 5분봉 마감 시점(_check_symbol)으로 분리됨.
+        - BUY 평가는 buy_pro OFF 시 즉시 실행되며, Pro ON 시에만 엄격한 intrabar 룰을 따릅니다.
         """
+        sym = _code6(symbol)
         try:
-            # 추적 목록에는 추가(이후 정규 루프에서도 평가 가능)
-            sym = _code6(symbol)
+            # 1. 추적 목록에 추가
             with self._sym_lock:
                 self._symbols.add(sym)
 
-            # intrabar 즉시 트리거 허용 여부
-            if not (self.custom.enabled and self.custom.allow_intrabar_condition_triggers):
-                logger.debug(f"[Monitor] custom disabled or intrabar not allowed → skip immediate ({sym})")
+            # ts 변수가 인수로 전달되지 않았으므로 현재 시간으로 초기화
+            now_ts = pd.Timestamp.now(tz=self.tz)
+
+            # ----------------------------------------------------------------------
+            # 2. [핵심] 즉시 트리거 차단 로직 (Strict Pro 경로만 차단)
+            # buy_pro가 ON이고, 동시에 즉시 트리거가 허용되지 않은 경우에만 차단합니다.
+            should_block_pro_only = (
+                self.custom.buy_pro # Pro 경로 ON
+                and not (self.custom.enabled and self.custom.allow_intrabar_condition_triggers)
+            )
+            
+            if should_block_pro_only:
+                logger.debug(f"[Monitor] buy_pro ON, but intrabar not allowed → skip immediate ({sym})")
                 return
+            # ----------------------------------------------------------------------
 
-            now_ts = ts or pd.Timestamp.now(tz=self.tz)
-
+            df5: Optional[pd.DataFrame] = None
+            last_close: float = 0.0
+            ref_ts: pd.Timestamp = now_ts
+            
             # === BUY 평가 ===
             if self.custom.auto_buy:
-                # 🔵 Pro 전략 OFF: 5분봉 조회 없이 즉시 신호 발행
-                if not self.custom.buy_pro:
-                    # 전달받은 price가 유효하면, 5분봉 조회 없이 즉시 신호 발행
-                    if price is not None and price > 0:
-                        logger.debug(f"[Monitor] {sym} 즉시신호(BUY): 5분봉 조회 생략")
-                        self._emit("BUY", sym, now_ts, price, reason or f"즉시신호(BUY) {condition_name}")
-                    # 만약을 위해 가격이 전달되지 않은 경우, 기존 방식으로 데이터 조회
-                    else:
-                        logger.warning(f"[Monitor] {sym} 즉시신호(BUY): price 누락, 5분봉 조회로 대체")
-                        df5_fallback = await self._get_5m(sym, count=2)
-                        if df5_fallback is not None and not df5_fallback.empty:
-                            fallback_price = float(df5_fallback["Close"].iloc[-1])
-                            fallback_ts = df5_fallback.index[-1]
-                            self._emit("BUY", sym, fallback_ts, fallback_price, reason or f"즉시신호(BUY) {condition_name}")
-                    return # BUY 처리 후 함수 종료
-
-                # ✨ 3. Pro 전략이 ON일 때만 5분봉 데이터 조회
-                df5 = await self._get_5m(sym, count=200)
-                if df5 is None or df5.empty or len(df5) < 2:
-                    logger.debug(f"[Monitor] {sym} 즉시트리거(Pro): 5m 없음/부족 → skip")
-                    return
-
-                last_close = float(df5["Close"].iloc[-1])
-                ref_ts = df5.index[-1]
-
-                ctx_buy = {
-                    "side": "BUY", "symbol": sym, "price": last_close, "df5": df5,
-                    "ts": ref_ts, "source": source, "condition_name": condition_name,
-                }
-                try:
-                    ok_buy = bool(self._buy_rule_fn(ctx_buy))
-                except Exception as e:
-                    logger.warning(f"[Monitor] BUY rule error: {e} → pass-through(True)")
-                    ok_buy = True
                 
-                if ok_buy:
-                    self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY-Pro) {condition_name}")
+                # 🔵 Pro 전략 OFF: 즉시 신호 발행 (5분봉 조회 폴백)
+                if not self.custom.buy_pro:
+                    
+                    logger.warning(f"[Monitor] {sym} 즉시신호(BUY): price 정보 없음, 5분봉 조회로 대체")
+                    df5_fallback = await self._get_5m(sym, count=2)
+                    if df5_fallback is not None and not df5_fallback.empty:
+                        fallback_price = float(df5_fallback["Close"].iloc[-1])
+                        fallback_ts = df5_fallback.index[-1]
+                        self._emit("BUY", sym, fallback_ts, fallback_price, reason or f"즉시신호(BUY) {condition_name}")
+                        
+                        # 이후 Pro 로직에서 재사용을 위해 값 저장 (SELL 평가가 없으므로 필수 아님)
+                        last_close = fallback_price
+                        ref_ts = fallback_ts
+                        df5 = df5_fallback
+                        
+                    # 매수 처리 후에도 함수를 종료하지 않고 아래 UI 로그로 이어집니다.
+                
+                # ✨ Pro 전략 ON: 5분봉 데이터 조회 및 Rule 체크
+                elif self.custom.buy_pro:
+                    # 데이터가 없으면 조회 (이미 위에서 폴백으로 조회했을 수 있음)
+                    if df5 is None:
+                        df5 = await self._get_5m(sym, count=200)
 
-            # === SELL 평가 ===
-            if self.custom.auto_sell:
-                if self.custom.sell_pro:
-                    avg_buy = self._get_avg_buy(sym)
-                    ctx_sell = {
-                        "side": "SELL",
-                        "symbol": sym,
-                        "price": last_close,
-                        "df5": df5,
-                        "avg_buy": avg_buy,
-                        "ts": ref_ts,
-                        "source": source,
-                        "condition_name": condition_name,
+                    if df5 is None or df5.empty or len(df5) < 2:
+                        logger.debug(f"[Monitor] {sym} 즉시트리거(Pro): 5m 없음/부족 → skip")
+                        return
+
+                    last_close = float(df5["Close"].iloc[-1])
+                    ref_ts = df5.index[-1]
+
+                    ctx_buy = {
+                        "side": "BUY", "symbol": sym, "price": last_close, "df5": df5,
+                        "ts": ref_ts, "source": source, "condition_name": condition_name,
                     }
                     try:
-                        ok_sell = bool(self._sell_rule_fn(ctx_sell))
+                        ok_buy = bool(self._buy_rule_fn(ctx_buy))
                     except Exception as e:
-                        logger.warning(f"[Monitor] SELL rule error: {e} → treat as False")
-                        ok_sell = False
-                    if ok_sell:
-                        self._emit(
-                            "SELL",
-                            sym,
-                            ref_ts,
-                            last_close,
-                            reason or (
-                                "즉시신호(SELL-Pro)"
-                                + (f": +3% vs avg({avg_buy:.2f}) & prev-candle pattern" if avg_buy else "")
-                                + (f" [{condition_name}]" if condition_name else "")
-                            ),
-                        )
-                else:
-                    # Pro OFF → 즉시 발행
-                    self._emit("SELL", sym, ref_ts, last_close, reason or f"즉시신호(SELL) {condition_name}")
+                        logger.warning(f"[Monitor] BUY rule error: {e} → pass-through(True)")
+                        ok_buy = True
+                    
+                    if ok_buy:
+                        self._emit("BUY", sym, ref_ts, last_close, reason or f"즉시신호(BUY-Pro) {condition_name}")
 
-            # UI 로그 (선택)
+            # ----------------------------------------------------------------------
+            # === SELL 평가 블록 삭제됨 ===
+            # SELL 평가는 5분봉 마감 시점인 _check_symbol에서만 실행됩니다.
+            # ----------------------------------------------------------------------
+
+            # 3. UI 로그 (선택)
             try:
-                if self.bridge and hasattr(self.bridge, "log"):
-                    side_info = []
-                    if self.custom.auto_buy: side_info.append("BUY")
-                    if self.custom.auto_sell: side_info.append("SELL")
-                    self.bridge.log.emit(f"📊 즉시신호 [{'/'.join(side_info)}] {sym} @ {last_close} ({condition_name})")
+                if self.bridge and hasattr(self.bridge, "log") and self.custom.auto_buy:
+                    # last_close가 0이면 BUY 신호가 발행되지 않았을 가능성 높음
+                    display_price = last_close if last_close > 0 else 0
+                    self.bridge.log.emit(f"📊 즉시신호 [BUY] {sym} @ {display_price} ({condition_name})")
             except Exception:
                 pass
 

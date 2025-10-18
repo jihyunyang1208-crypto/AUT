@@ -1,4 +1,3 @@
-#trade_pro/auto_trader.py
 from __future__ import annotations
 
 import asyncio
@@ -25,9 +24,11 @@ try:
 except Exception:  # pragma: no cover
     PositionManager = None  # type: ignore
 
-
-from broker.base import Broker, OrderRequest, OrderResponse
-from broker.factory import create_broker
+# ✅ NEW: 외부 시뮬 엔진 사용
+try:
+    from simulator.sim_engine import SimEngine
+except Exception as _e:  # pragma: no cover
+    SimEngine = None  # type: ignore
 
 # =========================
 # Settings / Data Classes
@@ -231,7 +232,7 @@ class AutoTrader:
         self.ladder = ladder or LadderSettings()
         self._token_provider = token_provider or (lambda: os.getenv("ACCESS_TOKEN", ""))
         self._base_url_provider = base_url_provider or (lambda: os.getenv("HTTP_API_BASE", "https://api.kiwoom.com").rstrip("/"))
-        self._endpoint = endpoint  # (브로커로 이관됨, 더 이상 사용하지 않음)
+        self._endpoint = endpoint
 
         env_mode = (os.getenv("TRADE_MODE") or "").strip().lower()
         env_pm = _parse_bool(os.getenv("PAPER_MODE"), default=False)
@@ -258,14 +259,20 @@ class AutoTrader:
         self.bridge = bridge
         self.position_mgr = position_mgr
 
-        # ✨ 브로커 주입(환경설정/ENV 기반)
-        self.broker: Broker = create_broker(token_provider=self._token_provider)
-
+        # ✅ 외부 시뮬 엔진 초기화
+        self.sim_engine: Optional[SimEngine] = None
+        if self.simulation:
+            if SimEngine is None:
+                raise RuntimeError("SimEngine 모듈(simulator/sim_engine.py)을 찾을 수 없습니다.")
+            self.sim_engine = SimEngine()
 
         self._seen_exec_keys: set[tuple[str, Optional[str]]] = set()
         self._exec_lock = threading.Lock()
 
-        logger.info(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} use_mock={self._use_mock} broker={self.broker.name()}")
+        self._api_id_buy = "kt10000"
+        self._api_id_sell = "kt10001"
+
+        logger.info(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} use_mock={self._use_mock}")
         self._dbg("__init__",
                   simulation=self.simulation, use_mock=self._use_mock,
                   order_type=self.settings.order_type,
@@ -275,12 +282,14 @@ class AutoTrader:
 
     # ---------- 런타임 토글 ----------
     def set_simulation_mode(self, on: bool) -> None:
-        # AutoTrader 내부 시뮬 토글은 유지하되, 실제 체결은 브로커가 담당
         self.simulation = bool(on)
         self.paper_mode = self.simulation
-        logger.info(f"[AutoTrader] simulation_mode flag set to {self.simulation}")
-        self._dbg("set_simulation_mode", simulation=self.simulation)
-
+        if self.simulation and self.sim_engine is None:
+            if SimEngine is None:
+                raise RuntimeError("SimEngine 모듈(simulator/sim_engine.py)을 찾을 수 없습니다.")
+            self.sim_engine = SimEngine()
+        logger.info(f"[AutoTrader] simulation_mode set to {self.simulation}")
+        self._dbg("set_simulation_mode", simulation=self.simulation, has_sim_engine=bool(self.sim_engine))
 
     # ---------- Public utils ----------
     @staticmethod
@@ -526,6 +535,10 @@ class AutoTrader:
 
         return _handler
 
+    # ---------- Market feed (simulation) ----------
+    def feed_market_event(self, event: Dict[str, Any]):
+        if self.simulation and self.sim_engine:
+            self.sim_engine.on_market_update(event)
 
     # ---------- Tick utils ----------
     @staticmethod
@@ -656,7 +669,91 @@ class AutoTrader:
         )
         self._dbg("ladder_buy.prices", count=len(prices), first=prices[:3], last=prices[-3:])
 
+        # ===== Simulation =====
+        if self.simulation and self.sim_engine:
+            total = len(prices)
+            for i, limit_price in enumerate(prices, start=1):
+                qty = max(min_qty, math.floor(unit_amount / limit_price))
+                if remaining_cap is not None:
+                    if remaining_cap <= 0:
+                        logger.info("ℹ️ (ladder) target_total_qty 도달 → 남은 주문 스킵")
+                        self._dbg("ladder_buy.slice.skip", reason="remaining_cap<=0", i=i, total=total)
+                        break
+                    qty = min(qty, remaining_cap)
+                    remaining_cap -= qty
 
+                if qty <= 0:
+                    self._emit_order_event({
+                        "type": "ORDER_SKIP","action": "BUY","symbol": stk_cd,
+                        "price": limit_price,"qty": 0,"status": "SKIPPED",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "extra": {"reason": "qty==0", "slice": i, "total": total},
+                    })
+                    self._dbg("ladder_buy.slice.skip", reason="qty==0", i=i, total=total)
+                    continue
+
+                try:
+                    if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_buy"):
+                        sim_oid = self.sim_engine.submit_market_buy(
+                            stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="ladder"
+                        )
+                        shown_price = 0
+                    else:
+                        sim_oid = self.sim_engine.submit_limit_buy(
+                            stk_cd=stk_cd, limit_price=limit_price, qty=qty,
+                            parent_uid=uuid.uuid4().hex, strategy="ladder"
+                        )
+                        shown_price = limit_price
+
+                    logger.info(f"🧪 (sim) [{i}/{total}] BUY {stk_cd} {qty}주 @ {shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
+                    self._dbg("ladder_buy.slice", i=i, total=total, limit_price=limit_price, qty=qty, trde_tp=trde_tp)
+                    self._dbg("ladder_buy.slice.submit", status="SIM_SUBMIT", sim_oid=sim_oid)
+
+                    self._emit_order_event({
+                        "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
+                        "price": shown_price,"qty": qty,"status": "SIM_SUBMIT",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "extra": {"slice": i, "total": total, "sim_oid": sim_oid, "trde_tp": trde_tp},
+                    })
+
+                    order_type = "market" if trde_tp == "3" else "limit"
+                    self.trade_logger.write_order_record({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "strategy": "ladder",
+                        "action": "BUY",
+                        "stk_cd": stk_cd,
+                        "order_type": order_type,
+                        "limit_price": shown_price,
+                        "qty": qty,
+                        "status_label": "SIM_SUBMIT",
+                        "response": {"body": {"return_code": 0, "return_msg": "SIM"}},
+                    })
+
+                except Exception as e:
+                    logger.info(f"❌ (ladder) sim submit 실패 → {e}")
+                    self._dbg("ladder_buy.slice.error", i=i, err=str(e))
+                
+                if self.position_mgr:
+                    fill_price = shown_price or cur_price  # 시장가면 shown_price==0 → cur_price 사용
+                    try:
+                        self.position_mgr.apply_fill_buy(stk_cd, qty, fill_price)
+                    except Exception:
+                        pass
+
+                await asyncio.sleep(self.ladder.interval_sec)
+
+            self._dbg_ret("ladder_buy", ladder_count=len(prices))
+            return {"ladder_submitted": total}
+
+        # ===== Live =====
+        try:
+            token = self._token_provider()
+            if not token:
+                raise RuntimeError("액세스 토큰이 비어있습니다.")
+        except Exception as e:
+            logger.info(f"🚫 토큰 조회 실패: {e}")
+            self._dbg_ret("ladder_buy.block", reason="token_error", err=str(e))
+            return None
 
         results: List[Dict[str, Any]] = []
         total = len(prices)
@@ -679,23 +776,21 @@ class AutoTrader:
                 self._dbg("ladder_buy.slice.skip", reason="qty==0", i=i, total=total)
                 continue
 
-            req = OrderRequest(
-                dmst_stex_tp=dmst_stex_tp,
-                stk_cd=stk_cd,
-                ord_qty=int(qty),
-                ord_uv=None if trde_tp == "3" else int(limit_price),
-                trde_tp=trde_tp,
-                side="BUY",
-                cond_uv=""
-            )
+            data = {
+                "dmst_stex_tp": dmst_stex_tp,
+                "stk_cd": stk_cd,
+                "ord_qty": str(qty),
+                "ord_uv": str(limit_price),
+                "trde_tp": trde_tp,
+                "cond_uv": "",
+            }
 
             uid = uuid.uuid4().hex
             tick_used = tick
             try:
                 self._dbg("ladder_buy.http.submit", i=i, limit_price=limit_price, qty=qty)
                 start = time.perf_counter()
-                resp_obj: OrderResponse = await asyncio.to_thread(self.broker.place_order, req)
-                resp = {"status_code": resp_obj.status_code, "header": resp_obj.header, "body": resp_obj.body}
+                resp = await asyncio.to_thread(self._fn_kt10000, token=token, data=data, cont_yn="N", next_key="")
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 code = resp.get("status_code")
                 results.append(resp)
@@ -775,24 +870,86 @@ class AutoTrader:
             self._dbg_ret("simple_sell.block", reason="limit_without_price")
             return None
 
+        # ✅ Simulation
+        if self.simulation and self.sim_engine:
+            try:
+                if trde_tp == "3" and hasattr(self.sim_engine, "submit_market_sell"):
+                    sim_oid = self.sim_engine.submit_market_sell(
+                        stk_cd=stk_cd, qty=qty, parent_uid=uuid.uuid4().hex, strategy="simple-sell"
+                    )
+                    shown_price = 0
+                else:
+                    sim_oid = self.sim_engine.submit_limit_sell(
+                        stk_cd=stk_cd,
+                        limit_price=(0 if trde_tp == "3" else limit_price),
+                        qty=qty,
+                        parent_uid=uuid.uuid4().hex,
+                        strategy="simple-sell",
+                    )
+                    shown_price = (0 if trde_tp == "3" else (limit_price or 0))
 
-        # (시뮬 제거) 항상 브로커 호출
-        req = OrderRequest(
-            dmst_stex_tp=dmst_stex_tp,
-            stk_cd=stk_cd,
-            ord_qty=int(qty),
-            ord_uv=None if trde_tp == "3" else int(limit_price or 0),
-            trde_tp=trde_tp,
-            side="SELL",
-            cond_uv=""
-        )
+                logger.info(f"🧪 (sim sell) {stk_cd} {qty}주 @{shown_price if shown_price else 'MKT'} → sim_oid={sim_oid}")
+                self._dbg("simple_sell.sim.submit", trde_tp=trde_tp, shown_price=shown_price, qty=qty, sim_oid=sim_oid)
+
+                self._emit_order_event({
+                    "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
+                    "price": shown_price,"qty": qty,"status": "SIM_SUBMIT",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "extra": {"trde_tp": trde_tp, "sim_oid": sim_oid},
+                })
+
+                record = {
+                    "session_id": self.session_id,"uid": uuid.uuid4().hex,"strategy": "manual","action": "SELL",
+                    "stk_cd": stk_cd,"dmst_stex_tp": dmst_stex_tp,"cur_price": None,
+                    "limit_price": (None if trde_tp == "3" else limit_price),
+                    "qty": qty,"trde_tp": trde_tp,
+                    "tick_mode": "n/a","tick_used": "n/a","slice_idx": 1,"slice_total": 1,
+                    "unit_amount": None,"notional": None,"duration_ms": 0,
+                    "status_code": 299,"status_label": "SIM_SUBMIT","success": True,"order_id": sim_oid,
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                }
+                self.trade_logger.write_order_record(record)
+                self._dbg_ret("simple_sell.sim", ok=True, order_id=sim_oid)
+                return {"sell_result": {"simulated": True, "order_id": sim_oid}}
+            
+                # ✅ 가상 체결: 주문 제출 직후 포지션 즉시 반영
+                if self.position_mgr:
+                    # 시장가면 shown_price==0 → limit_price(있으면) 사용, 둘 다 0이면 0으로 기록
+                    price_for_fill = shown_price or (limit_price or 0)
+                    try:
+                        self.position_mgr.apply_fill_sell(stk_cd, qty, price_for_fill)
+                    except Exception:
+                        pass
+
+                self._dbg_ret("simple_sell.sim", ok=True, order_id=sim_oid)
+                return {"sell_result": {"simulated": True, "order_id": sim_oid}}
+
+            except Exception as e:
+                logger.info(f"❌ (sim sell) 실패 → {e}")
+                self._dbg("simple_sell.sim.error", err=str(e))
+                return None
+
+        # ===== LIVE =====
+        try:
+            token = self._token_provider()
+            if not token:
+                raise RuntimeError("액세스 토큰이 비어있습니다.")
+        except Exception as e:
+            logger.info(f"🚫 토큰 조회 실패: {e}")
+            self._dbg_ret("simple_sell.block", reason="token_error", err=str(e))
+            return None
+
+        data = {
+            "dmst_stex_tp": dmst_stex_tp,"stk_cd": stk_cd,
+            "ord_qty": str(qty),"ord_uv": str(limit_price or 0),
+            "trde_tp": trde_tp,"cond_uv": "",
+        }
 
         uid = uuid.uuid4().hex
         try:
             self._dbg("simple_sell.http.submit", trde_tp=trde_tp, qty=qty, limit_price=limit_price)
             start = time.perf_counter()
-            resp_obj: OrderResponse = await asyncio.to_thread(self.broker.place_order, req)
-            resp = {"status_code": resp_obj.status_code, "header": resp_obj.header, "body": resp_obj.body}
+            resp = await asyncio.to_thread(self._fn_kt10001, token=token, data=data, cont_yn="N", next_key="")
             duration_ms = int((time.perf_counter() - start) * 1000)
             code = resp.get("status_code")
 
@@ -905,6 +1062,71 @@ class AutoTrader:
         )
         self._dbg("ladder_sell.prices", count=len(prices), first=prices[:3], last=prices[-3:])
 
+        # ===== Simulation =====
+        if self.simulation and self.sim_engine:
+            total = min(len(prices), len(qty_plan))
+            for i in range(total):
+                limit_price = prices[i]; qty = int(qty_plan[i] or 0)
+                if qty <= 0:
+                    self._emit_order_event({
+                        "type": "ORDER_SKIP","action": "SELL","symbol": stk_cd,
+                        "price": limit_price,"qty": 0,"status": "SKIPPED",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "extra": {"reason": "qty==0", "slice": i+1, "total": total},
+                    })
+                    self._dbg("ladder_sell.slice.skip", reason="qty==0", i=i+1)
+                    continue
+                try:
+                    sim_oid = self.sim_engine.submit_limit_sell(
+                        stk_cd=stk_cd, limit_price=limit_price, qty=qty,
+                        parent_uid=uuid.uuid4().hex, strategy="ladder-sell",
+                    )
+                    logger.info(f"🧪 (sim) [SELL {i+1}/{total}] {stk_cd} {qty}주 @ {limit_price} → sim_oid={sim_oid}")
+                    self._dbg("ladder_sell.slice", i=i+1, total=total, limit_price=limit_price, qty=qty)
+                    self._dbg("ladder_sell.slice.submit", status="SIM_SUBMIT", sim_oid=sim_oid)
+
+                    self._emit_order_event({
+                        "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
+                        "price": limit_price,"qty": qty,"status": "SIM_SUBMIT",
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "extra": {"slice": i+1, "total": total, "sim_oid": sim_oid},
+                    })
+
+                    self.trade_logger.write_order_record({
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "strategy": "ladder-sell",
+                        "action": "SELL",
+                        "stk_cd": stk_cd,
+                        "order_type": "limit",
+                        "limit_price": limit_price,
+                        "qty": qty,
+                        "status_label": "SIM_SUBMIT",
+                        "response": {"body": {"return_code": 0, "return_msg": "SIM"}},
+                    })
+
+                except Exception as e:
+                    logger.info(f"❌ (ladder-sell) sim submit 실패 → {e}")
+                    self._dbg("ladder_sell.slice.error", i=i+1, err=str(e))
+                
+                # ✅ 가상 체결: 주문 제출 직후 포지션 즉시 반영
+                if self.position_mgr and qty > 0:
+                    try:
+                        self.position_mgr.apply_fill_sell(stk_cd, qty, limit_price)
+                    except Exception:
+                        pass
+
+                await asyncio.sleep(self.ladder.interval_sec)
+            self._dbg_ret("ladder_sell", slices=total)
+            return {"ladder_sell_submitted": total}
+
+        # ===== Live =====
+        try:
+            token = self._token_provider()
+            if not token: raise RuntimeError("액세스 토큰이 비어있습니다.")
+        except Exception as e:
+            logger.info(f"🚫 토큰 조회 실패: {e}")
+            self._dbg_ret("ladder_sell.block", reason="token_error", err=str(e))
+            return None
 
         results: List[Dict[str, Any]] = []
         total = min(len(prices), len(qty_plan))
@@ -921,23 +1143,18 @@ class AutoTrader:
                 self._dbg("ladder_sell.slice.skip", reason="qty==0", i=i+1)
                 continue
 
-            req = OrderRequest(
-                dmst_stex_tp=dmst_stex_tp,
-                stk_cd=stk_cd,
-                ord_qty=int(qty),
-                ord_uv=None if trde_tp == "3" else int(limit_price),
-                trde_tp=trde_tp,
-                side="SELL",
-                cond_uv=""
-            )
+            data = {
+                "dmst_stex_tp": dmst_stex_tp,"stk_cd": stk_cd,
+                "ord_qty": str(qty),"ord_uv": str(limit_price),
+                "trde_tp": trde_tp,"cond_uv": "",
+            }
 
             uid = uuid.uuid4().hex
             tick_used = tick
             try:
                 self._dbg("ladder_sell.http.submit", i=i+1, limit_price=limit_price, qty=qty)
                 start = time.perf_counter()
-                resp_obj: OrderResponse = await asyncio.to_thread(self.broker.place_order, req)
-                resp = {"status_code": resp_obj.status_code, "header": resp_obj.header, "body": resp_obj.body}
+                resp = await asyncio.to_thread(self._fn_kt10001, token=token, data=data, cont_yn="N", next_key="")
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 code = resp.get("status_code")
                 results.append(resp)
@@ -1034,19 +1251,20 @@ class AutoTrader:
             return ret
 
     def _submit_order(self, *, code: str, side: str, qty: int, price: float, trde_tp: Optional[str] = None):
-        """레거시 내부 경로도 브로커로 우회."""
-        trde_tp = trde_tp or self._resolve_trde_tp()
-        req = OrderRequest(
-            dmst_stex_tp="KRX",
-            stk_cd=str(code),
-            ord_qty=int(qty),
-            ord_uv=None if trde_tp == "3" else int(price),
-            trde_tp=trde_tp,
-            side=side.upper(),
-            cond_uv=""
-        )
-        r = self.broker.place_order(req)
-        return {"status_code": r.status_code, "header": r.header, "body": r.body}
+        trde_tp = trde_tp or self._resolve_trde_tp()  # '0' 지정가, '3' 시장가
+        token = self._token_provider()
+        if not token:
+            raise RuntimeError("액세스 토큰이 비어있습니다.")
+        data = {
+            "dmst_stex_tp": "KRX",
+            "stk_cd": code,
+            "ord_qty": str(int(qty)),
+            "ord_uv": str(0 if trde_tp == "3" else int(price)),
+            "trde_tp": trde_tp,
+            "cond_uv": "",
+        }
+        fn = self._fn_kt10000 if side.upper() == "BUY" else self._fn_kt10001
+        return fn(token=token, data=data, cont_yn="N", next_key="")
 
     # =========================
     # WebSocket events mapping
@@ -1161,6 +1379,66 @@ class AutoTrader:
         elif side == "SELL":
             try: self.position_mgr.apply_fill_sell(sym, qty, price)
             except Exception: pass
+
+    # =========================
+    # HTTP helpers
+    # =========================
+    def _base_url(self) -> str:
+        if self._use_mock:
+            return "https://mockapi.kiwoom.com"
+        return self._base_url_provider()
+
+    def _headers(self, access_token: str, cont_yn: str, next_key: str, api_id: str) -> Dict[str, str]:
+        h: Dict[str, str] = {
+            "Content-Type": "application/json;charset=UTF-8",
+            "authorization": f"Bearer {access_token}",
+            "api-id": api_id,
+        }
+        if cont_yn:
+            h["cont-yn"] = cont_yn
+        if next_key:
+            h["next-key"] = next_key
+        return h
+
+    def _payload_to_kt10000_data(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "dmst_stex_tp": str(payload.get("dmst_stex_tp") or "KRX").upper(),
+            "stk_cd": str(payload.get("stk_cd") or "").strip(),
+            "ord_qty": str(payload.get("ord_qty") or "0"),
+            "ord_uv": str(payload.get("ord_uv") or "0"),
+            "trde_tp": str(payload.get("trde_tp") or self._resolve_trde_tp()),
+            "cond_uv": str(payload.get("cond_uv") or ""),
+        }
+
+    def _fn_kt10000(self, token: str, data: Dict[str, Any], cont_yn: str = "N", next_key: str = "") -> Dict[str, Any]:
+        host = self._base_url()
+        url = host + self._endpoint
+        headers = self._headers(token, cont_yn, next_key, api_id=self._api_id_buy)
+        logger.debug(f"{DEBUG_TAG} http.req api_id={self._api_id_buy} url={url}")
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        header_subset = {k: response.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}
+        try:
+            body = response.json()
+        except Exception:
+            body = {"raw": response.text}
+        logger.debug(f"{DEBUG_TAG} http.resp api_id={self._api_id_buy} status={response.status_code} "
+                     f"headers={{'api-id': header_subset.get('api-id'),'cont-yn': header_subset.get('cont-yn'),'next-key': bool(header_subset.get('next-key'))}}")
+        return {"status_code": response.status_code, "header": header_subset, "body": body}
+
+    def _fn_kt10001(self, token: str, data: Dict[str, Any], cont_yn: str = "N", next_key: str = "") -> Dict[str, Any]:
+        host = self._base_url()
+        url = host + self._endpoint  # same endpoint, different api-id
+        headers = self._headers(token, cont_yn, next_key, api_id=self._api_id_sell)
+        logger.debug(f"{DEBUG_TAG} http.req api_id={self._api_id_sell} url={url}")
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        header_subset = {k: response.headers.get(k) for k in ["next-key", "cont-yn", "api-id"]}
+        try:
+            body = response.json()
+        except Exception:
+            body = {"raw": response.text}
+        logger.debug(f"{DEBUG_TAG} http.resp api_id={self._api_id_sell} status={response.status_code} "
+                     f"headers={{'api-id': header_subset.get('api-id'),'cont-yn': header_subset.get('cont-yn'),'next-key': bool(header_subset.get('next-key'))}}")
+        return {"status_code": response.status_code, "header": header_subset, "body": body}
 
     # ---------- UI event emit ----------
     def _emit_order_event(self, evt: Dict[str, Any]) -> None:

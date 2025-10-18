@@ -500,6 +500,7 @@ class WebSocketClient:
                             code = _normalize_code(info_map.get("9001", ""))
                             inout = info_map.get("843")
                             name = self.stock_code_to_name.get(code, "알 수 없음")
+                            price_str = info_map.get("10", "0")
 
                             logger.debug(f"- 종목명: {name},\n- 종목코드: {code},\n- 편입편출: {inout}")
 
@@ -509,6 +510,7 @@ class WebSocketClient:
                                     "condition_index": cond_idx,
                                     "condition_name": cond_name,
                                     "stock_name": name,
+                                    "price": price_str,
                                 }
                                 asyncio.create_task(self._emit_code_and_detail(base_payload))
 
@@ -596,6 +598,31 @@ class WebSocketClient:
         if exp and now < exp:
             return
         self._recent_codes_ttl[code] = now + self._dedup_ttl_sec
+
+        try:
+            
+            # main.py에서 monitor 객체를 bridge에 연결해두었으므로, bridge를 통해 접근
+            if self.bridge and hasattr(self.bridge, "monitor") and self.bridge.monitor:
+                
+                cond_name = base_payload.get("condition_name", "N/A")
+                logger.info("Monitor.on_condition_detected 호출 준비: %s (즉시 매수 평가 시작, 조건식: %s)", code, cond_name)
+                async def run_detection():
+                    await self.bridge.monitor.on_condition_detected(
+                        symbol=code,
+                        # ✅ price=price_val 인수를 제거합니다.
+                        condition_name=base_payload.get("condition_name", "")
+                    )
+                
+                if self._loop and self._loop.is_running():
+                    asyncio.run_coroutine_threadsafe(run_detection(), self._loop)
+                else:
+                    logger.warning("WebSocketClient loop not available, creating new task for monitor.")
+                    asyncio.create_task(run_detection())
+            else:
+                logger.warning("Bridge 또는 Monitor가 연결되지 않아 즉시 매수 신호를 보낼 수 없습니다.")
+
+        except Exception as e:
+            logger.error(f"monitor.on_condition_detected 호출 실패: {e}")
 
         # 1) 선공지: 코드만 즉시 전달 (bridge 시그널 사용)
         try:
