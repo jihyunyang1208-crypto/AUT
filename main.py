@@ -612,7 +612,6 @@ def main():
     # 모니터: AppSettings의 모든 관련 옵션을 주입
     monitor = ExitEntryMonitor(
         detail_getter=getter,
-        use_macd30_filter=bool(app_cfg.use_macd30_filter),
         macd30_timeframe=str(app_cfg.macd30_timeframe or "30m"),
         macd30_max_age_sec=int(app_cfg.macd30_max_age_sec),
         tz=str(app_cfg.timezone or "Asia/Seoul"),

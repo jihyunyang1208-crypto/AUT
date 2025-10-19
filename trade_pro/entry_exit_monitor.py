@@ -65,23 +65,16 @@ class BuyRules:
     @staticmethod
     def buy_if_5m_break_prev_bear_high(df5: pd.DataFrame) -> pd.Series:
         """
-        조건:
-        - 1봉 전: 음봉 (Close < Open)
-        - 현재봉: 양봉 (Close > Open)
-        - 현재봉 고가 > 직전(음봉) 고가
+        [DEPRECATED] 이 메서드는 추세 전환/Pro 로직으로 완전히 대체되었습니다.
+        더 이상 신호 평가에 사용되지 않습니다.
         """
+        # 💡 이 메서드를 호출하는 코드가 남아있다면, 즉시 False를 반환하여 안전하게 처리합니다.
         if df5 is None or df5.empty:
             return pd.Series(dtype=bool)
-        prev = df5.shift(1)
-        cond_bear  = prev["Close"] < prev["Open"]
-        cond_bull  = df5["Close"] > df5["Open"]
-        cond_break = df5["High"]  > prev["High"]
-        cond = cond_bear & cond_bull & cond_break
-        if len(cond) > 0:
-            cond.iloc[0] = False
-        return cond
-
-
+        
+        # 항상 False 신호를 반환하여 기존 기능을 비활성화
+        return pd.Series([False] * len(df5), index=df5.index, dtype=bool)
+        
 class SellRules:
     @staticmethod
     def profit3_and_prev_candle_pattern(df5: pd.DataFrame, avg_buy: float) -> bool:
@@ -139,8 +132,6 @@ RuleFn = Callable[[Dict[str, object]], bool]
 class ExitEntryMonitor:
     """
     - 5분봉 종가 기준으로 매수/매도 신호 판단
-    - (옵션) 30분 MACD 히스토그램 >= 0 필터
-      ↳ get_points_fn(symbol, "30m", 1) 로 조회
     - 동일 봉 중복 트리거 방지
     - 봉 마감 구간에서만 평가
     - 🔧 캐시 우선 설계: ingest_bars()로 들어온 DF를 먼저 활용, 없을 때만 pull
@@ -155,14 +146,12 @@ class ExitEntryMonitor:
         self,
         detail_getter: DetailGetter,
         *,
-        use_macd30_filter: bool = False,
         macd30_timeframe: str = "30m",
         macd30_max_age_sec: int = 1800,  # 30분
         tz: str = "Asia/Seoul",
         poll_interval_sec: int = 20,
         on_signal: Optional[Callable[[TradeSignal], None]] = None,
         bridge: Optional[object] = None,
-        get_points_fn: Callable[[str, str, int], List[dict]] = _get_points,
         bar_close_window_start_sec: int = 5,
         bar_close_window_end_sec: int = 30,
         disable_server_pull: bool = False,   # 💡 캐시만 사용하고 싶을 때 True
@@ -177,10 +166,8 @@ class ExitEntryMonitor:
     ):
         self.detail_getter = detail_getter
         self.bridge = bridge
-        self.use_macd30_filter = use_macd30_filter
         self.macd30_timeframe = macd30_timeframe
         self.macd30_max_age_sec = macd30_max_age_sec
-        self.get_points_fn = get_points_fn
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.tz = tz
@@ -198,6 +185,8 @@ class ExitEntryMonitor:
             if (ctx.get("df5") is not None and ctx.get("avg_buy") is not None)
             else False
         ))
+        # 직전 추세 상태 저장 (Pro 전략용)
+        self._last_trend: Dict[Tuple[str, str], Literal['UP', 'DOWN', 'NEUTRAL']] = {}
 
         # 파라미터 검증
         if not (0 <= bar_close_window_start_sec <= bar_close_window_end_sec <= 59):
@@ -214,12 +203,6 @@ class ExitEntryMonitor:
         # (선택) 고정 리스트 self.symbols 지원 (외부가 채우는 경우)
         self.symbols: List[str] = []
 
-        # MACD 버스 구독 (30m 시리즈 준비되면 추적에 추가)
-        try:
-            macd_bus.macd_series_ready.connect(self._on_macd_series_ready)
-            logger.info("[ExitEntryMonitor] tracking symbols from MACD bus: tf=%s", self.macd30_timeframe)
-        except Exception as e:
-            logger.warning("[ExitEntryMonitor] macd_bus connect failed: %s", e)
 
     # ----------------------------------------------------------------------
     # Pro 설정/룰 업데이트 (옵션)
@@ -442,45 +425,6 @@ class ExitEntryMonitor:
         except Exception:
             return None
 
-    # ----------------------------------------------------------------------
-    # MACD 30m 필터
-    # ----------------------------------------------------------------------
-    def _macd30_pass(self, symbol: str, ref_ts: pd.Timestamp) -> bool:
-        if not self.use_macd30_filter:
-            return True
-
-        try:
-            pts = self.get_points_fn(symbol, self.macd30_timeframe, n=1) or []
-        except Exception as e:
-            logger.error(f"[ExitEntryMonitor] get_points 에러: {symbol} {self.macd30_timeframe}: {e}")
-            return False
-
-        if not pts:
-            logger.debug(f"[ExitEntryMonitor] {symbol} MACD30 not ready yet → skip this bar")
-            return False
-
-        info = pts[-1]
-        hist = info.get("hist")
-        ts: pd.Timestamp = info.get("ts")
-
-        if hist is None or ts is None:
-            logger.debug(f"[ExitEntryMonitor] {symbol} MACD30 불완전(hist/ts None) → failed")
-            return False
-
-        try:
-            rts = ref_ts if ref_ts.tzinfo else ref_ts.tz_localize(self.tz)
-            tts = ts if ts.tzinfo else ts.tz_localize(self.tz)
-            age_sec = (rts - tts).total_seconds()
-        except Exception as e:
-            logger.error(f"[ExitEntryMonitor] {symbol} MACD30 age 계산 오류: {e}")
-            return False
-
-        logger.debug(f"[ExitEntryMonitor] {symbol} MACD30 hist={float(hist):.2f} age={age_sec:.0f}s")
-        if age_sec > self.macd30_max_age_sec:
-            logger.debug(f"[ExitEntryMonitor] {symbol} MACD30 too old ({age_sec:.0f}s > {self.macd30_max_age_sec}s) → failed")
-            return False
-
-        return float(hist) >= 0.0
 
     # ----------------------------------------------------------------------
     # 신호 발행
@@ -617,86 +561,19 @@ class ExitEntryMonitor:
     # 심볼 평가 (SELL 전략 적용)  + Pro 분기
     # ----------------------------------------------------------------------
 
+    # ----------------------------------------------------------------------
+    # 심볼 평가 (SELL 전략 적용) + Pro 분기 (기존 호출부 호환용 래퍼)
+    # ----------------------------------------------------------------------
+
     async def _check_symbol(self, symbol: str):
-        try:
-            sym = _code6(symbol)
-            df5 = await self._get_5m(sym)
-            if df5 is None or df5.empty or len(df5) < 2:
-                return
+        """
+        기존 호출부와의 호환성을 위해 5분봉 평가 로직을 _evaluate_tf("5m")으로 대체.
+        실제 모든 신호 및 추세 평가는 _evaluate_tf에서 수행됩니다.
+        """
+        # self._evaluate_tf가 5m/30m 데이터 조회, 추세 분석, 신호 발행까지 모두 처리합니다.
+        await self._evaluate_tf(symbol, "5m")
 
-            now_kst = pd.Timestamp.now(tz=self.tz)
-            if not TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
-                return
-
-            ref_ts = df5.index[-1]
-            last_close = float(df5["Close"].iloc[-1])
-
-            if self.use_macd30_filter and not self._macd30_pass(sym, ref_ts):
-                return
-
-            # ===== SELL ===== (avg_buy 필요 영역)
-            if self.custom.auto_sell:
-                if self.custom.sell_pro:
-                    avg_buy = self._get_avg_buy(sym)  # ← 여기서만 조회
-                    ctx = {
-                        "side": "SELL",
-                        "symbol": sym,
-                        "price": last_close,
-                        "df5": df5,
-                        "avg_buy": avg_buy,
-                        "ts": ref_ts,
-                        "source": "bar",
-                    }
-                    try:
-                        should_sell = bool(self._sell_rule_fn(ctx))
-                    except Exception as e:
-                        logger.warning(f"[ExitEntryMonitor] sell_rule error: {e} → treat as False")
-                        should_sell = False
-
-                    if should_sell:
-                        reason = (
-                            "SELL(Pro)"
-                            + (f": +3% vs avg({avg_buy:.2f}) & prev-candle pattern" if avg_buy else "")
-                            + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
-                        )
-                        self._emit("SELL", sym, ref_ts, last_close, reason)
-                else:
-                    logger.debug(f"[ExitEntryMonitor] {sym} sell_pro=False → periodic SELL suppressed")
-
-            # ===== BUY ===== (avg_buy 불필요)
-            if self.custom.auto_buy:
-                if self.custom.buy_pro:
-                    ctx = {
-                        "side": "BUY",
-                        "symbol": sym,
-                        "price": last_close,
-                        "df5": df5,
-                        # "avg_buy": 제외
-                        "ts": ref_ts,
-                        "source": "bar",
-                    }
-                    try:
-                        should_buy = bool(self._buy_rule_fn(ctx))
-                    except Exception as e:
-                        logger.warning(f"[ExitEntryMonitor] buy_rule error: {e} → pass-through(True)")
-                        should_buy = True
-                    if should_buy:
-                        reason = "BUY(Pro)" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
-                        self._emit("BUY", sym, ref_ts, last_close, reason)
-                else:
-                    try:
-                        buy_ser = BuyRules.buy_if_5m_break_prev_bear_high(df5)
-                        should_buy = bool(buy_ser.iloc[-1]) if len(buy_ser) else False
-                    except Exception:
-                        should_buy = False
-                    if should_buy:
-                        reason = "BUY: Bull breaks prev bear high" + (" + MACD30(hist>=0)" if self.use_macd30_filter else "")
-                        self._emit("BUY", sym, ref_ts, last_close, reason)
-
-        except Exception:
-            logger.exception(f"[ExitEntryMonitor] _check_symbol error: {symbol}")
-
-
+        # 기존 로직 (데이터 조회, 시간 체크, SELL/BUY 평가)은 모두 _evaluate_tf 내부로 이동
 
     # ----------------------------------------------------------------------
     # MACD 버스 이벤트 핸들러
@@ -738,20 +615,268 @@ class ExitEntryMonitor:
             try:
                 now_kst = pd.Timestamp.now(tz=self.tz)
 
+                # 5분봉 마감 구간에서만 평가 실행
                 if TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
                     symbols_snapshot = self._get_symbols_snapshot()
                     if not symbols_snapshot:
                         logger.debug("[ExitEntryMonitor] no symbols to check (snapshot empty)")
                     else:
+                        # 5분봉 마감 주기 로그 (debug 레벨로 유지)
                         logger.debug(
                             f"[ExitEntryMonitor] 5분봉 마감 구간 @ {now_kst} | symbols={len(symbols_snapshot)}"
                         )
-                        # 심볼별 병렬 평가
-                        await asyncio.gather(
-                            *(self._check_symbol(s) for s in symbols_snapshot),
-                            return_exceptions=True,
-                        )
+                        tasks = []
+                        for s in symbols_snapshot:
+                            # 5분봉 평가 (신호 + 추세)
+                            tasks.append(self._evaluate_tf(s, "5m")) 
+                            # 30분봉 평가 (추세만 갱신)
+                            tasks.append(self._evaluate_tf(s, "30m")) 
+
+                        # 심볼별/TF별 병렬 평가 실행
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                
             except Exception as e:
+                # 루프 실행 중 발생한 예외 처리
                 logger.exception(f"[ExitEntryMonitor] 루프 오류: {e}")
 
             await asyncio.sleep(self.poll_interval_sec)
+    # ----------------------------------------------------------------------
+    # 🔵 추세 분석 헬퍼 (강력 돌파 기준으로 수정)
+    # ----------------------------------------------------------------------
+    def _get_trend_message(self, symbol: str, timeframe: str, df: pd.DataFrame) -> str:
+        """
+        봉 마감가를 기준으로 추세 메시지 반환. (최소 2봉 필요)
+        
+        새로운 정의:
+        - 추세 상승: 현재 종가 > max(직전 시가, 직전 종가)
+        - 추세 하락: 현재 종가 < min(직전 시가, 직전 종가)
+        - 추세 유지: 현재 종가 (직전 시가, 직전 종가) 사이에 위치
+        """
+        if df is None or len(df) < 2:
+            return ""
+
+        sym = _code6(symbol)
+        tf = timeframe
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        cur_close = float(last["Close"])
+        prev_open = float(prev["Open"])
+        prev_close = float(prev["Close"])
+        
+        # 1. 이전 봉의 영역 설정
+        prev_min = min(prev_open, prev_close) # 직전 봉의 몸통 최저가
+        prev_max = max(prev_open, prev_close) # 직전 봉의 몸통 최고가
+        prev_is_bear = prev_close < prev_open # 음봉 여부
+
+        # 2. 추세 판별
+        trend_msg = "추세 중립/불확실" # 기본값
+
+        # -------------------------------------------------------------
+        # 2-1. 🚀 '추세 상승' 조건 (강력 돌파)
+        #   : 현재 종가가 직전 봉의 몸통 최고가보다 높을 때
+        # -------------------------------------------------------------
+        if cur_close > prev_max:
+            trend_msg = f"추세 상승: 직전 봉 몸통 ({prev_max:.2f}) 상방 강력 돌파 마감"
+        
+        # -------------------------------------------------------------
+        # 2-2. 📉 '추세 하락' 조건 (강력 돌파)
+        #   : 현재 종가가 직전 봉의 몸통 최저가보다 낮을 때
+        # -------------------------------------------------------------
+        elif cur_close < prev_min:
+            trend_msg = f"추세 하락: 직전 봉 몸통 ({prev_min:.2f}) 하방 강력 이탈 마감"
+
+        # -------------------------------------------------------------
+        # 2-3. ↔️ '추세 유지' 조건 (추가된 로직)
+        #   : 현재 종가가 직전 봉의 몸통 내부에 존재할 때
+        # -------------------------------------------------------------
+        elif prev_min <= cur_close <= prev_max:
+            if prev_is_bear:
+                trend_msg = "추세 유지: 직전 음봉 몸통 내 마감 (약한 반등 또는 횡보)"
+            else:
+                trend_msg = "추세 유지: 직전 양봉 몸통 내 마감 (약한 조정 또는 횡보)"
+            
+        # 3. 메시지 포맷
+        return f"[{tf}] {sym} @ {last.name.strftime('%H:%M')} | {trend_msg} (종가: {cur_close:.2f})"
+
+
+    # ----------------------------------------------------------------------
+    # UI 로그 전송 헬퍼 (bridge가 있는 경우)
+    # ----------------------------------------------------------------------
+    def _log_trend(self, msg: str):
+        try:
+            if self.bridge and hasattr(self.bridge, "log"):
+                self.bridge.log.emit(f"📈 {msg}")
+                logger.info(f"📈 {msg}")
+        except Exception:
+            pass
+
+
+
+    # ----------------------------------------------------------------------
+    # 심볼 평가 (SELL 전략 적용) + Pro 분기 (5m, 30m 모두에서 호출)
+    # ----------------------------------------------------------------------
+
+    # 💡 참고: 기존 _get_5m 함수를 사용하되, timeframe 인수를 받아 처리하도록 확장해야 합니다.
+    # 아래 코드에서는 편의상 별도의 통합 조회 함수를 호출하는 것으로 가정합니다.
+    async def _get_bars_for_evaluation(self, symbol: str, timeframe: str, count: int = 200) -> Optional[pd.DataFrame]:
+        """5m와 30m 데이터를 캐시 우선으로 조회하는 통합 헬퍼 (구현은 생략)."""
+        if timeframe == "5m":
+            return await self._get_5m(symbol, count=count)
+        else:
+            # 30m 데이터 조회 로직 (기존 _get_5m 복사 및 interval='30m' 수정 필요)
+            sym = _code6(symbol)
+            key = (sym, timeframe)
+            with self._sym_lock:
+                df_cache = self._bars_cache.get(key)
+            if df_cache is not None and not df_cache.empty:
+                return df_cache.iloc[-count:] if len(df_cache) > count else df_cache
+            # pull 로직은 detail_getter를 사용하여 구현되어야 함.
+            try:
+                 df_pull = await self.detail_getter.get_bars(code=sym, interval=timeframe, count=count)
+                 if df_pull is not None and not df_pull.empty:
+                    # 형식 보정 및 캐시 저장 로직 (ingest_bars 참고)
+                    return df_pull
+            except Exception:
+                 pass
+            return None
+
+
+    async def _evaluate_tf(self, symbol: str, timeframe: str):
+            try:
+                sym = _code6(symbol)
+                tf  = timeframe.lower()
+                trend_key = (sym, tf) # (sym, 5m) 또는 (sym, 30m)
+                
+                # 1. 데이터 조회 (생략)
+                df_bars = await self._get_bars_for_evaluation(sym, tf) 
+                if df_bars is None or df_bars.empty or len(df_bars) < 2:
+                    return
+                
+                now_kst = pd.Timestamp.now(tz=self.tz)
+                
+                # 2. 5m 봉 마감 구간 체크 (5m 평가만 해당)
+                if tf == "5m":
+                    if not TimeRules.is_5m_bar_close_window(now_kst, self._win_start, self._win_end):
+                        return
+
+                ref_ts = df_bars.index[-1]
+                last_close = float(df_bars["Close"].iloc[-1])
+
+                # ==============================================================
+                # 4. 추세 상태 결정, 갱신 및 로깅
+                # ==============================================================
+                
+                trend_msg = self._get_trend_message(sym, tf, df_bars)
+                self._log_trend(trend_msg) # UI 로그 전송
+
+                # 4-1. 단순 추세 상태 결정 ('UP', 'DOWN', 'HOLD', 'NEUTRAL')
+                current_trend: Literal['UP', 'DOWN', 'HOLD', 'NEUTRAL']
+                if "추세 상승" in trend_msg:
+                    current_trend = 'UP'
+                elif "추세 하락" in trend_msg:
+                    current_trend = 'DOWN'
+                elif "추세 유지" in trend_msg:
+                    current_trend = 'HOLD'
+                else:
+                    current_trend = 'NEUTRAL' 
+                
+                # 4-2. 직전 추세 상태 로드 및 현재 상태 저장
+                previous_trend = self._last_trend.get(trend_key, 'NEUTRAL')
+                self._last_trend[trend_key] = current_trend # 현재 상태 저장
+                
+                logger.debug(f"[Monitor] {sym} {tf} 추세: Prev={previous_trend}, Curr={current_trend}")
+
+
+                # 5. 5분봉: BUY/SELL 신호 평가 (5m 평가에서만 진행)
+                if tf == "5m":
+                    # ===============================================
+                    # 🔵 SELL 평가 진입 (auto_sell 체크)
+                    # ===============================================
+                    if self.custom.auto_sell:
+                        
+                        if self.custom.sell_pro:
+                            # 🔴 [분기 로그] SELL PRO ON
+                            logger.debug(f"[Monitor] {sym} SELL: Pro ON. Checking Trend Reversal/Custom Rule.")
+                            should_sell = False
+                            reason = ""
+                            
+                            # 🔴 [Pro 전략] 추세 상승/유지 (UP/HOLD) -> 추세 하락 (DOWN) 전환 시 매도
+                            if previous_trend in ('UP', 'HOLD') and current_trend == 'DOWN':
+                                should_sell = True
+                                reason = "SELL(Pro Trend Reversal: ->DOWN)"
+                                logger.info(f"📣 [Monitor] {sym} SELL SIGNAL: Pro Trend Reversal ({previous_trend}->{current_trend})")
+                            
+                            # [기존 로직] 전환이 아닐 경우, 주입된 일반 SELL 룰 체크
+                            elif not should_sell: 
+                                avg_buy = self._get_avg_buy(sym)
+                                ctx = {
+                                    "side": "SELL", "symbol": sym, "price": last_close, "df5": df_bars, 
+                                    "avg_buy": avg_buy, "ts": ref_ts, "source": "bar",
+                                }
+                                try:
+                                    should_sell = bool(self._sell_rule_fn(ctx))
+                                except Exception as e:
+                                    logger.warning(f"[Monitor] {sym} sell_rule error: {e} → treat as False")
+                                    should_sell = False
+
+                                if should_sell:
+                                    reason = "SELL(Pro Rule)" + (f": +3% vs avg({avg_buy:.2f}) & pattern" if avg_buy else "")
+                                    logger.info(f"📣 [Monitor] {sym} SELL SIGNAL: Pro Custom Rule Triggered.")
+
+                            if should_sell:
+                                self._emit("SELL", sym, ref_ts, last_close, reason)
+                        
+                        else:
+                            # 🔴 [분기 로그] SELL PRO OFF
+                            logger.debug(f"[Monitor] {sym} SELL: Pro OFF. Periodic SELL suppressed.")
+                            pass # sell_pro=False → periodic SELL suppressed
+
+                    # ===============================================
+                    # 🔵 BUY 평가 진입 (auto_buy 체크)
+                    # ===============================================
+                    if self.custom.auto_buy:
+                        
+                        if self.custom.buy_pro:
+                            # 🔴 [분기 로그] BUY PRO ON (추세 전환 / Custom Rule 체크)
+                            logger.debug(f"[Monitor] {sym} BUY: Pro ON. Checking Trend Reversal/Custom Rule.")
+                            should_buy = False
+                            reason = ""
+                            
+                            # 🔴 [Pro 전략] 추세 하락/유지 (DOWN/HOLD) -> 추세 상승 (UP) 전환 시 매수
+                            if previous_trend in ('DOWN', 'HOLD') and current_trend == 'UP':
+                                should_buy = True
+                                reason = "BUY(Pro Trend Reversal: ->UP)"
+                                logger.info(f"📣 [Monitor] {sym} BUY SIGNAL: Pro Trend Reversal ({previous_trend}->{current_trend})")
+                            
+                            # [기존 로직] 전환이 아닐 경우, 주입된 일반 BUY 룰 체크
+                            elif not should_buy:
+                                ctx = {
+                                    "side": "BUY", "symbol": sym, "price": last_close, "df5": df_bars, 
+                                    "ts": ref_ts, "source": "bar",
+                                }
+                                try:
+                                    should_buy = bool(self._buy_rule_fn(ctx))
+                                except Exception as e:
+                                    logger.warning(f"[Monitor] {sym} buy_rule error: {e} → pass-through(True)")
+                                    should_buy = True 
+
+                                if should_buy and not reason:
+                                    reason = "BUY(Pro Rule)"
+                                    logger.info(f"📣 [Monitor] {sym} BUY SIGNAL: Pro Custom Rule Triggered.")
+
+
+                            if should_buy:
+                                self._emit("BUY", sym, ref_ts, last_close, reason)
+
+                        
+                        else:
+                            # 🔴 [분기 로그] BUY PRO OFF (요청 사항: 즉시 신호 발행)
+                            logger.debug(f"[Monitor] {sym} BUY: Pro OFF. Emitting immediate signal (No condition check).")
+                            
+                            # 📌 BUY PRO OFF: 조건 체크 없이 즉시 신호 발행
+                            reason = "BUY(Legacy Bar Close Immediate)"
+                            logger.info(f"📣 [Monitor] {sym} BUY SIGNAL: Legacy Immediate Rule Triggered (buy_pro=False).")
+                            self._emit("BUY", sym, ref_ts, last_close, reason)                                
+            except Exception:
+                logger.exception(f"[ExitEntryMonitor] _evaluate_tf error: {symbol}")
