@@ -1,0 +1,155 @@
+{
+  "symbols": {
+    "333430": {
+      "qty": 618,
+      "avg_price": 8443.252427184467,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 8490.0,
+      "last_sell_price": 0.0,
+      "trades": 55,
+      "wins": 0
+    },
+    "054540": {
+      "qty": 225,
+      "avg_price": 18111.111111111117,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 18450.0,
+      "last_sell_price": 0.0,
+      "trades": 45,
+      "wins": 0
+    },
+    "042700": {
+      "qty": 30,
+      "avg_price": 155166.66666666666,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 152000.0,
+      "last_sell_price": 0.0,
+      "trades": 30,
+      "wins": 0
+    },
+    "005690": {
+      "qty": 210,
+      "avg_price": 13641.666666666666,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 13300.0,
+      "last_sell_price": 0.0,
+      "trades": 30,
+      "wins": 0
+    },
+    "006910": {
+      "qty": 1091,
+      "avg_price": 5305.316223648029,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 5260.0,
+      "last_sell_price": 0.0,
+      "trades": 60,
+      "wins": 0
+    },
+    "100090": {
+      "qty": 200,
+      "avg_price": 21584.999999999996,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 21650.0,
+      "last_sell_price": 0.0,
+      "trades": 50,
+      "wins": 0
+    },
+    "452280": {
+      "qty": 86,
+      "avg_price": 11094.186046511628,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 10900.0,
+      "last_sell_price": 0.0,
+      "trades": 10,
+      "wins": 0
+    },
+    "413630": {
+      "qty": 298,
+      "avg_price": 3304.781879194631,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 3270.0,
+      "last_sell_price": 0.0,
+      "trades": 10,
+      "wins": 0
+    },
+    "138610": {
+      "qty": 70,
+      "avg_price": 40278.57142857143,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 41300.0,
+      "last_sell_price": 0.0,
+      "trades": 35,
+      "wins": 0
+    },
+    "084110": {
+      "qty": 45,
+      "avg_price": 57966.666666666664,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 58300.0,
+      "last_sell_price": 0.0,
+      "trades": 45,
+      "wins": 0
+    },
+    "437730": {
+      "qty": 15,
+      "avg_price": 30350.0,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 30250.0,
+      "last_sell_price": 0.0,
+      "trades": 5,
+      "wins": 0
+    },
+    "251370": {
+      "qty": 70,
+      "avg_price": 12850.0,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "last_buy_price": 12800.0,
+      "last_sell_price": 0.0,
+      "trades": 10,
+      "wins": 0
+    }
+  },
+  "summary": {
+    "realized_pnl_gross": 0.0,
+    "fees": 0.0,
+    "realized_pnl_net": 0.0,
+    "trades": 385.0,
+    "win_rate": 0.0
+  },
+  "strategies": {
+    "ladder": {
+      "buy_notional": 35639455.0,
+      "fees": 0.0,
+      "realized_pnl_gross": 0.0,
+      "realized_pnl_net": 0.0,
+      "wins": 0,
+      "sells": 0,
+      "win_rate": 0.0,
+      "roi_pct": 0.0
+    }
+  }
+}

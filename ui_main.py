@@ -1,20 +1,3 @@
-"""
-메인 UI(window) 클래스 모듈.
-
-이 파일은 기존 ui_main.py의 구조를 기반으로 하며, 포지션 매니저의 신호를 통해 보유 수량/평단 업데이트를 받고
-리스크 스냅샷은 기존 리스크 관리 모듈을 통해 전달받는 구조를 유지합니다.
-
-수정 사항:
-1. MainWindow 생성자에서 `position_mgr` 매개변수를 받아 보유 수량/평단 관리를 담당하는 PositionManager
-   인스턴스를 주입하도록 수정했습니다. 주입된 매니저가 없으면 새로 생성합니다.
-2. `PositionManager.position_changed` 신호를 UI 슬롯(on_position_changed)과 연결하여 포지션 변화가
-   발생할 때 테이블을 갱신합니다.
-3. SharedWalletPnL/PositionWiring 인스턴스 생성 및 `bridge.pnl_snapshot_ready` → on_pnl_snapshot_ready
-   연결 코드를 제거하여 기존 리스크 모듈(on_pnl_snapshot)만 사용하도록 했습니다.
-4. 주석은 한글로 추가되어 코드의 역할을 설명합니다.
-
-이외의 UI 구성, 시그널 연결, 결과 테이블 렌더링 등 기존 기능은 그대로 유지합니다.
-"""
 
 import os
 import sys
@@ -62,23 +45,29 @@ from PySide6.QtWidgets import QFileDialog
 
 from trading_report.report_dialog import ReportDialog
 
-# 설정 / 와이어링 
+# 설정 / 와이어링  (분리해서 임포트하고 에러 로그 남김)
 try:
-    from setting.settings_manager import SettingsStore, SettingsDialog
-    from setting.wiring import AppWiring
-except Exception:
+    from setting.settings_manager import (
+        SettingsStore, SettingsDialog, apply_to_autotrader, AppSettings, apply_all_settings
+    )
+except Exception as e:
+    logger.exception("Failed to import setting.settings_manager: %s", e)
     class _DummyStore:
         def load(self): return type("Cfg", (), {})()
         def save(self, _): pass
     SettingsStore = _DummyStore
     SettingsDialog = None
+    apply_to_autotrader = lambda *a, **k: None
+    AppSettings = type("Cfg", (), {})  # 최소 호환용
+
+try:
+    from setting.wiring import AppWiring
+except Exception as e:
+    logger.exception("Failed to import setting.wiring: %s", e)
     AppWiring = None
 
 # 포지션 관리 및 리스크 집계 모듈
-from trade_pro.position_manager import PositionManager
 from trade_pro.auto_trader import AutoTrader
-from risk_management.shared_wallet_pnl import SharedWalletPnL  # 사용하지 않지만 호환성 위해 남겨둠
-from risk_management.position_wiring import PositionWiring  # 사용하지 않지만 호환성 위해 남겨둠
 # RiskDashboard 모듈 가져오기: 리스크 대시보드를 별도 모듈에서 관리
 from risk_dashboard import RiskDashboard
 from utils.stock_info_manager import StockInfoManager 
@@ -86,6 +75,19 @@ from utils.stock_info_manager import StockInfoManager
 logger = logging.getLogger("ui_main")
 logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
 
+# -------------------------------
+# 📊 테이블 컬럼 인덱스 상수 정의
+# -------------------------------
+COL_RT          = 0  # 등락률(%)
+COL_PRICE       = 1  # 현재가
+COL_VOL         = 2  # 거래량
+COL_BUY_PRICE   = 3  # 매수가
+COL_SELL_PRICE  = 4  # 매도가
+COL_CODE        = 5  # 코드
+COL_NAME        = 6  # 이름
+COL_UPDATED_AT  = 7  # 최근 갱신시간
+COL_CONDS       = 8  # 조건식
+# -------------------------------
 
 # ----------------------------
 # DataFrame → Qt 모델
@@ -128,16 +130,6 @@ class DataFrameModel(QAbstractTableModel):
 # 메인 윈도우
 # ----------------------------
 class MainWindow(QMainWindow):
-    """
-    메인 윈도우 클래스.
-
-    포지션 변화는 PositionManager의 신호를 통해 직접 받고,
-    손익 스냅샷은 브리지(QtBridge)에서 제공하는 기존 risk_management 구조(on_pnl_snapshot)를 통해 갱신합니다.
-
-    생성자에서는 PositionManager 인스턴스를 주입받아 포지션 변화 신호를 연결합니다. 전달되지 않은 경우
-    새 인스턴스를 생성합니다.
-    """
-
     # 외부 스레드 → UI 프록시 시그널 정의
     sig_new_stock_detail = Signal(dict)
     sig_trade_signal = Signal(dict)
@@ -149,7 +141,6 @@ class MainWindow(QMainWindow):
         perform_filtering_cb=None,
         project_root: str = ".",
         wiring: Optional[AppWiring] = None,
-        position_mgr: Optional[PositionManager] = None  # 포지션 매니저 인스턴스 주입
     ):
         super().__init__()
         self.setWindowTitle("오트 · 조건검색 & 리스크 대시보드")
@@ -162,18 +153,11 @@ class MainWindow(QMainWindow):
         self.engine = engine
         self.perform_filtering_cb = perform_filtering_cb or (lambda: None)
         self.project_root = self._resolve_project_root(project_root)
-        self.wiring = AppWiring(trader=self.trader, monitor=self.monitor)
+        self.wiring = (AppWiring(trader=self.trader, monitor=self.monitor) if callable(AppWiring) else None)
 
         self.stock_info = StockInfoManager() if StockInfoManager else None 
 
-        # 포지션 매니저: 외부에서 주입하거나 새 인스턴스를 생성
-        self.position_mgr: PositionManager = position_mgr if position_mgr is not None else PositionManager()
 
-        # 포지션 변화 신호를 UI 슬롯과 연결
-        try:
-            self.position_mgr.position_changed.connect(self.on_position_changed)
-        except Exception:
-            pass
 
         # UI 상태 변수 초기화
         self._last_report_path: Optional[str] = None
@@ -230,13 +214,32 @@ class MainWindow(QMainWindow):
 
         # 앱 설정 로드 및 적용
         self.store = SettingsStore() if SettingsStore else None
-        self.app_cfg = self.store.load() if self.store else type("Cfg", (), {})()
+        loaded = self.store.load() if self.store else type("Cfg", (), {})()
+        self.cfg = loaded                
+        self.app_cfg = self.cfg         
 
         if getattr(self.app_cfg, "broker_vendor", ""):
             os.environ["BROKER_VENDOR"] = self.app_cfg.broker_vendor  
         if self.wiring and hasattr(self.wiring, "apply_settings"):
             try:
+                # 브로커/시뮬 등 적용
                 self.wiring.apply_settings(self.app_cfg)
+                # wiring이 모니터를 내부에서 생성/보유한다면 주입받아 둔다
+                if getattr(self.wiring, "monitor", None) is not None:
+                    self.monitor = self.wiring.monitor
+                # 🔵 모니터 Pro 스위치/커스텀 반영 (buy_pro, sell_pro 등)
+                if self.monitor is not None:
+                    try:
+                        apply_to_monitor(self.monitor, self.app_cfg)
+                        logger.info(
+                            "Monitor custom applied: buy_pro=%s sell_pro=%s auto_buy=%s auto_sell=%s",
+                            getattr(self.app_cfg, "buy_pro", False),
+                            getattr(self.app_cfg, "sell_pro", False),
+                            getattr(self.app_cfg, "auto_buy", True),
+                            getattr(self.app_cfg, "auto_sell", True),
+                        )
+                    except Exception:
+                        logger.exception("apply_to_monitor failed")
             except Exception:
                 pass
 
@@ -335,6 +338,20 @@ class MainWindow(QMainWindow):
         self.cmb_sort_key = QComboBox()
         self.cmb_sort_key.addItems(["등락률(%)", "현재가", "거래량", "매수가", "매도가", "코드", "이름", "최근 갱신시간", "조건식"])
         self.cmb_sort_key.setCurrentText("최근 갱신시간")
+        # 콤보 텍스트 -> 컬럼 인덱스 매핑
+        self.SORT_COL_MAP = {
+            "등락률(%)": COL_RT,
+            "현재가": COL_PRICE,
+            "거래량": COL_VOL,
+            "매수가": COL_BUY_PRICE,
+            "매도가": COL_SELL_PRICE,
+            "코드": COL_CODE,
+            "이름": COL_NAME,
+            "최근 갱신시간": COL_UPDATED_AT,
+            "조건식": COL_CONDS,
+        }
+
+
         self.btn_sort_dir = QPushButton("내림차순")
         self.btn_sort_dir.setCheckable(True)
         self.btn_sort_dir.setChecked(True)
@@ -401,23 +418,45 @@ class MainWindow(QMainWindow):
         """
         리스크 패널을 초기화합니다.
 
-        RiskDashboard 클래스를 이용하여 대시보드를 생성하고, risk_panel_holder에 장착합니다.
+        최신 RiskDashboard 클래스를 이용해 trading_result.json을 실시간 반영하고,
+        종목별 손익률/손익 그래프를 표시합니다.
         """
-        # RiskDashboard는 리스크 대시보드를 자체적으로 관리하는 위젯입니다.
-        # 버튼 클릭 시 마지막 리포트를 열도록 콜백을 전달합니다.
-        self.risk_dashboard = RiskDashboard(on_daily_report_callback=self.on_click_open_last_report)
-        # risk_dashboard를 패널로 지정 (리스크 패널 토글에서 사용)
+        from risk_dashboard import RiskDashboard
+
+        # 현재가 제공 함수 정의 (옵션)
+        def price_provider(sym: str) -> Optional[float]:
+            try:
+                # market_api는 이미 MainWindow 어딘가에서 초기화된 객체일 수도 있음
+                return self.market_api.get_price(sym)
+            except Exception:
+                return None
+
+        # 데일리 리포트 버튼 클릭 시 동작 콜백
+        def on_daily_report():
+            try:
+                self.on_click_open_last_report()
+            except Exception:
+                pass
+
+        # ✅ 새로운 리스크 대시보드 생성
+        self.risk_dashboard = RiskDashboard(
+            json_path="data/trading_result.json",
+            price_provider=price_provider,   # 현재가 미제공 시 None 가능
+            on_daily_report=on_daily_report,
+            poll_ms=1000,
+            parent=self
+        )
+
+        # 기존 방식 그대로 holder에 장착
         self.risk_panel = self.risk_dashboard
-        # risk_panel_holder는 _build_layout에서 생성된 QWidget입니다.
-        # 해당 홀더의 레이아웃에 risk_dashboard를 추가하여 화면에 표시합니다.
         if hasattr(self, "risk_panel_holder") and self.risk_panel_holder.layout() is not None:
             self.risk_panel_holder.layout().addWidget(self.risk_dashboard)
         else:
-            # 홀더가 없는 경우 새로 생성하여 추가
+            # 홀더가 없으면 새로 생성하여 추가
             try:
                 self.risk_panel_holder = QWidget()
                 holder_layout = QVBoxLayout(self.risk_panel_holder)
-                holder_layout.setContentsMargins(0,0,0,0)
+                holder_layout.setContentsMargins(0, 0, 0, 0)
                 holder_layout.addWidget(self.risk_dashboard)
             except Exception:
                 pass
@@ -565,23 +604,6 @@ class MainWindow(QMainWindow):
         self.cmb_sort_key.currentIndexChanged.connect(lambda _: self._render_results_html())
         self.btn_sort_dir.toggled.connect(lambda checked: (self.btn_sort_dir.setText("내림차순" if checked else "오름차순"), self._render_results_html()))
 
-    # ---------------- 포지션 변화 처리 ----------------
-    def on_position_changed(self, code: str, qty: int, avg_price: float) -> None:
-        """
-        PositionManager에서 포지션 변경 신호를 받으면 호출됩니다.
-        종목코드에 해당하는 테이블 행을 찾아 수량과 평균 매수가를 갱신합니다.
-        """
-        try:
-            # position_table이 정의되어 있으면 갱신 (예: 보유 종목 테이블)
-            table = getattr(self, 'position_table', None)
-            if table is not None and hasattr(table, 'findRowByCode'):
-                row = table.findRowByCode(code)
-                if row is not None:
-                    table.setItem(row, 1, QTableWidgetItem(str(qty)))
-                    table.setItem(row, 2, QTableWidgetItem(f"{avg_price:.2f}" if avg_price else "-"))
-        except Exception as e:
-            # 예외가 발생해도 로그만 남김
-            self.append_log(f"[UI] on_position_changed 오류: {e}")
 
     # ---------------- 손익 스냅샷 수신 ----------------
     @Slot(dict)
@@ -876,21 +898,51 @@ class MainWindow(QMainWindow):
     def on_open_settings_dialog(self) -> None:
         # 환경설정 대화상자를 엽니다.
         if not SettingsDialog:
+            logger.warning("SettingsDialog is None (settings_manager import failed earlier)")
             QMessageBox.information(self, "안내", "SettingsDialog 모듈이 없습니다.")
             return
-        store = SettingsStore() 
-        dlg = SettingsDialog(self, store.load())
+
+        # 1) SettingsStore 인스턴스 확보(항상 self.store로 일원화)
+        if not getattr(self, "store", None):
+            self.store = SettingsStore()
+
+        # 2) 현재 cfg 로드(없으면 Store에서 로드)
+        current_cfg = getattr(self, "cfg", None) or self.store.load()
+
+        # 3) 대화상자 열기
+        dlg = SettingsDialog(self, current_cfg)
 
         if dlg.exec() == QDialog.Accepted:
+            # 4) UI → AppSettings 회수
             new_cfg = dlg.get_settings()
-            store.save(new_cfg)
 
-            # ✅ wiring이 없으면 지금 만든다
+            # 5) 영구 저장(QSettings + .env)
+            self.store.save(new_cfg)
+
+            # 6) wiring 준비(없으면 생성)
             if not getattr(self, "wiring", None):
                 logging.getLogger(__name__).warning("wiring was None; initializing now")
                 self.wiring = AppWiring(trader=self.trader, monitor=getattr(self, "monitor", None))
 
-            self.wiring.apply_settings(new_cfg)  # 🔄 브로커 핫스왑/시뮬토글 등
+            # 7) ✅ 단일 진입점으로 모든 대상에 설정 반영
+            #    - trader / monitor / wiring(옵션) 순차 적용
+            apply_all_settings(
+                new_cfg,
+                trader=getattr(self, "trader", None),
+                monitor=getattr(self, "monitor", None),
+                extra=[self.wiring]  # wiring이 apply_settings를 구현했다면 함께 적용
+            )
+
+            # 7.1) wiring이 모니터를 재생성/보유했다면 최신 레퍼런스로 교체
+            if getattr(self.wiring, "monitor", None) and self.monitor is not self.wiring.monitor:
+                self.monitor = self.wiring.monitor
+                self.engine.monitor = self.monitor
+                self.bridge.monitor = self.monitor
+
+            # 8) 세션 설정의 단일 소스 업데이트
+            self.cfg = new_cfg
+
+            # 9) 사용자 피드백
             self.append_log("⚙️ 설정이 적용되었습니다.")
 
     def on_click_daily_report(self) -> None:
@@ -1076,7 +1128,7 @@ class MainWindow(QMainWindow):
         """
         try:
             self.status.showMessage("초기화 완료: WebSocket 수신 시작", 3000)
-            QMessageBox.information(self, "초기화", "초기화 완료: WebSocket 수신 시작")
+            logger.info("초기화 완료: WebSocket 수신 시작")
         except Exception:
             pass
 
@@ -1272,4 +1324,36 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    # 나머지 유틸 및 클릭 핸들러는 원본 코드와 동일하므로 생략합니다.
+    def on_trade_applied(self, symbol: str, side: str, qty: int, price: float, avg_after: float):
+        """
+        포지션 계산 직후 호출됨. 종목별 '매수가/매도가/평단' 컬럼 업데이트.
+        """
+        try:
+            row = self._find_row_by_symbol(symbol)
+            if row is None:
+                return
+
+            if side == "buy":
+                self.positions_table.setItem(row, COL_BUY_PRICE, self._mk_item(f"{price:,.0f}"))
+                self.positions_table.setItem(row, COL_AVG_PRICE, self._mk_item(f"{avg_after:,.2f}"))
+            else:
+                self.positions_table.setItem(row, COL_SELL_PRICE, self._mk_item(f"{price:,.0f}"))
+
+            # 최근 갱신시간도 같이 갱신(선택)
+            from datetime import datetime
+            now_txt = datetime.now().strftime("%H:%M:%S")
+            self.positions_table.setItem(row, COL_UPDATED_AT, self._mk_item(now_txt))
+
+            self.positions_table.viewport().update()
+
+        except Exception as e:
+            logger.warning("on_trade_applied update failed for %s: %s", symbol, e)
+
+    def _mk_item(self, text: str, sort_value: Optional[float | int | str] = None):
+        from PySide6.QtWidgets import QTableWidgetItem
+        it = QTableWidgetItem(text)
+        it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        if sort_value is not None:
+            it.setData(Qt.UserRole, sort_value)
+        return it
+

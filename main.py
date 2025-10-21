@@ -33,8 +33,6 @@ from ui_main import MainWindow
 
 # ---- trade_pro 모듈 ----
 from trade_pro.entry_exit_monitor import ExitEntryMonitor
-from trade_pro.position_manager import PositionManager
-from risk_management.position_wiring import PositionWiring
 # ---- 설정: settings_manager에 일원화 ----
 from setting.settings_manager import (
     SettingsStore, AppSettings, SettingsDialog,
@@ -565,7 +563,7 @@ def _build_trader_from_cfg(cfg: AppSettings):
 
     trader = AutoTrader(
         settings=trade_settings,
-        ladder=ladder_settings,
+        ladder=to_ladder_settings(cfg),
         token_provider=lambda: get_access_token_cached(),
         base_url_provider=base_url_provider,
     )
@@ -582,9 +580,6 @@ def main():
 
     getter = DetailInformationGetter()
     engine = Engine(bridge, getter)
-    pos_manager = PositionManager()
-    wiring = PositionWiring(pos_manager, bridge)
-    wiring.setup_pnl_snapshot_flow(interval_sec=3)
 
     # UI
     ui = MainWindow(
@@ -598,9 +593,6 @@ def main():
     # 이벤트 배선
     bridge.new_stock_received.connect(ui.on_new_stock)
     bridge.new_stock_detail_received.connect(ui.on_new_stock_detail)
-    # ✅ 추가: 포지션 갱신으로 이어지는 핵심 라인
-    bridge.price_update.connect(wiring.on_price_update)
-    bridge.fill_or_trade.connect(wiring.on_fill_or_trade)
 
     # 설정 로드
     store = SettingsStore()
@@ -622,6 +614,10 @@ def main():
     )
     engine.monitor = monitor
     bridge.monitor = monitor
+
+    from setting.settings_manager import apply_all_settings
+    apply_all_settings(app_cfg, trader=trader, monitor=monitor)
+
     ui.show()
 
     # 1) 루프 시작 + 초기화

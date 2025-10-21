@@ -1,4 +1,4 @@
-# core/wiring.py (Final Version)
+# setting/wiring.py 
 from __future__ import annotations
 
 import logging
@@ -25,7 +25,9 @@ class AppWiring:
         self.trader = trader
         self.monitor = monitor
 
+    @staticmethod
     def _broker_identity(b):
+        """브로커 객체의 식별자(vendor/name)를 반환합니다.""" 
         # 1) callable name()
         nm = getattr(b, "name", None)
         if callable(nm):
