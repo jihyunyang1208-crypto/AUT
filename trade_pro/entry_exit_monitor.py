@@ -171,8 +171,13 @@ class ExitEntryMonitor:
         self._sym_lock = threading.RLock()
         self.symbols: List[str] = []
 
-        # (신규) Settings 연동 플래그: MACD 필터 사용 여부
         self.use_macd30_filter: bool = False
+        self.sell_profit_threshold: float = float(sell_profit_threshold)
+
+        # ✅ 결과 리더 세팅 (없으면 경로로 생성)
+        self.result_reader: TradingResultReader = (
+            result_reader or TradingResultReader(trading_result_path)
+        )
 
         # MACD 시리즈 준비 이벤트 구독 (가능할 때만)
         try:
@@ -180,6 +185,7 @@ class ExitEntryMonitor:
                 macd_bus.on("series_ready", self._on_macd_series_ready)
         except Exception:
             logger.debug("macd_bus subscription failed; continue without it")
+
 
     # ------------------------------------------------------------------
     # SettingsManager 연동: 통합 적용 API
@@ -394,13 +400,6 @@ class ExitEntryMonitor:
         except Exception:
             return None
 
-    def _get_qty_and_avg(self, symbol: str) -> Optional[tuple[int, float]]:
-        """(qty, avg_price) 튜플. 평균이 없거나 0 이하면 None."""
-        try:
-            res = self.result_reader.get_qty_and_avg_buy(symbol)  # ← 방금 만든 메서드
-            return res
-        except Exception:
-            return None
 
     def _is_profit_threshold_met(self, symbol: str, last_price: float, threshold: Optional[float] = None) -> bool:
         """평균매수가 대비 threshold 이상 이익이면 True. 평균/가격 불명확 시 False."""
@@ -411,6 +410,18 @@ class ExitEntryMonitor:
         if avg is None or avg <= 0:
             return False
         return float(last_price) >= float(avg) * (1.0 + thr)
+
+    def _get_qty_and_avg(self, symbol: str) -> Optional[tuple[int, float]]:
+        """(qty, avg_price) 튜플. 평균이 없거나 0 이하면 None."""
+        try:
+            return self.result_reader.get_qty_and_avg_buy(symbol)
+        except Exception:
+            return None
+
+    def _has_position(self, symbol: str) -> bool:
+        """result_reader 기준 보유수량 > 0이면 True."""
+        qa = self._get_qty_and_avg(symbol)
+        return bool(qa and int(qa[0]) > 0)
 
     # ------------------------------------------------------------------
     # MACD 30m 필터 (옵션)
@@ -717,31 +728,38 @@ class ExitEntryMonitor:
                 # =============== SELL (Pro: 전환 기준 + 이익 임계치) ===============
                 if self.custom.auto_sell:
                     if self.custom.sell_pro:
-                        profit_ok = self._is_profit_threshold_met(sym, last_close)
-                        if not profit_ok:
-                            logger.debug(f"[Monitor] {sym} SELL-Pro: +{self.sell_profit_threshold*100:.1f}% 미만 → 스킵")
+                        # ✅ ① 보유 여부 체크 (result_reader 기준)
+                        if not self._has_position(sym):
+                            logger.debug(f"[Monitor] {sym} SELL-Pro: 보유수량 0 → 모니터링 스킵")
                         else:
-                            if previous_trend in ('UP', 'HOLD') and current_trend == 'DOWN':
-                                sell_qty: Optional[int] = None
-                                avg_px: Optional[float] = None
-                                qa = self._get_qty_and_avg(sym)
-                                if qa:
-                                    sell_qty, avg_px = qa  # (qty, avg)
-                                # 정책: 보유 수량 전량 매도 (원하면 분할/고정비율로 바꾸세요)
-                                suggested_qty = int(sell_qty or 0)
-                                if suggested_qty <= 0:
-                                    logger.debug(f"[Monitor] {sym} SELL-Pro: 보유수량 0 → 신호만 발행")
-                                self._emit(
-                                    "SELL", sym, ref_ts, last_close,
-                                    f"SELL(Pro Trend Reversal: ->DOWN, +{self.sell_profit_threshold*100:.1f}% OK)",
-                                    condition_name="",
-                                    source="bar",
-                                    extra={
-                                        "suggested_qty": suggested_qty,
-                                        "avg_buy": avg_px,
-                                        "profit_threshold": self.sell_profit_threshold,
-                                    },
-                                )
+                            # ✅ ② 이익 임계치(+3% 등) 충족 여부
+                            profit_ok = self._is_profit_threshold_met(sym, last_close)
+                            if not profit_ok:
+                                logger.debug(f"[Monitor] {sym} SELL-Pro: +{self.sell_profit_threshold*100:.1f}% 미만 → 스킵")
+                            else:
+                                # ✅ ③ 추세 전환 조건
+                                if previous_trend in ('UP', 'HOLD') and current_trend == 'DOWN':
+                                    sell_qty: Optional[int] = None
+                                    avg_px: Optional[float] = None
+                                    qa = self._get_qty_and_avg(sym)
+                                    if qa:
+                                        sell_qty, avg_px = qa  # (qty, avg)
+
+                                    suggested_qty = int(sell_qty or 0)
+                                    if suggested_qty <= 0:
+                                        logger.debug(f"[Monitor] {sym} SELL-Pro: 보유수량 0 → 신호만 발행")
+
+                                    self._emit(
+                                        "SELL", sym, ref_ts, last_close,
+                                        f"SELL(Pro Trend Reversal: ->DOWN, +{self.sell_profit_threshold*100:.1f}% OK)",
+                                        condition_name="",
+                                        source="bar",
+                                        extra={
+                                            "suggested_qty": suggested_qty,
+                                            "avg_buy": avg_px,
+                                            "profit_threshold": self.sell_profit_threshold,
+                                        },
+                                    )
                     else:
                         logger.debug(f"[Monitor] {sym} SELL: Pro OFF. Periodic SELL suppressed.")
 
