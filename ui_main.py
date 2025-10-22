@@ -71,6 +71,8 @@ from trade_pro.auto_trader import AutoTrader
 # RiskDashboard 모듈 가져오기: 리스크 대시보드를 별도 모듈에서 관리
 from risk_dashboard import RiskDashboard
 from utils.stock_info_manager import StockInfoManager 
+from risk_management.trading_results import TradingResultStore
+from risk_management.orders_watcher import OrdersCSVWatcher, WatcherConfig
 
 logger = logging.getLogger("ui_main")
 logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
@@ -460,6 +462,22 @@ class MainWindow(QMainWindow):
                 holder_layout.addWidget(self.risk_dashboard)
             except Exception:
                 pass
+
+        store = TradingResultStore("data/trading_result.json")
+
+        cfg = WatcherConfig(
+            base_dir=Path.cwd() / "logs",
+            subdir="trades",
+            file_pattern="orders_{date}.csv",
+            json_path=Path("data/trading_result.json"),
+            poll_ms=700,
+            bootstrap_if_missing=True,   # 첫 실행 시 과거 CSV로 재구성
+        )
+
+        # 이미 존재하면 중복 생성 방지
+        if not hasattr(self, "orders_watcher") or self.orders_watcher is None:
+            self.orders_watcher = OrdersCSVWatcher(store=store, config=cfg, parent=self)
+            self.orders_watcher.start()  
 
     # ---------------- 스타일 ----------------
     def _apply_stylesheet(self):

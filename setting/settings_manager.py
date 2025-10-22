@@ -1,3 +1,4 @@
+# setting/settings_manager.py
 from __future__ import annotations
 
 import os
@@ -137,15 +138,22 @@ class SettingsStore:
         self.qs = QSettings(self.ORG, self.APP)
 
     def load(self) -> AppSettings:
+        """
+        1) .env에서 기본값(AppSettings.from_env) 생성
+        2) QSettings JSON 병합(있으면 덮어쓰기)
+        3) 구버전 키(auto_buy/auto_sell/broker_vendor)도 반영
+        """
         base = AppSettings.from_env()
         raw = self.qs.value(self.KEY, None)
 
+        # bytes → str
         if isinstance(raw, (bytes, bytearray)):
             try:
                 raw = raw.decode("utf-8")
             except Exception:
                 raw = None
 
+        # str(JSON) → dict
         if isinstance(raw, str) and raw.strip():
             try:
                 raw = json.loads(raw)
@@ -195,6 +203,12 @@ class SettingsStore:
         return base
 
     def save(self, cfg: AppSettings):
+        """
+        설정 저장:
+        - QSettings(JSON 직렬화)
+        - 런타임 환경변수(os.environ)
+        - .env 파일 반영
+        """
         cfg.api_base_url = _normalize_base_url(cfg.api_base_url)
 
         # 1) QSettings
@@ -220,6 +234,7 @@ class SettingsStore:
             else:
                 lines = []
 
+            # BROKER_VENDOR 업데이트/추가
             found = False
             for i, line in enumerate(lines):
                 if line.startswith("BROKER_VENDOR="):
@@ -332,8 +347,8 @@ class SettingsDialog(QDialog):
         sw = QHBoxLayout(grp_switch)
         self.cb_auto_buy = QCheckBox("자동 매수")
         self.cb_auto_sell = QCheckBox("자동 매도")
-        self.cb_buy_pro = QCheckBox("Buy-Pro(추세 전환)")
-        self.cb_sell_pro = QCheckBox("Sell-Pro(추세 전환)")
+        self.cb_buy_pro = QCheckBox("Buy-Pro(룰 기반)")
+        self.cb_sell_pro = QCheckBox("Sell-Pro(룰 기반)")
         sw.addWidget(self.cb_auto_buy); sw.addSpacing(8)
         sw.addWidget(self.cb_auto_sell); sw.addSpacing(8)
         sw.addWidget(self.cb_buy_pro); sw.addSpacing(8)
@@ -348,9 +363,9 @@ class SettingsDialog(QDialog):
         self.cmb_broker = QComboBox()
         self._broker_items = [
             ("시뮬레이터", "sim"),
-            ("미래에셋", "mirae"),
             ("키움", "kiwoom"),
-            ("한국투자", "kis"),
+            ("미래에셋(미지원)", "mirae"),
+            ("한국투자(미지원)", "kis"),
         ]
         for label, _code in self._broker_items:
             self.cmb_broker.addItem(label)
@@ -369,7 +384,7 @@ class SettingsDialog(QDialog):
         grp_macd = QGroupBox("MACD 30m 필터")
         fm = QFormLayout(grp_macd)
         self.cb_macd = QCheckBox("사용 (hist ≥ 0)")
-        self.cmb_macd_tf = QComboBox(); self.cmb_macd_tf.addItems(["30m"])  # 현재는 30m만 지원
+        self.cmb_macd_tf = QComboBox(); self.cmb_macd_tf.addItems(["30m"])
         self.sp_macd_age = QSpinBox(); self.sp_macd_age.setRange(60, 24*3600); self.sp_macd_age.setSuffix(" sec")
         fm.addRow(self.cb_macd)
         fm.addRow("타임프레임", self.cmb_macd_tf)
@@ -427,6 +442,7 @@ class SettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         outer.addWidget(btns)
 
+        # 간단 스타일
         self.setStyleSheet("""
             QGroupBox {
                 font-weight: 600;
@@ -505,6 +521,7 @@ class SettingsDialog(QDialog):
         c.timezone = self.le_tz.text().strip() or "Asia/Seoul"
         return c
 
+    # --------------- 다이얼로그 위치/크기 기억 ---------------
     def _restore_geometry(self):
         data = self._qs.value(self.GEOM_KEY, None)
         if isinstance(data, bytes):
@@ -527,6 +544,7 @@ class SettingsDialog(QDialog):
 
 # ===================== AutoTrader 연동(기존 헬퍼 유지) =====================
 def to_trade_settings(cfg: AppSettings):
+    """AppSettings → AutoTrader.TradeSettings 변환"""
     if _TradeSettings is None:
         raise RuntimeError("trade_pro.auto_trader.TradeSettings 를 불러올 수 없습니다.")
     return _TradeSettings(
@@ -538,6 +556,7 @@ def to_trade_settings(cfg: AppSettings):
     )
 
 def to_ladder_settings(cfg: AppSettings):
+    """AppSettings → AutoTrader.LadderSettings 변환"""
     if _LadderSettings is None:
         raise RuntimeError("trade_pro.auto_trader.LadderSettings 를 불러올 수 없습니다.")
     lad = _LadderSettings()
@@ -545,8 +564,11 @@ def to_ladder_settings(cfg: AppSettings):
     lad.num_slices = int(cfg.ladder_num_slices)
     return lad
 
-
 def apply_to_autotrader(trader, cfg: AppSettings):
+    """
+    이미 생성된 AutoTrader 인스턴스에 UI 설정 반영.
+    (하위호환을 위해 유지. 신규 코드는 apply_all_settings 사용 권장)
+    """
     if hasattr(trader, "set_simulation_mode"):
         trader.set_simulation_mode(bool(cfg.sim_mode))
 
@@ -574,29 +596,27 @@ def apply_to_autotrader(trader, cfg: AppSettings):
 class _Configurable(Protocol):
     def apply_settings(self, cfg: AppSettings) -> None: ...
 
-
 def _adapt_autotrader(trader) -> _Configurable:
+    """AutoTrader에 apply_settings가 없을 때를 위한 어댑터."""
     class _ATAdapter:
         def __init__(self, t): self.t = t
         def apply_settings(self, cfg: AppSettings) -> None:
             apply_to_autotrader(self.t, cfg)
     return _ATAdapter(trader)
 
-
 def _adapt_monitor(monitor) -> _Configurable:
     """
-    Monitor가 apply_settings를 제공하지 않으면 set_custom 및 속성 주입으로 폴백.
-    - ExitEntryMonitor가 `apply_settings`를 구현한 경우 해당 메서드가 우선 호출됩니다.
-    - 미구현 시 아래 폴백 로직이 **MACD 설정까지** 반영합니다.
+    Monitor에 apply_settings가 없으면 set_custom 등으로 폴백.
+    (ExitEntryMonitor가 apply_settings를 직접 구현했다면 그걸 우선 사용)
     """
     class _MonAdapter:
         def __init__(self, m): self.m = m
         def apply_settings(self, cfg: AppSettings) -> None:
-            # 1) 정식 API가 있으면 우선 사용
+            # 정식 API가 있으면 우선 사용
             if hasattr(self.m, "apply_settings") and callable(self.m.apply_settings):
                 self.m.apply_settings(cfg)
                 return
-            # 2) 폴백: 핵심 스위치 전달
+            # 폴백: 핵심 스위치 전달
             if hasattr(self.m, "set_custom") and callable(self.m.set_custom):
                 try:
                     self.m.set_custom(
@@ -609,21 +629,17 @@ def _adapt_monitor(monitor) -> _Configurable:
                     )
                 except Exception:
                     pass
-            # 3) 루프/마감창/타임존/전략 파라미터 속성 반영(있을 때만)
+            # 루프/창 파라미터 속성 반영(있을 때만)
             for name, val in [
                 ("poll_interval_sec", int(cfg.poll_interval_sec)),
                 ("_win_start", int(cfg.bar_close_window_start_sec)),
                 ("_win_end",   int(cfg.bar_close_window_end_sec)),
                 ("tz",         cfg.timezone or "Asia/Seoul"),
-                ("macd30_timeframe", cfg.macd30_timeframe),
-                ("macd30_max_age_sec", int(cfg.macd30_max_age_sec)),
-                ("use_macd30_filter", bool(cfg.use_macd30_filter)),
             ]:
                 if hasattr(self.m, name):
                     try: setattr(self.m, name, val)
                     except Exception: pass
     return _MonAdapter(monitor)
-
 
 def apply_all_settings(
     cfg: AppSettings,
@@ -632,6 +648,11 @@ def apply_all_settings(
     monitor=None,
     extra: Iterable[object] | None = None,
 ) -> None:
+    """
+    단일 진입점: 전달된 모든 대상에게 AppSettings 일괄 반영.
+    대상이 이미 apply_settings(cfg)를 구현했으면 그걸 호출,
+    아니면 적절한 어댑터로 동일하게 반영.
+    """
     targets: list[_Configurable] = []
 
     if trader is not None:
@@ -652,6 +673,7 @@ def apply_all_settings(
                 continue
             if isinstance(obj, _Configurable):
                 targets.append(obj)
+            # 필요 시 추가 어댑터 분기 가능
 
     for t in targets:
         try:

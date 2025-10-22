@@ -1,4 +1,4 @@
-#trade_pro/auto_trader.py
+# trade_pro/auto_trader.py
 from __future__ import annotations
 
 import asyncio
@@ -9,7 +9,7 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Literal, Tuple
@@ -17,13 +17,11 @@ import logging
 
 logger = logging.getLogger(__name__)  # 모듈별 로거
 
-
 # --- Optional import: PositionManager (graceful if missing) ---
 try:
     from trade_pro.position_manager import PositionManager  # type: ignore
 except Exception:  # pragma: no cover
     PositionManager = None  # type: ignore
-
 
 from broker.base import Broker, OrderRequest, OrderResponse
 from broker.factory import create_broker
@@ -59,7 +57,7 @@ class LadderSettings:
 # =========================
 class TradeLogger:
     def __init__(self, log_dir: str = "logs/trades", file_prefix: str = "orders",
-                 slim: bool = False):
+                 slim: bool = True):
         self.log_dir = Path(log_dir)
         self.file_prefix = file_prefix
         self._lock = threading.Lock()
@@ -113,6 +111,7 @@ class TradeLogger:
                     ])
 
     def write_order_record(self, record: Dict[str, Any]):
+        # 슬림 모드만 지원
         if not self._slim:
             logger.info("Warning: Full log mode is not fully supported in this version.")
             return
@@ -124,7 +123,7 @@ class TradeLogger:
             ts = record.get("ts") or datetime.now(timezone.utc).isoformat()
             status = record.get("status") or record.get("status_label", "UNKNOWN")
 
-            # 1) order_type
+            # 1) order_type 유추
             order_type = record.get("order_type")
             if not order_type:
                 trde_tp = str(record.get("trde_tp", ""))
@@ -133,9 +132,9 @@ class TradeLogger:
                 elif trde_tp in ("0", "00"):
                     order_type = "limit"
                 else:
-                    order_type = trde_tp
+                    order_type = trde_tp or ""
 
-            # 2) price
+            # 2) price 유추
             price = record.get("price")
             if price is None:
                 price = record.get("limit_price") if order_type == "limit" else ""
@@ -260,11 +259,11 @@ class AutoTrader:
             base_url_provider=(self._base_url_provider or (lambda: os.getenv("HTTP_API_BASE", ""))),
         )
 
-
         self._seen_exec_keys: set[tuple[str, Optional[str]]] = set()
         self._exec_lock = threading.Lock()
 
-        logger.info(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} use_mock={self._use_mock} broker={self.broker.name()}")
+        logger.info(f"[AutoTrader] mode={'SIMULATION' if self.simulation else 'LIVE'} "
+                    f"use_mock={self._use_mock} broker={self.broker.name()}")
         self._dbg("__init__",
                   simulation=self.simulation, use_mock=self._use_mock,
                   order_type=self.settings.order_type,
@@ -274,12 +273,10 @@ class AutoTrader:
 
     # ---------- 런타임 토글 ----------
     def set_simulation_mode(self, on: bool) -> None:
-        # AutoTrader 내부 시뮬 토글은 유지하되, 실제 체결은 브로커가 담당
         self.simulation = bool(on)
         self.paper_mode = self.simulation
         logger.info(f"[AutoTrader] simulation_mode flag set to {self.simulation}")
         self._dbg("set_simulation_mode", simulation=self.simulation)
-
 
     # ---------- Public utils ----------
     @staticmethod
@@ -293,7 +290,6 @@ class AutoTrader:
         if self.position_mgr:
             self.position_mgr.reserve_buy(code, qty)
         response = self._submit_order(code=code, side="BUY", qty=qty, price=price, **kwargs)
-
         if self.position_mgr and not getattr(response, "ok", True):
             self.position_mgr.release_buy(code, qty)
 
@@ -312,6 +308,7 @@ class AutoTrader:
         elif side.upper() == "SELL":
             self.position_mgr.apply_fill_sell(code, qty, price)
 
+    # ---------- Signal handling ----------
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         data   = payload.get("data") or payload
         signal = str(payload.get("signal") or data.get("signal") or "").upper()
@@ -366,7 +363,7 @@ class AutoTrader:
                     except Exception:
                         qty = 1
                 data.setdefault("cur_price", last_price)
-                data["num_slices"]       = int(self.ladder.num_slices)
+                data["num_slices"]        = int(self.ladder.num_slices)
                 data["start_ticks_above"] = int(self.ladder.start_ticks_above)
                 data["step_ticks"]        = int(self.ladder.step_ticks)
                 data.setdefault("total_qty", int(qty))
@@ -378,7 +375,7 @@ class AutoTrader:
                           start_ticks_above=data.get("start_ticks_above"),
                           step_ticks=data.get("step_ticks"))
 
-                # 🔽 옵션: 보유 0이면 ladder_sell 대신 simple_sell로 강등
+                # 보유 0이면 simple_sell로 강등
                 if self.position_mgr:
                     try:
                         cur_qty = int(self.position_mgr.get_qty(stk_cd))
@@ -386,7 +383,6 @@ class AutoTrader:
                         cur_qty = 0
                     if cur_qty <= 0:
                         mode = "simple_sell"
-
 
         if payload.get("ladder_buy") or data.get("ladder_buy"):
             mode = "ladder_buy"
@@ -399,7 +395,7 @@ class AutoTrader:
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
                 "cur_price": self._to_int(data.get("cur_price") or data.get("ord_uv") or 0),
-                "strategy_name": strategy_name, 
+                "strategy_name": strategy_name,
                 "num_slices": int(data.get("num_slices") or self.ladder.num_slices),
                 "start_ticks_below": int(data.get("start_ticks_below") or self.ladder.start_ticks_below),
                 "step_ticks": int(data.get("step_ticks") or self.ladder.step_ticks),
@@ -419,8 +415,8 @@ class AutoTrader:
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
                 "cur_price": self._to_int(data.get("cur_price") or data.get("ord_uv") or 0),
+                "strategy_name": strategy_name,
                 "num_slices": int(data.get("num_slices") or self.ladder.num_slices),
-                "strategy_name": strategy_name, 
                 "start_ticks_above": int(data.get("start_ticks_above") or self.ladder.start_ticks_above),
                 "step_ticks": int(data.get("step_ticks") or self.ladder.step_ticks),
                 "total_qty": data.get("total_qty"),
@@ -438,7 +434,7 @@ class AutoTrader:
             ss = {
                 "dmst_stex_tp": dmst_stex_tp,
                 "stk_cd": stk_cd,
-                "strategy_name": strategy_name, 
+                "strategy_name": strategy_name,
                 "ord_qty": str(data.get("ord_qty") or "0"),
                 "ord_uv": str(data.get("ord_uv") or "0"),
                 "trde_tp": str(data.get("trde_tp") or "0"),
@@ -455,6 +451,7 @@ class AutoTrader:
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
                 "cur_price": self._to_int(data.get("cur_price") or data.get("ord_uv") or 0),
+                "strategy_name": strategy_name,
                 "num_slices": 1,
                 "start_ticks_below": 0,
                 "step_ticks": 1,
@@ -470,6 +467,7 @@ class AutoTrader:
             ss = {
                 "dmst_stex_tp": dmst_stex_tp,
                 "stk_cd": stk_cd,
+                "strategy_name": strategy_name,
                 "ord_qty": str(data.get("ord_qty") or "1"),
                 "ord_uv": str(data.get("ord_uv") or "0"),
                 "trde_tp": str(data.get("trde_tp") or "0"),
@@ -493,6 +491,7 @@ class AutoTrader:
         return None
 
     def make_on_signal(self, bridge: Optional[object] = None) -> Callable[[object], None]:
+
         if bridge is not None:
             self.bridge = bridge
 
@@ -504,6 +503,7 @@ class AutoTrader:
                 last_price = int(float(price_attr)) if price_attr is not None else 0
                 condition_name = str(getattr(sig_obj, "condition_name", "") or "").strip()
                 source = str(getattr(sig_obj, "source", "") or "")
+                extra = getattr(sig_obj, "extra", None)  
 
             except Exception:
                 return
@@ -526,11 +526,22 @@ class AutoTrader:
                     "stk_cd": symbol,
                     "dmst_stex_tp": "KRX",
                     "ord_uv": str(last_price),
+                    "cur_price": last_price,       
+
                 },
                 "strategy": condition_name,
                 "source": source,
-
             }
+
+            # SELL 신호일 때 monitor가 준 suggested_qty를 ladder total_qty 로 넘김
+            if side == "SELL" and isinstance(extra, dict):
+                try:
+                    sug = int(extra.get("suggested_qty", 0))
+                    if sug > 0:
+                        payload["data"]["total_qty"] = sug  # handle_signal에서 setdefault 되므로 우선권 가짐
+                except Exception:
+                    pass
+
             self._dbg("on_signal.dispatch", payload_minimal=True, signal=side, stk_cd=symbol, ord_uv=last_price)
             try:
                 asyncio.create_task(self.handle_signal(payload))
@@ -541,7 +552,6 @@ class AutoTrader:
                 ).start()
 
         return _handler
-
 
     # ---------- Tick utils ----------
     @staticmethod
@@ -604,9 +614,7 @@ class AutoTrader:
         return prices
 
     def _resolve_trde_tp(self) -> str:
-        if self.settings.order_type == "market":
-            return "3"
-        return "0"
+        return "3" if self.settings.order_type == "market" else "0"
 
     def _ticks_above_from_target(self, cur_price: int, target_price: int) -> int:
         if cur_price <= 0 or target_price <= 0:
@@ -674,7 +682,6 @@ class AutoTrader:
         self._dbg("ladder_buy.prices", count=len(prices), first=prices[:3], last=prices[-3:])
         mode_label = "(SIM)" if self.simulation else "(LIVE)"
 
-
         results: List[Dict[str, Any]] = []
         total = len(prices)
         for i, limit_price in enumerate(prices, start=1):
@@ -716,16 +723,17 @@ class AutoTrader:
                 duration_ms = int((time.perf_counter() - start) * 1000)
                 code = resp.get("status_code")
                 results.append(resp)
-                
+
                 if self.bridge and hasattr(self.bridge, "log"):
-                    self.bridge.log.emit(f"✅ {mode_label}(ladder) [{i}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}") 
+                    try:
+                        self.bridge.log.emit(f"✅ {mode_label}(ladder) [{i}/{total}] {stk_cd} {qty}주 @ {limit_price} → Code={code}")
+                    except Exception:
+                        pass
 
                 record = {
                     "session_id": self.session_id,
                     "uid": uid,
-                    "strategy": "ladder",
-                    # 조건식 이름이 있으면 우선 사용
-                    **({"strategy": strategy_name} if strategy_name else {}),
+                    "strategy": strategy_name,
                     "action": "BUY",
                     "stk_cd": stk_cd,
                     "dmst_stex_tp": dmst_stex_tp,
@@ -741,7 +749,9 @@ class AutoTrader:
                     "notional": unit_amount,
                     "duration_ms": duration_ms,
                     "status_code": code,
+                    "status": f"HTTP_{code}",  # ✅ CSV status에 남김
                     "ts": datetime.now(timezone.utc).isoformat(),
+                    "response": resp,
                 }
                 self.trade_logger.write_order_record(record)
 
@@ -754,7 +764,10 @@ class AutoTrader:
                 })
             except Exception as e:
                 if self.bridge and hasattr(self.bridge, "log"):
-                    self.bridge.log.emit(f"💥 {mode_label}(ladder) [{i}/{total}] 주문 실패: {e}")
+                    try:
+                        self.bridge.log.emit(f"💥 {mode_label}(ladder) [{i}/{total}] 주문 실패: {e}")
+                    except Exception:
+                        pass
                 self._dbg("ladder_buy.http.error", i=i, err=str(e))
                 self._emit_order_event({
                     "type": "ORDER_NEW","action": "BUY","symbol": stk_cd,
@@ -762,7 +775,6 @@ class AutoTrader:
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "extra": {"slice": i, "total": total, "error": str(e)},
                 })
-
 
             await asyncio.sleep(self.ladder.interval_sec)
 
@@ -803,8 +815,6 @@ class AutoTrader:
             self._dbg_ret("simple_sell.block", reason="limit_without_price")
             return None
 
-
-        # (시뮬 제거) 항상 브로커 호출
         req = OrderRequest(
             dmst_stex_tp=dmst_stex_tp,
             stk_cd=stk_cd,
@@ -827,27 +837,19 @@ class AutoTrader:
             record = {
                 "session_id": self.session_id,
                 "uid": uid,
-                "strategy": "ladder",
-                # 조건식 이름이 있으면 우선 사용
-                **({"strategy": strategy_name} if strategy_name else {}),
-                "action": "BUY",
+                "strategy": strategy_name,
+                "action": "SELL",
                 "stk_cd": stk_cd,
                 "dmst_stex_tp": dmst_stex_tp,
-                "cur_price": cur_price,
                 "limit_price": limit_price,
                 "qty": qty,
                 "trde_tp": trde_tp,
-                "tick_mode": tick_mode,
-                "tick_used": tick_used,
-                "slice_idx": i,
-                "slice_total": total,
-                "unit_amount": unit_amount,
-                "notional": unit_amount,
                 "duration_ms": duration_ms,
                 "status_code": code,
+                "status": f"HTTP_{code}",  # ✅
                 "ts": datetime.now(timezone.utc).isoformat(),
+                "response": resp,
             }
-
             self.trade_logger.write_order_record(record)
 
             logger.info(f"✅ (sell) {stk_cd} {qty}주 @{limit_price or 'MKT'} → Code={code}")
@@ -855,7 +857,7 @@ class AutoTrader:
 
             self._emit_order_event({
                 "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
-                "price": limit_price or 0,"qty": qty,"status": f"HTTP_{code}",
+                "price": (limit_price or 0),"qty": qty,"status": f"HTTP_{code}",
                 "ts": record["ts"],"extra": {"resp": resp, "trde_tp": trde_tp},
             })
             self._dbg_ret("simple_sell.http", status_code=code)
@@ -865,7 +867,7 @@ class AutoTrader:
             self._dbg("simple_sell.http.error", err=str(e))
             self._emit_order_event({
                 "type": "ORDER_NEW","action": "SELL","symbol": stk_cd,
-                "price": limit_price or 0,"qty": qty,"status": "ERROR",
+                "price": (limit_price or 0),"qty": qty,"status": "ERROR",
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "extra": {"error": str(e), "trde_tp": trde_tp},
             })
@@ -879,7 +881,6 @@ class AutoTrader:
         cur_price = int(payload.get("cur_price") or 0)
         dmst_stex_tp = (payload.get("dmst_stex_tp") or "KRX").upper()
         strategy_name = str(payload.get("strategy_name") or "").strip()
-
         trde_tp = str(payload.get("trde_tp") or "0")
 
         self._dbg("_handle_ladder_sell.enter", auto_sell=self.settings.auto_sell,
@@ -915,7 +916,8 @@ class AutoTrader:
                 logger.info("ℹ️ (ladder-sell) 매도 가능 수량 없음")
                 self._dbg_ret("ladder_sell.block", reason="no_sellable_qty", cur_qty=cur_qty, pend_sell=pend_sell)
                 return {"ladder_sell_results": []} if not self.simulation else {"ladder_sell_submitted": 0}
-            base = sellable // num_slices ; rem = sellable % num_slices
+            base = sellable // num_slices
+            rem = sellable % num_slices
             qty_plan = [(base + 1 if i < rem else base) for i in range(num_slices)]
         else:
             if slice_qty is not None:
@@ -935,7 +937,8 @@ class AutoTrader:
                     logger.info("🚫 (ladder-sell) total_qty ≤ 0")
                     self._dbg_ret("ladder_sell.block", reason="total_qty<=0")
                     return None
-                base = tq // num_slices ; rem = tq % num_slices
+                base = tq // num_slices
+                rem = tq % num_slices
                 qty_plan = [(base + 1 if i < rem else base) for i in range(num_slices)]
 
         self._dbg("ladder_sell.params", tick=tick, num_slices=num_slices,
@@ -950,7 +953,6 @@ class AutoTrader:
             start_ticks_above=start_ticks_above, step_ticks=step_ticks
         )
         self._dbg("ladder_sell.prices", count=len(prices), first=prices[:3], last=prices[-3:])
-
 
         results: List[Dict[str, Any]] = []
         total = min(len(prices), len(qty_plan))
@@ -993,10 +995,8 @@ class AutoTrader:
                 record = {
                     "session_id": self.session_id,
                     "uid": uid,
-                    "strategy": "ladder",
-                    # 조건식 이름이 있으면 우선 사용
-                    **({"strategy": strategy_name} if strategy_name else {}),
-                    "action": "BUY",
+                    "strategy": strategy_name,
+                    "action": "SELL",
                     "stk_cd": stk_cd,
                     "dmst_stex_tp": dmst_stex_tp,
                     "cur_price": cur_price,
@@ -1005,13 +1005,13 @@ class AutoTrader:
                     "trde_tp": trde_tp,
                     "tick_mode": tick_mode,
                     "tick_used": tick_used,
-                    "slice_idx": i,
+                    "slice_idx": i+1,              # 1-based
                     "slice_total": total,
-                    "unit_amount": unit_amount,
-                    "notional": unit_amount,
                     "duration_ms": duration_ms,
                     "status_code": code,
+                    "status": f"HTTP_{code}",       # ✅
                     "ts": datetime.now(timezone.utc).isoformat(),
+                    "response": resp,
                 }
                 self.trade_logger.write_order_record(record)
 
@@ -1074,6 +1074,7 @@ class AutoTrader:
             "start_ticks_below": 0,
             "step_ticks": 1,
             "unit_amount": int(unit_amount) if unit_amount else self.ladder.unit_amount,
+            "strategy_name": "",  # 즉시 매수는 조건식 이름이 없을 수 있음
         }
 
         self._dbg("buy_immediate.dispatch", payload=payload, temp_order_type=order_type or self.settings.order_type)

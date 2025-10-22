@@ -13,6 +13,7 @@ import threading
 # MACD 버스/조회기 (필요 시 의존성 주입으로 대체 가능)
 from core.macd_calculator import get_points as _get_points
 from core.macd_calculator import macd_bus
+from risk_management.result_reader import TradingResultReader
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,9 @@ class ExitEntryMonitor:
         bar_close_window_end_sec: int = 30,
         disable_server_pull: bool = False,
         custom: Optional[MonitorCustom] = None,
-        position_mgr: Optional[object] = None,
+        trading_result_path: str = "data/trading_result.json", # ← 추가
+        result_reader: TradingResultReader | None = None,      # ← 추가
+        sell_profit_threshold: float = 0.03,                   # ← 추가: +3%
     ):
         self.detail_getter = detail_getter
         self.bridge = bridge
@@ -151,7 +154,6 @@ class ExitEntryMonitor:
         self.on_signal = on_signal or (lambda sig: logger.info(f"[SIGNAL] {sig}"))
         self.disable_server_pull = bool(disable_server_pull)
         self.custom = custom or MonitorCustom()
-        self.position_mgr = position_mgr
 
         # 직전 추세 상태 저장 (Pro 전략용)
         self._last_trend: Dict[Tuple[str, str], Literal['UP', 'DOWN', 'NEUTRAL', 'HOLD']] = {}
@@ -207,6 +209,8 @@ class ExitEntryMonitor:
             self.use_macd30_filter = bool(getattr(cfg, "use_macd30_filter", self.use_macd30_filter))
             self.macd30_timeframe = str(getattr(cfg, "macd30_timeframe", self.macd30_timeframe) or self.macd30_timeframe)
             self.macd30_max_age_sec = int(getattr(cfg, "macd30_max_age_sec", self.macd30_max_age_sec))
+            self.sell_profit_threshold = float(getattr(cfg, "sell_profit_threshold", self.sell_profit_threshold))
+        
         except Exception:
             logger.exception("[ExitEntryMonitor] apply_settings failed")
 
@@ -381,22 +385,32 @@ class ExitEntryMonitor:
         return None
 
     # ------------------------------------------------------------------
-    # PM에서 평균매수가 조회
+    # ---- 평균/수량 조회 (리더 사용) ----
     # ------------------------------------------------------------------
 
     def _get_avg_buy(self, symbol: str) -> Optional[float]:
-        pm = getattr(self, "position_mgr", None)
-        if not pm:
-            return None
-        fn = getattr(pm, "get_avg_buy", None)
-        if not callable(fn):
-            return None
         try:
-            sym = _code6(symbol)
-            v = fn(sym)
-            return float(v) if (v is not None and float(v) > 0) else None
+            return self.result_reader.get_avg_buy(symbol)
         except Exception:
             return None
+
+    def _get_qty_and_avg(self, symbol: str) -> Optional[tuple[int, float]]:
+        """(qty, avg_price) 튜플. 평균이 없거나 0 이하면 None."""
+        try:
+            res = self.result_reader.get_qty_and_avg_buy(symbol)  # ← 방금 만든 메서드
+            return res
+        except Exception:
+            return None
+
+    def _is_profit_threshold_met(self, symbol: str, last_price: float, threshold: Optional[float] = None) -> bool:
+        """평균매수가 대비 threshold 이상 이익이면 True. 평균/가격 불명확 시 False."""
+        thr = float(self.sell_profit_threshold if threshold is None else threshold)
+        if last_price is None or float(last_price) <= 0:
+            return False
+        avg = self._get_avg_buy(symbol)
+        if avg is None or avg <= 0:
+            return False
+        return float(last_price) >= float(avg) * (1.0 + thr)
 
     # ------------------------------------------------------------------
     # MACD 30m 필터 (옵션)
@@ -435,7 +449,8 @@ class ExitEntryMonitor:
     # 신호 발행
     # ------------------------------------------------------------------
 
-    def _emit(self, side: str, symbol: str, ts: pd.Timestamp, price: float, reason: str):
+    def _emit(self, side: str, symbol: str, ts: pd.Timestamp, price: float, reason: str,
+            *, condition_name: str = "", source: str = "bar", extra: dict | None = None):
         key = (symbol, side)
         if self._last_trig.get(key) == ts:
             logger.debug(f"[ExitEntryMonitor] {symbol} {side} 신호 중복(ts={ts}) → 무시")
@@ -448,7 +463,10 @@ class ExitEntryMonitor:
         except Exception:
             pass
 
-        sig_obj = TradeSignal(side, symbol, ts, price, reason)
+        sig_obj = TradeSignal(
+            side=side, symbol=symbol, ts=ts, price=price, reason=reason,
+            source=source, condition_name=condition_name, extra=extra
+        )
         try:
             self.on_signal(sig_obj)
         except Exception:
@@ -486,7 +504,10 @@ class ExitEntryMonitor:
                         fallback_ts = df5_fallback.index[-1]
                         # MACD 필터 체크
                         if self._macd30_allows_long(sym):
-                            self._emit("BUY", sym, fallback_ts, fallback_price, reason or f"즉시신호(BUY) {condition_name}")
+                            self._emit("BUY", sym, fallback_ts, fallback_price,
+                                reason or f"즉시신호(BUY) {condition_name}",
+                                condition_name=condition_name, source="condition")
+
                         last_close = fallback_price
                         ref_ts = fallback_ts
                         df5 = df5_fallback
@@ -515,7 +536,10 @@ class ExitEntryMonitor:
 
                     if previous_trend in ('DOWN', 'HOLD') and current_trend == 'UP':
                         if self._macd30_allows_long(sym):
-                            self._emit("BUY", sym, ref_ts, cur_close, reason or f"BUY(Pro Trend Reversal) {condition_name}")
+                            self._emit("BUY", sym, ref_ts, cur_close,
+                                reason or f"BUY(Pro Trend Reversal) {condition_name}",
+                                condition_name=condition_name, source="condition")
+
 
             try:
                 if self.bridge and hasattr(self.bridge, "log") and self.custom.auto_buy:
@@ -690,11 +714,34 @@ class ExitEntryMonitor:
             logger.debug(f"[Monitor] {sym} {tf} 추세: Prev={previous_trend}, Curr={current_trend}")
 
             if tf == "5m":
-                # =============== SELL (Pro: 전환 기준만) ===============
+                # =============== SELL (Pro: 전환 기준 + 이익 임계치) ===============
                 if self.custom.auto_sell:
                     if self.custom.sell_pro:
-                        if previous_trend in ('UP', 'HOLD') and current_trend == 'DOWN':
-                            self._emit("SELL", sym, ref_ts, last_close, "SELL(Pro Trend Reversal: ->DOWN)")
+                        profit_ok = self._is_profit_threshold_met(sym, last_close)
+                        if not profit_ok:
+                            logger.debug(f"[Monitor] {sym} SELL-Pro: +{self.sell_profit_threshold*100:.1f}% 미만 → 스킵")
+                        else:
+                            if previous_trend in ('UP', 'HOLD') and current_trend == 'DOWN':
+                                sell_qty: Optional[int] = None
+                                avg_px: Optional[float] = None
+                                qa = self._get_qty_and_avg(sym)
+                                if qa:
+                                    sell_qty, avg_px = qa  # (qty, avg)
+                                # 정책: 보유 수량 전량 매도 (원하면 분할/고정비율로 바꾸세요)
+                                suggested_qty = int(sell_qty or 0)
+                                if suggested_qty <= 0:
+                                    logger.debug(f"[Monitor] {sym} SELL-Pro: 보유수량 0 → 신호만 발행")
+                                self._emit(
+                                    "SELL", sym, ref_ts, last_close,
+                                    f"SELL(Pro Trend Reversal: ->DOWN, +{self.sell_profit_threshold*100:.1f}% OK)",
+                                    condition_name="",
+                                    source="bar",
+                                    extra={
+                                        "suggested_qty": suggested_qty,
+                                        "avg_buy": avg_px,
+                                        "profit_threshold": self.sell_profit_threshold,
+                                    },
+                                )
                     else:
                         logger.debug(f"[Monitor] {sym} SELL: Pro OFF. Periodic SELL suppressed.")
 
