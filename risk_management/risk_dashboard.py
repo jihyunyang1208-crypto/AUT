@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer, QFileInfo
+from PySide6.QtCore import Qt, QTimer, QFileInfo, Signal
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
     QFrame, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
@@ -42,6 +42,7 @@ class StrategyRow:
 
 class RiskDashboard(QGroupBox):
     """스레드 없이 협력형 펌프로 '오늘만 새로고침' 수행 + 단계별/배치 로깅 + 0건 우회 기록"""
+    pnl_snapshot = Signal(dict)
 
     def __init__(
         self,
@@ -73,7 +74,6 @@ class RiskDashboard(QGroupBox):
         self._init_ui()
         self._init_timer()
         self.refresh(force=True)
-        pnl_snapshot = Signal(dict)
 
 
     # ---------------- UI ----------------
