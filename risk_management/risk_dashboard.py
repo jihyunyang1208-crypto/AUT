@@ -73,6 +73,8 @@ class RiskDashboard(QGroupBox):
         self._init_ui()
         self._init_timer()
         self.refresh(force=True)
+        pnl_snapshot = Signal(dict)
+
 
     # ---------------- UI ----------------
     def _init_ui(self) -> None:
@@ -190,6 +192,11 @@ class RiskDashboard(QGroupBox):
 
             data = json.loads(self._json_path_obj.read_text(encoding="utf-8"))
             self._update_from_result(data)
+
+            # ★ 메인 UI로 스냅샷 emit (리프레시 때마다)
+            snap = self._build_snapshot_for_ui(data)
+            self.pnl_snapshot.emit(snap)
+
         except Exception:
             logger.exception("RiskDashboard.refresh error")
 
@@ -506,3 +513,31 @@ class RiskDashboard(QGroupBox):
             self.start_auto_refresh()
         except Exception:
             logger.exception("Failed to restart auto refresh")
+
+    def _build_snapshot_for_ui(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        symbols = result.get("symbols") or {}
+        by_symbol: Dict[str, Dict[str, Any]] = {}
+
+        for code6, s in symbols.items():
+            if not isinstance(s, dict):
+                continue
+            avg_buy = float(s.get("avg_price", 0.0) or 0.0)
+            last_sell = s.get("last_sell_price")  # 없으면 None
+            try:
+                avg_sell = float(last_sell) if last_sell is not None else None
+            except Exception:
+                avg_sell = None
+
+            by_symbol[code6] = {
+                "avg_buy_price": avg_buy if avg_buy > 0 else None,
+                "avg_sell_price": avg_sell,        # 있으면 전달
+                "qty": int(s.get("qty", 0) or 0),
+                # 확장 여지: "fees": s.get("fees", 0.0), "realized_pnl_net": s.get(...)
+            }
+
+        # 포트폴리오/전략 요약은 필요 최소치만(원하면 확장)
+        return {
+            "portfolio": {},
+            "by_symbol": by_symbol,
+            "by_condition": {},   # 필요 시 조건식 집계 넣기
+        }

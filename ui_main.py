@@ -69,7 +69,7 @@ except Exception as e:
 # 포지션 관리 및 리스크 집계 모듈
 from trade_pro.auto_trader import AutoTrader
 # RiskDashboard 모듈 가져오기: 리스크 대시보드를 별도 모듈에서 관리
-from risk_dashboard import RiskDashboard
+from risk_management.risk_dashboard import RiskDashboard
 from utils.stock_info_manager import StockInfoManager 
 from risk_management.trading_results import TradingResultStore
 from risk_management.orders_watcher import OrdersCSVWatcher, WatcherConfig
@@ -423,7 +423,6 @@ class MainWindow(QMainWindow):
         최신 RiskDashboard 클래스를 이용해 trading_result.json을 실시간 반영하고,
         종목별 손익률/손익 그래프를 표시합니다.
         """
-        from risk_dashboard import RiskDashboard
 
         # 현재가 제공 함수 정의 (옵션)
         def price_provider(sym: str) -> Optional[float]:
