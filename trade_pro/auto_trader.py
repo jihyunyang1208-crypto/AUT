@@ -596,6 +596,23 @@ class AutoTrader:
             ticks += step_ticks
         return prices
 
+    def _compute_ladder_prices_dynamic_up(
+        self, *, cur_price: int, count: int,
+        start_ticks_above: int, step_ticks: int,
+        tick_fn: Callable[[int], int]
+    ) -> List[int]:
+        prices: List[int] = []
+        ticks_to_go = start_ticks_above
+        base = cur_price
+        for _ in range(count):
+            t = max(1, tick_fn(base))
+            p = base + (ticks_to_go * t)
+            p = self._snap_to_tick(p, t)
+            prices.append(p)
+            base = p
+            ticks_to_go += step_ticks
+        return prices
+
     def _compute_ladder_prices_dynamic(
         self, *, cur_price: int, count: int, start_ticks_below: int, step_ticks: int, tick_fn: Callable[[int], int]
     ) -> List[int]:
@@ -675,10 +692,17 @@ class AutoTrader:
                   step_ticks=step_ticks, target_total_qty=target_total_qty,
                   remaining_cap=remaining_cap)
 
-        prices = self._compute_ladder_prices_fixed(
-            cur_price=cur_price, tick=tick, count=num_slices,
-            start_ticks_below=start_ticks_below, step_ticks=step_ticks
-        )
+        if ("tick" in payload) and int(payload["tick"]) > 0:
+            prices = self._compute_ladder_prices_fixed(
+                cur_price=cur_price, tick=tick, count=num_slices,
+                start_ticks_below=start_ticks_below, step_ticks=step_ticks
+            )
+        else:
+            prices = self._compute_ladder_prices_dynamic(
+                cur_price=cur_price, count=num_slices,
+                start_ticks_below=start_ticks_below, step_ticks=step_ticks,
+                tick_fn=self._krx_tick
+            )
         self._dbg("ladder_buy.prices", count=len(prices), first=prices[:3], last=prices[-3:])
         mode_label = "(SIM)" if self.simulation else "(LIVE)"
 
@@ -948,10 +972,17 @@ class AutoTrader:
         self._dbg("ladder_sell.qty_plan", total=sum(qty_plan),
                   plan=qty_plan[:10] + (["..."] if len(qty_plan) > 10 else []))
 
-        prices = self._compute_ladder_prices_fixed_up(
-            cur_price=cur_price, tick=tick, count=num_slices,
-            start_ticks_above=start_ticks_above, step_ticks=step_ticks
-        )
+        if ("tick" in payload) and int(payload["tick"]) > 0:
+            prices = self._compute_ladder_prices_fixed_up(
+                cur_price=cur_price, tick=tick, count=num_slices,
+                start_ticks_above=start_ticks_above, step_ticks=step_ticks
+            )
+        else:
+            prices = self._compute_ladder_prices_dynamic_up(
+                cur_price=cur_price, count=num_slices,
+                start_ticks_above=start_ticks_above, step_ticks=step_ticks,
+                tick_fn=self._krx_tick
+            )
         self._dbg("ladder_sell.prices", count=len(prices), first=prices[:3], last=prices[-3:])
 
         results: List[Dict[str, Any]] = []
