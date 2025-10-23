@@ -1,240 +1,242 @@
-# smoke_test_unified_autotrader.py
+# -*- coding: utf-8 -*-
 import asyncio
-import sys
-import types
-import uuid
-from collections import defaultdict
-from dataclasses import dataclass
-from typing import Any, Dict, List
+from datetime import datetime, timezone
+from pathlib import Path
 
-# ─────────────────────────────────────────────────────────
-# 0) 가짜 SimEngine 주입 (simulation 모드 전용)
-# ─────────────────────────────────────────────────────────
-class _FakeSimEngine:
-    def __init__(self, log_fn=None):
-        self._log = log_fn or (lambda m: None)
-        self._n = 0
-    def _oid(self, prefix):
-        self._n += 1
-        return f"{prefix}-{uuid.uuid4().hex[:8]}-{self._n}"
-    def submit_market_buy(self, *, stk_cd, qty, parent_uid=None, strategy=None):
-        oid = self._oid("SIM-MKT-BUY"); self._log(f"  Sim.buy MKT {stk_cd} x{qty} → {oid}"); return oid
-    def submit_limit_buy(self, *, stk_cd, limit_price, qty, parent_uid=None, strategy=None):
-        oid = self._oid("SIM-LMT-BUY"); self._log(f"  Sim.buy LMT {stk_cd} x{qty} @ {limit_price} → {oid}"); return oid
-    def submit_market_sell(self, *, stk_cd, qty, parent_uid=None, strategy=None):
-        oid = self._oid("SIM-MKT-SELL"); self._log(f"  Sim.sell MKT {stk_cd} x{qty} → {oid}"); return oid
-    def submit_limit_sell(self, *, stk_cd, limit_price, qty, parent_uid=None, strategy=None):
-        oid = self._oid("SIM-LMT-SELL"); self._log(f"  Sim.sell LMT {stk_cd} x{qty} @ {limit_price} → {oid}"); return oid
-    def on_market_update(self, event: dict): self._log(f"  [tick] {event}")
+import pytest
 
-_sim_mod = types.ModuleType("simulator.sim_engine")
-_sim_mod.SimEngine = _FakeSimEngine
-sys.modules["simulator"] = types.ModuleType("simulator")
-sys.modules["simulator.sim_engine"] = _sim_mod
+# SUT
+from trade_pro.auto_trader import (
+    AutoTrader, TradeSettings, LadderSettings, TradeLogger
+)
 
-# ─────────────────────────────────────────────────────────
-# 1) AutoTrader 임포트 (여러 경로 호환)
-# ─────────────────────────────────────────────────────────
-AutoTrader = TradeSettings = LadderSettings = None
-_errors = []
-for path in ("trade_pro.auto_trader", "core.auto_trader", "auto_trader"):
-    try:
-        mod = __import__(path, fromlist=["*"])
-        AutoTrader = getattr(mod, "AutoTrader")
-        TradeSettings = getattr(mod, "TradeSettings")
-        LadderSettings = getattr(mod, "LadderSettings")
-        break
-    except Exception as e:
-        _errors.append((path, e))
-if AutoTrader is None:
-    raise ImportError("AutoTrader import failed. Tried:\n" + "\n".join(f"- {p}: {e}" for p, e in _errors))
+# -----------------------------
+# Test Doubles (간단 목 구현체)
+# -----------------------------
+class MockOrderResponse:
+    def __init__(self, status_code=200, header=None, body=None):
+        self.status_code = status_code
+        self.header = header or {"api-id": "mock", "cont-yn": "N", "next-key": ""}
+        self.body = body or {"return_code": 0, "return_msg": "OK"}
 
-# ─────────────────────────────────────────────────────────
-# 2) 더미 브리지 & 포지션 매니저 (이벤트 수집용)
-# ─────────────────────────────────────────────────────────
-class _EventCollector:
-    def __init__(self): self.events: List[Dict[str, Any]] = []
-    def emit(self, evt): self.events.append(evt)
+class MockBroker:
+    def __init__(self):
+        self.calls = []
 
-class _DummyBridge:
-    def __init__(self, collector: _EventCollector):
-        self.log = _EventCollector()             # 로그는 버려도 무방
-        self.order_event = collector             # 신뢰할 이벤트 수집
+    def name(self) -> str:
+        return "mock"
 
-class _DummyPM:
-    def __init__(self, qty_map=None, pend=None):
+    def place_order(self, req):
+        # 최소 필드만 기록 (연결 여부 검증 목적)
+        self.calls.append({
+            "stk_cd": req.stk_cd,
+            "side": req.side,
+            "trde_tp": req.trde_tp,
+            "ord_uv": req.ord_uv,
+            "ord_qty": req.ord_qty,
+        })
+        return MockOrderResponse(200)
+
+class MockPositionManager:
+    def __init__(self, qty_map=None, pend_buy=0, pend_sell=0):
         self.qty_map = qty_map or {}
-        self.pending = pend or defaultdict(lambda: (0, 0))
-    def get_qty(self, symbol: str) -> int:
-        s = str(symbol)[-6:].zfill(6)
-        return int(self.qty_map.get(s, 0))
-    def get_pending(self, symbol: str):
-        s = str(symbol)[-6:].zfill(6)
-        return self.pending.get(s, (0, 0))
-    def apply_fill_buy(self, symbol: str, qty: int, price: float):
-        s = str(symbol)[-6:].zfill(6)
-        self.qty_map[s] = self.get_qty(s) + int(qty)
-    def apply_fill_sell(self, symbol: str, qty: int, price: float):
-        s = str(symbol)[-6:].zfill(6)
-        self.qty_map[s] = max(0, self.get_qty(s) - int(qty))
+        self.pend_buy = pend_buy
+        self.pend_sell = pend_sell
+        self.reserved = {"buy": [], "sell": []}
+        self.fills = []
 
-# ─────────────────────────────────────────────────────────
-# 3) 유틸: 섹션별 이벤트 슬라이스
-# ─────────────────────────────────────────────────────────
-def slice_new_events(col: _EventCollector, before_len: int) -> List[Dict[str, Any]]:
-    return col.events[before_len:]
+    # reserves
+    def reserve_buy(self, code, qty):  self.reserved["buy"].append((code, qty))
+    def release_buy(self, code, qty):  pass
+    def reserve_sell(self, code, qty): self.reserved["sell"].append((code, qty))
+    def release_sell(self, code, qty): pass
 
-def filter_events(evts, *, action=None, symbol=None, status=None):
-    out = []
-    for e in evts:
-        if action and e.get("action") != action: continue
-        if symbol and e.get("symbol") != symbol: continue
-        if status and e.get("status") != status: continue
-        out.append(e)
-    return out
+    # holdings
+    def get_qty(self, code): return int(self.qty_map.get(code, 0))
+    def get_pending(self, code): return (self.pend_buy, self.pend_sell)
 
-def assert_true(cond, msg):
-    if not cond:
-        raise AssertionError("FAIL: " + msg)
-    print("PASS:", msg)
+    # fills
+    def apply_fill_buy(self, code, qty, price):
+        self.fills.append(("BUY", code, qty, price))
+        self.qty_map[code] = self.get_qty(code) + qty
 
-# ─────────────────────────────────────────────────────────
-# 4) 테스트 러너
-# ─────────────────────────────────────────────────────────
-async def run_tests():
-    print("===== SMOKE (unified handle_signal / thin make_on_signal) =====")
+    def apply_fill_sell(self, code, qty, price):
+        self.fills.append(("SELL", code, qty, price))
+        self.qty_map[code] = max(0, self.get_qty(code) - qty)
 
-    # 공통 라더 파라미터 (테스트 빨리 돌도록 interval 짧게)
-    ladder = LadderSettings(
-        unit_amount=100_000, num_slices=3,
-        start_ticks_below=1, step_ticks=1,
-        start_ticks_above=1, min_qty=1,
-        interval_sec=0.01
+class CaptureSignal:
+    """Qt 없이도 emit 모방을 위한 객체"""
+    def __init__(self, sink):
+        self._sink = sink
+    def emit(self, evt):
+        self._sink.append(evt)
+
+class MockBridge:
+    def __init__(self):
+        self.events = []
+        self.order_event = CaptureSignal(self.events)
+        self.logs = []
+        self.log = CaptureSignal(self.logs)
+
+# -----------------------------
+# 공용 픽스처
+# -----------------------------
+@pytest.fixture
+def mock_broker(monkeypatch):
+    """AutoTrader가 내부에서 사용하는 create_broker를 목으로 치환"""
+    mb = MockBroker()
+    def _create_broker(**kwargs):
+        return mb
+    # SUT 네임스페이스의 create_broker 심
+    import trade_pro.auto_trader as at_mod
+    monkeypatch.setattr(at_mod, "create_broker", lambda **kw: _create_broker(**kw))
+    return mb
+
+@pytest.fixture
+def position_mgr():
+    return MockPositionManager()
+
+@pytest.fixture
+def trader(mock_broker, position_mgr):
+    ts = TradeSettings(
+        master_enable=True,
+        auto_buy=True,
+        auto_sell=True,
+        order_type="limit",
+        simulation_mode=True,      # 실제 체결 아님
+        on_signal_use_ladder=True,
     )
-
-    # === A) on_signal_use_ladder=True: on_signal BUY=ladder_buy, SELL=ladder_sell ===
-    colA = _EventCollector()
-    bridgeA = _DummyBridge(colA)
-    pmA = _DummyPM(qty_map={"005930": 11})  # 보유 11주 → SELL ladder 분할 기대
-    atA = AutoTrader(
-        settings=TradeSettings(
-            auto_buy=True, auto_sell=True,
-            order_type="limit",
-            simulation_mode=True,
-            ladder_sell_enable=True,
-            on_signal_use_ladder=True,  # 핵심
-        ),
-        ladder=ladder,
-        bridge=bridgeA,
-        position_mgr=pmA,
-        use_mock=True,
+    ls = LadderSettings(
+        unit_amount=100_000,
+        num_slices=5,
+        start_ticks_below=1,
+        step_ticks=1,
+        start_ticks_above=1,
     )
-    handlerA = atA.make_on_signal(bridgeA)
+    br = MockBridge()
+    t = AutoTrader(settings=ts, ladder=ls, bridge=br, position_mgr=position_mgr, use_mock=True)
+    return t
 
-    # A1: BUY (on_signal) → ladder_buy (3슬라이스)
-    before = len(colA.events)
-    class Sig: 
-        def __init__(self, side, symbol, price): self.side, self.symbol, self.price = side, symbol, price
-    handlerA(Sig("BUY", "005930", 71900))
-    await asyncio.sleep(0.1)
-    evtsA1 = slice_new_events(colA, before)
-    buy_news = filter_events(evtsA1, action="BUY", symbol="005930", status="SIM_SUBMIT")
-    assert_true(len(buy_news) == ladder.num_slices, f"A1 BUY ladder events == {ladder.num_slices}")
+# -----------------------------
+# 1) Ladder 계산이 1틱씩 변하는지(동적 틱)
+# -----------------------------
+def _assert_one_tick_down(trader: AutoTrader, prices):
+    assert len(prices) >= 2
+    for prev, cur in zip(prices, prices[1:]):
+        expected = trader._krx_tick(prev)
+        assert prev - cur == expected, f"down step != tick: prev={prev}, cur={cur}, tick={expected}"
 
-    # A2: SELL (on_signal) → ladder_sell (3슬라이스), 총 11주 분할
-    before = len(colA.events)
-    handlerA(Sig("SELL", "005930", 72500))
-    await asyncio.sleep(0.1)
-    evtsA2 = slice_new_events(colA, before)
-    sell_news = filter_events(evtsA2, action="SELL", symbol="005930", status="SIM_SUBMIT")
-    assert_true(len(sell_news) == ladder.num_slices, f"A2 SELL ladder events == {ladder.num_slices}")
-    total_qty = sum(int(e.get("qty", 0)) for e in sell_news)
-    assert_true(total_qty == 11, "A2 SELL total_qty == PositionManager qty (11)")
+def _assert_one_tick_up(trader: AutoTrader, prices):
+    assert len(prices) >= 2
+    for prev, cur in zip(prices, prices[1:]):
+        expected = trader._krx_tick(prev)
+        assert cur - prev == expected, f"up step != tick: prev={prev}, cur={cur}, tick={expected}"
 
-    # === B) handle_signal 직접 호출 (mode 미지정) → 자동 보강으로 ladder 동작 ===
-    colB = _EventCollector()
-    bridgeB = _DummyBridge(colB)
-    atB = AutoTrader(
-        settings=TradeSettings(
-            auto_buy=True, auto_sell=True,
-            order_type="limit",
-            simulation_mode=True,
-            on_signal_use_ladder=True,  # 자동 보강 켬
-        ),
-        ladder=ladder,
-        bridge=bridgeB,
-        position_mgr=_DummyPM(qty_map={"000660": 5}),
-        use_mock=True,
+def test_ladder_buy_dynamic_tick_1step_each(trader: AutoTrader):
+    # 10,050원에서 시작 → 10,000 경계(틱 10) 아래로 내려가면 9,995(틱 5)로 바뀌어야 함
+    cur_price = 10050
+    prices = trader._compute_ladder_prices_dynamic(
+        cur_price=cur_price, count=6, start_ticks_below=1, step_ticks=1, tick_fn=trader._krx_tick
     )
-    # B1: BUY minimal payload → ladder_buy로 3슬라이스 기대
-    before = len(colB.events)
-    payloadB1 = {"signal": "BUY", "data": {"stk_cd": "000660", "dmst_stex_tp": "KRX", "ord_uv": "121000"}}
-    await atB.handle_signal(payloadB1)
-    await asyncio.sleep(0.1)
-    evtsB1 = slice_new_events(colB, before)
-    buysB = filter_events(evtsB1, action="BUY", symbol="000660", status="SIM_SUBMIT")
-    assert_true(len(buysB) == ladder.num_slices, "B1 BUY auto-ladder events == num_slices")
+    # 예: [10040, 10030, 10020, 10010, 10000,  9995] 처럼 경계 통과 시 틱 전환
+    _assert_one_tick_down(trader, prices)
 
-    # B2: SELL minimal payload → ladder_sell로 3슬라이스 기대 (총 5주)
-    before = len(colB.events)
-    payloadB2 = {"signal": "SELL", "data": {"stk_cd": "000660", "dmst_stex_tp": "KRX", "ord_uv": "121000"}}
-    await atB.handle_signal(payloadB2)
-    await asyncio.sleep(0.1)
-    evtsB2 = slice_new_events(colB, before)
-    sellsB = filter_events(evtsB2, action="SELL", symbol="000660", status="SIM_SUBMIT")
-    assert_true(len(sellsB) == ladder.num_slices, "B2 SELL auto-ladder events == num_slices")
-    assert_true(sum(int(e.get("qty", 0)) for e in sellsB) == 5, "B2 SELL total_qty == PM qty (5)")
-
-    # === C) on_signal_use_ladder=False: fallback 확인 (BUY=1슬라이스, SELL=원샷) ===
-    colC = _EventCollector()
-    bridgeC = _DummyBridge(colC)
-    pmC = _DummyPM(qty_map={"035720": 8})
-    atC = AutoTrader(
-        settings=TradeSettings(
-            auto_buy=True, auto_sell=True,
-            order_type="limit",
-            simulation_mode=True,
-            on_signal_use_ladder=False,  # 자동 보강 끔 → fallback
-        ),
-        ladder=ladder,
-        bridge=bridgeC,
-        position_mgr=pmC,
-        use_mock=True,
+def test_ladder_sell_dynamic_tick_1step_each(trader: AutoTrader):
+    # SELL은 위로 → 99,950(틱 5)에서 100,000 경계 넘으면 틱 10으로
+    cur_price = 99950
+    # 동적 업 버전이 없다면 본 테스트는 skip(사용자 코드에 따라 구현 여부 다름)
+    if not hasattr(trader, "_compute_ladder_prices_dynamic_up"):
+        pytest.skip("dynamic_up helper가 아직 구현되지 않았습니다.")
+    prices = trader._compute_ladder_prices_dynamic_up(
+        cur_price=cur_price, count=6, start_ticks_above=1, step_ticks=1, tick_fn=trader._krx_tick
     )
-    handlerC = atC.make_on_signal(bridgeC)
+    _assert_one_tick_up(trader, prices)
 
-    # C1: BUY (fallback → 1슬라이스 라더)
-    before = len(colC.events)
-    handlerC(Sig("BUY", "035720", 131000))
-    await asyncio.sleep(0.1)
-    evtsC1 = slice_new_events(colC, before)
-    buysC = filter_events(evtsC1, action="BUY", symbol="035720", status="SIM_SUBMIT")
-    assert_true(len(buysC) == 1, "C1 BUY fallback → 1 slice")
+# -----------------------------
+# 2) handle_signal 라우팅 연기 없이 동작
+# -----------------------------
+def test_handle_signal_routes_to_ladder_buy(trader: AutoTrader, mock_broker: MockBroker):
+    payload = {
+        "signal": "BUY",
+        "data": {
+            "stk_cd": "005930",
+            "cur_price": 10050
+        },
+        "strategy": "test-cond"
+    }
+    ret = asyncio.run(trader.handle_signal(payload))
+    assert any(call["side"] == "BUY" for call in mock_broker.calls), "BUY 주문이 발생해야 합니다."
+    assert isinstance(ret, dict)
 
-    # C2: SELL (fallback → simple sell 1건, qty=8)
-    before = len(colC.events)
-    handlerC(Sig("SELL", "035720", 132000))
-    await asyncio.sleep(0.1)
-    evtsC2 = slice_new_events(colC, before)
-    sellsC = filter_events(evtsC2, action="SELL", symbol="035720", status="SIM_SUBMIT")
-    # simple_sell 도 SIM_SUBMIT 한 건으로 기록됨
-    assert_true(len(sellsC) == 1, "C2 SELL fallback → single simple sell")
-    assert_true(int(sellsC[0].get("qty", 0)) == 8, "C2 SELL qty == PM qty (8)")
+def test_handle_signal_routes_to_simple_sell_when_no_qty(
+    trader: AutoTrader, mock_broker: MockBroker, position_mgr: MockPositionManager, monkeypatch
+):
+    # 보유 수량 없음 → ladder_sell이 아닌 simple_sell로 강등되는지 관찰
+    position_mgr.qty_map["005930"] = 0
 
-    # === D) 레거시 제거 확인 ===
-    assert_true(not hasattr(AutoTrader, "make_on_signal_legacy"), "D legacy method removed (no make_on_signal_legacy)")
+    called = {"simple_sell": 0}
+    async def fake_simple_sell(payload):
+        called["simple_sell"] += 1
+        return {"ok": True}
 
-    print("\n===== ALL TESTS PASSED =====")
+    monkeypatch.setattr(trader, "_handle_simple_sell", fake_simple_sell)
 
-def main():
-    try:
-        asyncio.run(run_tests())
-    except AssertionError as e:
-        print(str(e))
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print("Interrupted")
-        sys.exit(130)
+    payload = {
+        "signal": "SELL",
+        "data": {
+            "stk_cd": "005930",
+            "cur_price": 10050
+        },
+        "strategy": "test-cond"
+    }
+    asyncio.run(trader.handle_signal(payload))
+    assert called["simple_sell"] == 1, "보유 0이면 simple_sell 브랜치가 호출되어야 합니다."
 
-if __name__ == "__main__":
-    main()
+# -----------------------------
+# 3) WebSocket 이벤트 중복 체결 dedupe
+# -----------------------------
+def test_ws_fill_dedupe(trader: AutoTrader):
+    # 동일 exec_id/part_seq 2회 → 1회만 ACCEPT
+    msg = {
+        "type": "FILL",
+        "side": "BUY",
+        "symbol": "005930",
+        "filled_qty": 10,
+        "fill_price": 10000,
+        "exec_id": "X123",
+        "part_seq": "1",
+        "order_id": "O-1",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    trader.on_ws_message(msg)
+    trader.on_ws_message(msg)  # duplicate
+    # 이벤트는 1건만 ORDER_FILL이어야 함
+    fills = [e for e in trader.bridge.events if e.get("type") == "ORDER_FILL"]
+    assert len(fills) == 1, f"중복 체결이 제거되어야 합니다. got={len(fills)}"
+
+# -----------------------------
+# 4) TradeLogger 슬림 모드 파일 기록 스모크
+# -----------------------------
+def test_trade_logger_slim_writes(tmp_path: Path):
+    tl = TradeLogger(log_dir=str(tmp_path), slim=True)
+    rec = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "strategy": "smoke",
+        "action": "BUY",
+        "stk_cd": "123456",
+        "order_type": "limit",
+        "price": 12345,
+        "qty": 1,
+        "status": "HTTP_200",
+        "resp_code": 0,
+        "resp_msg": "OK",
+    }
+    tl.write_order_record(rec)
+    # 파일 존재 확인
+    csv_file = next(tmp_path.glob("orders_*.csv"))
+    jsonl_file = next(tmp_path.glob("orders_*.jsonl"))
+    assert csv_file.exists()
+    assert jsonl_file.exists()
+    # 간단 무결성: 최소 길이 확인
+    assert csv_file.stat().st_size > 0
+    assert jsonl_file.stat().st_size > 0

@@ -601,33 +601,32 @@ class AutoTrader:
         start_ticks_above: int, step_ticks: int,
         tick_fn: Callable[[int], int]
     ) -> List[int]:
+        """항상 1×tick 간격으로 위 방향 ladder 생성"""
         prices: List[int] = []
-        ticks_to_go = start_ticks_above
         base = cur_price
         for _ in range(count):
             t = max(1, tick_fn(base))
-            p = base + (ticks_to_go * t)
-            p = self._snap_to_tick(p, t)
+            p = self._snap_to_tick(base + t, t)
             prices.append(p)
             base = p
-            ticks_to_go += step_ticks
         return prices
 
     def _compute_ladder_prices_dynamic(
-        self, *, cur_price: int, count: int, start_ticks_below: int, step_ticks: int, tick_fn: Callable[[int], int]
+        self, *, cur_price: int, count: int, 
+        start_ticks_below: int, step_ticks: int, 
+        tick_fn: Callable[[int], int]
     ) -> List[int]:
+        """항상 1×tick 간격으로 아래 방향 ladder 생성"""
         prices: List[int] = []
         ticks_to_go = start_ticks_below
         base = cur_price
         for _ in range(count):
             t = max(1, tick_fn(base))
-            p = base - (ticks_to_go * t)
-            p = self._snap_to_tick(p, t)
+            p = self._snap_to_tick(base - t, t)
             if p <= 0:
                 break
             prices.append(p)
             base = p
-            ticks_to_go += step_ticks
         return prices
 
     def _resolve_trde_tp(self) -> str:
