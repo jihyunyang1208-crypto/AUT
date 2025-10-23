@@ -12,6 +12,7 @@ from typing import Dict, Optional, Any, List
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+from utils.result_paths import path_today
 
 @dataclass
 class SymbolState:
@@ -61,8 +62,8 @@ class TradingResultStore:
       - RLock 사용 (재진입 안전)
       - 스냅샷 생성은 락 안, 파일 I/O는 락 밖 (UI 블로킹 방지)
     """
-    def __init__(self, json_path: str = "data/trading_result.json") -> None:
-        self._json_path = Path(json_path)
+    def __init__(self, json_path: Optional[str | Path] = None) -> None:
+        self._json_path: Path = Path(json_path) if json_path is not None else path_today()
         self._symbols: Dict[str, SymbolState] = {}
         self._strategies: Dict[str, StrategyState] = {}
         self._summary: Dict[str, Any] = {

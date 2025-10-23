@@ -14,6 +14,7 @@ import threading
 from core.macd_calculator import get_points as _get_points
 from core.macd_calculator import macd_bus
 from risk_management.result_reader import TradingResultReader
+from utils.result_paths import path_today
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,6 @@ class ExitEntryMonitor:
         bar_close_window_end_sec: int = 30,
         disable_server_pull: bool = False,
         custom: Optional[MonitorCustom] = None,
-        trading_result_path: str = "data/trading_result.json", # ← 추가
         result_reader: TradingResultReader | None = None,      # ← 추가
         sell_profit_threshold: float = 0.03,                   # ← 추가: +3%
     ):
@@ -175,9 +175,7 @@ class ExitEntryMonitor:
         self.sell_profit_threshold: float = float(sell_profit_threshold)
 
         # ✅ 결과 리더 세팅 (없으면 경로로 생성)
-        self.result_reader: TradingResultReader = (
-            result_reader or TradingResultReader(trading_result_path)
-        )
+        self.result_reader = result_reader or TradingResultReader(path_today())
 
         # MACD 시리즈 준비 이벤트 구독 (가능할 때만)
         try:

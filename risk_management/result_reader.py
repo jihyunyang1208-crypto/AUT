@@ -5,6 +5,7 @@ import logging
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
+from utils.result_paths import path_today
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ class TradingResultReader:
     - 리로드 실패(파일 교체 중/파싱 오류 등) 시 기존 캐시를 유지 → 충돌/스파이크 회피
     - 'symbols[code].avg_price'를 표준 소스 오브 트루스로 사용
     """
-    def __init__(self, json_path: str = "data/trading_result.json") -> None:
+    def __init__(self, json_path: str = str(path_today())) -> None:
         self._path = Path(json_path)
         self._lock = threading.RLock()
         self._mtime: Optional[float] = None

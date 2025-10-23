@@ -44,6 +44,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QFileDialog
 
 from trading_report.report_dialog import ReportDialog
+import utils.result_paths as result_paths
 
 # 설정 / 와이어링  (분리해서 임포트하고 에러 로그 남김)
 try:
@@ -71,6 +72,8 @@ from trade_pro.auto_trader import AutoTrader
 # RiskDashboard 모듈 가져오기: 리스크 대시보드를 별도 모듈에서 관리
 from risk_management.risk_dashboard import RiskDashboard
 from utils.stock_info_manager import StockInfoManager 
+from utils.result_paths import path_today, path_today
+
 from risk_management.trading_results import TradingResultStore
 from risk_management.orders_watcher import OrdersCSVWatcher, WatcherConfig
 
@@ -441,12 +444,18 @@ class MainWindow(QMainWindow):
 
         # ✅ 새로운 리스크 대시보드 생성
         self.risk_dashboard = RiskDashboard(
-            json_path="data/trading_result.json",
+            json_path=str(result_paths.path_today()),
             price_provider=price_provider,   # 현재가 미제공 시 None 가능
             on_daily_report=on_daily_report,
             poll_ms=1000,
             parent=self
         )
+        try:
+            self.risk_dashboard.pnl_snapshot.disconnect(self.on_pnl_snapshot)
+        except Exception:
+            pass
+        self.risk_dashboard.pnl_snapshot.connect(self.on_pnl_snapshot)
+
 
         # 기존 방식 그대로 holder에 장착
         self.risk_panel = self.risk_dashboard
@@ -462,13 +471,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        store = TradingResultStore("data/trading_result.json")
+
+        store = TradingResultStore(path_today())
 
         cfg = WatcherConfig(
             base_dir=Path.cwd() / "logs",
             subdir="trades",
             file_pattern="orders_{date}.csv",
-            json_path=Path("data/trading_result.json"),
+            json_path=path_today(),
             poll_ms=700,
             bootstrap_if_missing=True,   # 첫 실행 시 과거 CSV로 재구성
         )
@@ -623,6 +633,7 @@ class MainWindow(QMainWindow):
 
 
     # ---------------- 손익 스냅샷 수신 ----------------
+    
     @Slot(dict)
     def on_pnl_snapshot(self, snap: dict):
         """

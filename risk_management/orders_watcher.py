@@ -13,6 +13,7 @@ from typing import Dict, Optional, Iterable, Iterator, List
 from PySide6.QtCore import QObject, QTimer, QElapsedTimer
 
 from .trading_results import TradingResultStore, TradeRow
+from utils.result_paths import path_today
 
 # -------------------- Logging --------------------
 logger = logging.getLogger(__name__)
@@ -220,7 +221,7 @@ class WatcherConfig:
     file_pattern: str = "orders_{date}.csv"
     subdir: str = "trades"
     poll_ms: int = 700
-    json_path: Path = Path(__file__).resolve().parent / "data" / "trading_result.json"
+    json_path: Path = path_today()   
     bootstrap_if_missing: bool = True
 
 def rebuild_store_from_all_csv(store: TradingResultStore, cfg: WatcherConfig) -> int:

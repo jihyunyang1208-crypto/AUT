@@ -26,6 +26,7 @@ from risk_management.orders_watcher import (
     _normalize_side, _to_int, _to_float, _infer_side, _pick_any, _to_float_soft
 )
 from risk_management.trading_results import TradingResultStore, TradeRow
+from utils.result_paths import path_today, path_today
 
 logger = logging.getLogger(__name__)
 if not logging.getLogger().handlers:
@@ -47,17 +48,16 @@ class RiskDashboard(QGroupBox):
     def __init__(
         self,
         *,
-        json_path: str = "data/trading_result.json",
+        json_path: str = str(path_today()),
         price_provider: Optional[Callable[[str], Optional[float]]] = None,
         on_daily_report: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
         poll_ms: int = 1000
     ) -> None:
         super().__init__("전략별 수익률 대시보드", parent)
-
-        self._json_path_obj = Path(json_path).resolve()
+        self._json_path_obj: Path = Path(json_path) if json_path is not None else path_today()
         self._json_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        self._json_path = str(self._json_path_obj)
+        self._json_path = str(self._json_path_obj)  # QFileInfo 용도로 문자열도 병행 보관
         self._on_daily_report = on_daily_report or (lambda: None)
         self._poll_ms = max(300, int(poll_ms))
         self._last_mtime: Optional[int] = None
@@ -179,6 +179,47 @@ class RiskDashboard(QGroupBox):
         if not self._timer.isActive():
             self._timer.start()
 
+
+    def update_snapshot(self, snap: Dict[str, Any]) -> None:
+        """
+        외부에서 계산된 PnL 스냅샷(dict)을 화면에 반영.
+        기대 구조:
+        {
+          "portfolio": {...},              # 사용 안 해도 무방
+          "by_condition": { name: {
+              "realized_pnl_net": float,   # 또는 realized_net
+              "win_rate": float,
+              "roi_pct": float,            # 또는 roi
+              "wins": int
+          }, ...},
+          "by_symbol": {...}               # 필요시 확장
+        }
+        """
+        try:
+            by_cond = snap.get("by_condition") or {}
+            rows: List[StrategyRow] = []
+            for name, s in by_cond.items():
+                if not isinstance(s, dict):
+                    continue
+                realized_net = float(
+                    s.get("realized_pnl_net", s.get("realized_net", 0.0))
+                )
+                win_rate = float(s.get("win_rate", 0.0))
+                roi_pct = float(s.get("roi_pct", s.get("roi", 0.0)))
+                wins = int(s.get("wins", 0))
+                rows.append(StrategyRow(name=name,
+                                        realized_net=realized_net,
+                                        win_rate=win_rate,
+                                        roi_pct=roi_pct,
+                                        wins=wins))
+            # 표/차트 반영
+            self._paint_table(rows)
+            if _HAS_MPL:
+                self._paint_roi_chart(rows)
+        except Exception as e:
+            logger.exception("RiskDashboard.update_snapshot failed: %s", e)
+
+
     # ---------------- 데이터 갱신 ----------------
     def refresh(self, force: bool = False) -> None:
         try:
@@ -196,6 +237,7 @@ class RiskDashboard(QGroupBox):
             # ★ 메인 UI로 스냅샷 emit (리프레시 때마다)
             snap = self._build_snapshot_for_ui(data)
             self.pnl_snapshot.emit(snap)
+            logger.debug("RiskDashboard.refresh")
 
         except Exception:
             logger.exception("RiskDashboard.refresh error")
