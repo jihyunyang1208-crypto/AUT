@@ -1,0 +1,43 @@
+{
+  "date": "2025-10-27",
+  "strategies": {
+    "default": {
+      "buy_notional": 313697040.0,
+      "buy_qty": 28611,
+      "fees": 0.0,
+      "realized_pnl_gross": 221670.0,
+      "realized_pnl_net": 221670.0,
+      "wins": 229,
+      "sells": 331,
+      "win_rate": 69.18,
+      "roi_pct": 0.07,
+      "avg_win": 967.99,
+      "avg_loss": 0.0,
+      "consecutive_losses": 0,
+      "max_consecutive_losses": 5,
+      "daily_loss": -1085870.0,
+      "morning": {
+        "realized_pnl": 0.0,
+        "trades": 0,
+        "wins": 0,
+        "win_rate": 0.0
+      },
+      "afternoon": {
+        "realized_pnl": 134270.0,
+        "trades": 90,
+        "wins": 67,
+        "win_rate": 74.44
+      }
+    }
+  },
+  "summary": {
+    "realized_pnl_gross": 221670.0,
+    "fees": 0.0,
+    "realized_pnl_net": 221670.0,
+    "trades": 331.0,
+    "win_rate": 69.18429003021149,
+    "morning_pnl": 0.0,
+    "afternoon_pnl": 134270.0
+  },
+  "symbols": {}
+}

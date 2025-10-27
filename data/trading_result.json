@@ -1,133 +1,7270 @@
 {
+  "last_updated": "2025-10-27T18:03:40.790792+09:00",
   "symbols": {
     "452280": {
       "qty": 219,
-      "avg_price": 11046.34703196347,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 10850.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 25,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
     },
     "119850": {
       "qty": 80,
-      "avg_price": 37456.25,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 37350.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 40,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
     },
     "006910": {
       "qty": 450,
-      "avg_price": 5376.0,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 5350.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 25,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
     },
     "005690": {
-      "qty": 203,
-      "avg_price": 14178.32512315271,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 14000.0,
-      "last_sell_price": 0.0,
-      "trades": 30,
-      "wins": 0
+      "qty": 3154,
+      "avg_price": 15895.68,
+      "total_buy_amt": 64105500.0,
+      "cumulative_realized_gross": -156750.0,
+      "cumulative_realized_net": -156750.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 16450.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 16000.0,
+      "last_sell_date": "2025-10-27",
+      "total_trades": 725,
+      "total_wins": 4,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.856911+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.920500+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.014595+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.063933+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.109371+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.498767+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.546006+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.597657+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.669550+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.811052+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.345030+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.470201+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.623664+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.734540+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.802381+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.091376+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.200188+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.319404+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.465230+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.501487+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.316145+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.412269+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.522352+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.640706+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.796872+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.147365+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.225222+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.273166+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.312745+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.362389+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.232224+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.387929+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.489414+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.573636+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.708949+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.940560+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.984023+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:17.032304+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:17.074301+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:17.120751+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.042402+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.218515+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.425313+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.552824+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.710688+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.498006+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.584586+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.688702+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.761031+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.837157+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.218582+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.269034+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.383175+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.447553+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.503771+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.304213+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.431692+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.600686+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.746918+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.887934+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.338406+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.453286+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.555636+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.772017+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.050325+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.059334+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.121763+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.201189+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.278903+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.327648+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.048863+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.136514+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.207380+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.270762+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.315866+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.673757+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.723047+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.795533+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.843698+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.902510+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.466735+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.553769+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.639709+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.791870+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.841331+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.327920+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.561758+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.754240+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.043137+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.122339+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.391711+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.590053+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.807304+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.010092+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.264089+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.873436+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.984931+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.070376+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.175991+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.305028+09:00",
+          "date": "2025-10-27"
+        }
+      ]
     },
     "100090": {
       "qty": 100,
-      "avg_price": 22100.0,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 21850.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 25,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
     },
     "083500": {
       "qty": 210,
-      "avg_price": 14008.333333333334,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 13900.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 30,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
     },
     "008040": {
       "qty": 854,
-      "avg_price": 1164.9648711943792,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 1155.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 10,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
     },
     "054540": {
-      "qty": 23,
-      "avg_price": 19993.478260869564,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 19900.0,
-      "last_sell_price": 0.0,
-      "trades": 5,
-      "wins": 0
+      "qty": 480,
+      "avg_price": 20110.32,
+      "total_buy_amt": 13936450.0,
+      "cumulative_realized_gross": 260600.0,
+      "cumulative_realized_net": 260600.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 20000.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 21250.0,
+      "last_sell_date": "2025-10-27",
+      "total_trades": 225,
+      "total_wins": 55,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:57.567083+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:57.589407+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:57.615167+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:57.636569+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:57.664497+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:58.293493+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:58.314730+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:58.358880+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:58.409150+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:58.458088+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.836191+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.880606+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.992697+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.122067+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.235348+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:32.543845+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:32.565356+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:32.586550+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:32.609122+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:32.631024+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.227613+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.249297+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.293730+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.337065+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.387583+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.643006+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.688651+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.780521+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.909530+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.017353+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:10.362190+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:10.387277+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:10.415107+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:10.439359+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:10.466757+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.154370+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.177442+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.222750+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.287486+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.337644+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.377882+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.530511+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.863115+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.195709+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.514721+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:50.664505+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:50.725992+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:50.799914+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:50.853709+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:50.927461+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:53.366376+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:53.446121+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:53.597448+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:53.791670+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:53.924095+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.210058+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.379043+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.801269+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.287973+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.741731+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:00.291378+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:00.470588+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:00.611542+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:00.692363+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:00.759988+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.999092+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:03.160931+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:03.386372+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:03.626448+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:03.812353+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.873997+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.063567+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.277075+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.575858+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.822260+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.175340+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.228408+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.313139+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.377109+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.426628+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.199414+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.297215+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.404961+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.538924+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.673804+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.918568+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.086163+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.339022+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.569178+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.821128+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.366044+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.417324+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.464667+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.516138+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.575290+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.324093+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.412835+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.503424+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.621470+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.721099+09:00",
+          "date": "2025-10-27"
+        }
+      ]
     },
     "138610": {
-      "qty": 20,
-      "avg_price": 40275.0,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 40350.0,
+      "qty": 840,
+      "avg_price": 40336.9,
+      "total_buy_amt": 31406500.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 41550.0,
+      "last_buy_date": "2025-10-27",
       "last_sell_price": 0.0,
-      "trades": 10,
-      "wins": 0
+      "last_sell_date": "",
+      "total_trades": 380,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.348009+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.507267+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.643340+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.772878+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.864665+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:58.739538+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:58.956629+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.188758+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.402158+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.600224+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.452605+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.626903+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.792389+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.945167+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.016138+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.459254+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.558547+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.732805+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.857979+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.918524+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.716405+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.790962+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.858015+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.933372+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:07.041012+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.548576+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.582941+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.621222+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.707607+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.739747+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.865641+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.016470+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.140228+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.275328+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.390160+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.185336+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.246937+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.288804+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.361589+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.409693+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.196945+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.345567+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.462640+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.578346+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.730577+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.990922+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.130441+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.258350+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.390587+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.468641+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.874497+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.942594+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.006461+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.091329+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.143182+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.915895+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.972827+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.039520+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.137296+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.198441+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.420358+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.478962+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.518723+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.547758+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.572741+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.948345+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.075966+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.206557+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.337546+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.479019+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.426692+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.473939+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.566026+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.608013+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 40650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.660426+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.390498+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.515748+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.658838+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.782903+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.912446+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.107949+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.238883+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.391532+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.513203+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.572921+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.962912+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.065042+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.121627+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 42000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.177446+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.262039+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.733813+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.843665+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.935592+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.098292+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.192810+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.384137+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.500712+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.584407+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.666209+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 2,
+          "price": 41550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:40.753412+09:00",
+          "date": "2025-10-27"
+        }
+      ]
     },
     "108490": {
       "qty": 5,
-      "avg_price": 186500.0,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "last_buy_price": 185500.0,
+      "avg_price": 0.0,
+      "total_buy_amt": 0.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 0.0,
+      "last_buy_date": "",
       "last_sell_price": 0.0,
-      "trades": 5,
-      "wins": 0
-    }
-  },
-  "summary": {
-    "realized_pnl_gross": 0.0,
-    "fees": 0.0,
-    "realized_pnl_net": 0.0,
-    "trades": 205.0,
-    "win_rate": 0.0
-  },
-  "strategies": {
-    "default": {
-      "buy_notional": 19057530.0,
-      "fees": 0.0,
-      "realized_pnl_gross": 0.0,
-      "realized_pnl_net": 0.0,
-      "wins": 0,
-      "sells": 0,
-      "win_rate": 0.0,
-      "roi_pct": 0.0
+      "last_sell_date": "",
+      "total_trades": 0,
+      "total_wins": 0,
+      "buy_history": []
+    },
+    "092460": {
+      "qty": 2320,
+      "avg_price": 19933.45,
+      "total_buy_amt": 54007350.0,
+      "cumulative_realized_gross": 785300.0,
+      "cumulative_realized_net": 785300.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 19800.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 21150.0,
+      "last_sell_date": "2025-10-27",
+      "total_trades": 630,
+      "total_wins": 55,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.604608+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.658540+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.703256+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.748698+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.824352+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.232969+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.515846+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.768328+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.038561+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.142600+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.213071+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.337881+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.457355+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.626119+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.745688+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 21100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.511655+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 21050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.557324+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 21000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.600819+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.646160+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.739094+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.515183+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.623827+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.672383+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.745845+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.802551+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.865228+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:05.961403+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.070527+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.204541+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.367930+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.915939+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.987459+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.150374+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.268045+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.375039+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.247632+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.364984+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.467925+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.568549+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.728906+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:12.705637+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:12.908981+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:12.967445+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:13.024553+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:13.112625+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.826736+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.885458+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:15.953501+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.059946+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.145344+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.109478+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.258131+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.310524+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.391401+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.480213+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.865152+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.979041+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.057193+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.141530+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.238350+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.612834+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.698191+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.748958+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.802804+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.868018+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.270052+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.499624+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.796170+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.018055+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.152600+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.233435+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.379761+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.529500+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.691111+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.800757+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 21100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.602302+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 21050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.698889+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 21000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.797505+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.853037+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.920219+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.733562+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.790104+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.863616+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.931856+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.985075+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 20050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.910556+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:34.965149+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.122710+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.255726+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.369786+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.114764+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.234767+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.438431+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19750.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.640878+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.871282+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 20000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.272286+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.480470+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.728053+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:38.901076+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 5,
+          "price": 19800.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.126512+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "041190": {
+      "qty": 33,
+      "avg_price": 8950.0,
+      "total_buy_amt": 11827200.0,
+      "cumulative_realized_gross": 67770.0,
+      "cumulative_realized_net": 67770.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 8930.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 9070.0,
+      "last_sell_date": "2025-10-27",
+      "total_trades": 240,
+      "total_wins": 84,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 11,
+          "price": 8950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.535773+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 11,
+          "price": 8940.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.608460+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 11,
+          "price": 8930.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.683007+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "437730": {
+      "qty": 195,
+      "avg_price": 31350.0,
+      "total_buy_amt": 5643000.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 31250.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 0.0,
+      "last_sell_date": "",
+      "total_trades": 60,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:20:54.277587+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:20:54.346920+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:20:54.384093+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:20:54.503837+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:20:54.535721+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:52:02.866639+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:52:02.948589+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:52:03.011571+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:52:03.293985+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T14:52:03.462626+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:12:15.326679+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:12:15.756759+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:12:15.960832+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:12:16.606225+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:12:16.692932+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:18:52.550281+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:18:52.785899+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:18:53.085445+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:18:53.792776+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T15:18:53.965633+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:49.458144+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:49.603715+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:49.743315+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:50.288937+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:50.415996+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:24.881237+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:24.997335+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:25.160612+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:25.871907+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:26.053508+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:04.714608+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:04.855547+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:04.951148+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:05.544680+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:05.730143+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:36.893249+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:37.012744+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:37.232769+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:37.766036+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:37.916010+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:43.794029+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:44.007128+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:44.315996+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:44.936070+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:45.046318+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:50.450919+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:50.602488+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:50.835985+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:51.516314+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:51.656221+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:13.248775+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:13.353905+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:13.450161+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:13.982537+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:14.143622+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.604584+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31400.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:18.792144+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:19.039950+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:19.571689+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 3,
+          "price": 31250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:19.702514+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "413630": {
+      "qty": 205,
+      "avg_price": 4726.22,
+      "total_buy_amt": 11626500.0,
+      "cumulative_realized_gross": -831710.0,
+      "cumulative_realized_net": -831710.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 4770.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 4370.0,
+      "last_sell_date": "2025-10-27",
+      "total_trades": 180,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 21,
+          "price": 4685.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.137610+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 21,
+          "price": 4680.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.309438+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 21,
+          "price": 4675.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.493395+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 21,
+          "price": 4670.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.627858+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 21,
+          "price": 4665.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:21.779634+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 20,
+          "price": 4790.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.025029+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 20,
+          "price": 4785.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.079547+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 20,
+          "price": 4780.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.189365+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 20,
+          "price": 4775.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.285310+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 20,
+          "price": 4770.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:23.384131+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "003160": {
+      "qty": 740,
+      "avg_price": 24071.62,
+      "total_buy_amt": 16369000.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 23850.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 0.0,
+      "last_sell_date": "",
+      "total_trades": 170,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:54.832699+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:54.859882+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:54.882013+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:54.904228+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:54.929113+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:28.736730+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:28.855510+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:28.946823+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.082092+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.200054+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.859230+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:29.926420+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.066922+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.169139+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.285295+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.510869+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.539082+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.569516+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.596633+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:30.620479+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:06.903463+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:06.926026+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:06.948605+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:06.973630+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:06.998512+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.665939+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.733395+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.843550+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:07.964360+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.065604+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.293771+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.317836+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.340468+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.364040+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:08.386829+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:40.335405+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:40.406158+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:40.453486+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:40.515635+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:40.574027+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.470954+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.700640+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.021956+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.337247+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.647812+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.279928+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.330011+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.393193+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.468616+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.511281+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:47.795238+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:47.863074+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:47.949429+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:48.047605+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:48.153350+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.296646+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.612539+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.011751+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.609614+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.921195+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:52.638315+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:52.699332+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:52.808852+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:52.859899+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:52.941823+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:53.988180+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:54.050779+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:54.142983+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:54.197529+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:54.249334+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.956972+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.180448+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.426669+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.713848+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.940829+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.549472+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.617689+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.700469+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.757429+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.827775+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.485670+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.530384+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.576649+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.619833+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:16.662157+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.756287+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.802478+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.844188+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.866292+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:22.961559+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.002074+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.215585+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.452458+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.740826+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.942423+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.557193+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 24000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.619080+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.705633+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.773323+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 4,
+          "price": 23850.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.836180+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "010580": {
+      "qty": 10370,
+      "avg_price": 2896.81,
+      "total_buy_amt": 27577400.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 2895.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 0.0,
+      "last_sell_date": "",
+      "total_trades": 280,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.613325+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:42.948680+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.253751+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.576651+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:43.812933+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.576967+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.641929+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.714585+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.752829+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:44.830278+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2925.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:45.637854+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2920.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:45.757705+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:45.906912+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:46.032783+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:46.171007+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:46.984976+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.135022+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.351512+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.543779+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.737514+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:49.296026+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:49.518600+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:49.608832+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:49.686788+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:49.775576+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.487538+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:50.909757+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.489680+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:51.805336+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:52.079986+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:53.051476+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:53.108615+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:53.200491+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:53.269339+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:53.344931+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2925.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:54.235887+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2920.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:54.370923+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:54.500981+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:54.645150+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:54.810322+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:55.862949+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:56.247315+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:56.460007+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:56.775074+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.021883+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.155572+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.330555+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.379128+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.446256+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:55.499874+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.115077+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.368525+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.667562+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:56.888894+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.094115+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.901521+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:57.948897+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.017201+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.076191+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.145887+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2925.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:58.953766+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2920.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.076821+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.226082+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.323016+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:59:59.456697+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.219446+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.345493+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.528780+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.755260+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.963884+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:17.459655+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:17.896889+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:18.030169+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:18.141317+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:02:18.226539+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.154921+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.368774+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.423316+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.490397+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:24.544354+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.132192+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.404483+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.640083+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:25.888119+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.103552+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.895716+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2890.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:26.966395+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2885.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.057005+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2880.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.107177+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2875.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:27.174210+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2925.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.001636+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2920.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.151962+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.284027+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.403033+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:28.551945+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2915.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.407910+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2910.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.503537+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2905.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.692500+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.979817+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 34,
+          "price": 2895.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.214338+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "230240": {
+      "qty": 1800,
+      "avg_price": 16090.0,
+      "total_buy_amt": 26548500.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 15950.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 0.0,
+      "last_sell_date": "",
+      "total_trades": 275,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.276456+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.481538+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.679561+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.844588+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:47.902745+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:49.066648+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:49.233730+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:49.349219+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:49.609274+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:49.823668+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:51.726487+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:51.814262+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.025579+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.198261+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.313781+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.550950+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.610752+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.711979+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.846809+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:52.935969+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:55.119707+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:55.189827+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:55.265756+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:55.323710+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:55.428485+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:56.411458+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:56.646138+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:56.939928+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.091112+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:57.195695+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:58.858332+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.079088+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.265784+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.513254+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:56:59.714818+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.284623+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.381822+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.552720+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.701995+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:01.844771+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.097543+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.210722+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.233691+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.293086+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:02.376493+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:04.963508+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:05.107411+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:05.355811+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:05.464022+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:05.521242+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.483251+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.697555+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:00.909955+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.041316+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:01.090185+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.283233+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.418794+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.520107+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.666496+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:02.804529+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.829548+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:03.898541+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.058425+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.207675+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.327733+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.555229+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.606871+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.684304+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.729742+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:04.792274+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.552946+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.611322+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.680494+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.760034+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.808240+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16350.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.621928+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16300.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:29.909286+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16250.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.135126+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.294385+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:30.366392+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16200.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.463940+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.583457+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.711779+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.829173+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:31.993554+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:32.991963+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.052918+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.171643+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.311844+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.450335+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.622403+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.713867+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.782445+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.829613+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15900.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:33.903171+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16150.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.674769+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16100.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.773822+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16050.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.851878+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 16000.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.952766+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15950.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:36.063857+09:00",
+          "date": "2025-10-27"
+        }
+      ]
+    },
+    "035510": {
+      "qty": 1050,
+      "avg_price": 15582.85,
+      "total_buy_amt": 15427500.0,
+      "cumulative_realized_gross": 0.0,
+      "cumulative_realized_net": 0.0,
+      "cumulative_fees": 0.0,
+      "last_buy_price": 15500.0,
+      "last_buy_date": "2025-10-27",
+      "last_sell_price": 0.0,
+      "last_sell_date": "",
+      "total_trades": 165,
+      "total_wins": 0,
+      "buy_history": [
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:59.621776+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:59.668367+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:59.695382+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:59.725984+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:02:59.756293+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:03:00.333469+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:03:00.368555+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:03:00.411441+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:03:00.466821+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:03:00.511592+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.528393+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.597592+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.655501+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.700480+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:33.723347+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.099909+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.122401+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.145721+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.168659+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.190967+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.651703+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.680301+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.705875+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.730164+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:09:34.752405+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.462970+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.514760+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.561357+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.609932+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:11.633661+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.027968+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.054065+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.077407+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.106805+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.139430+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.567354+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.592156+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.615964+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.641317+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:32:12.665045+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:54.364039+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:54.517192+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:54.676489+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:54.915171+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:55.046735+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:56.936078+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:57.182542+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:57.353444+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:57.585973+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:57.770330+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:59.156773+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:59.233923+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:59.528009+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:59.636067+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:51:59.715501+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:04.281086+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:04.420067+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:04.587459+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:04.744000+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:04.833984+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.350164+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.422621+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.474372+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.556242+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:06.664327+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:07.856038+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:07.930883+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:07.981419+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.080479+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T17:57:08.165670+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.016691+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.145420+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.300660+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.413298+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:06.474489+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.581877+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.627091+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.708757+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.797815+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:07.850826+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.847717+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:08.934397+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.034193+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.065404+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:00:09.113237+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.066055+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.175144+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.284288+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.464786+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15450.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:35.600379+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.240057+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.332637+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.425603+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.563771+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:37.647219+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15700.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.347406+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15650.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.468945+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15600.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.559020+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15550.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.668865+09:00",
+          "date": "2025-10-27"
+        },
+        {
+          "strategy": "default",
+          "qty": 6,
+          "price": 15500.0,
+          "fee": 0.0,
+          "time": "2025-10-27T18:03:39.791685+09:00",
+          "date": "2025-10-27"
+        }
+      ]
     }
   }
 }

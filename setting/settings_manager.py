@@ -90,6 +90,12 @@ class AppSettings:
 
     # 기타
     timezone: str = "Asia/Seoul"
+    # 알림 설정
+    enable_pf_alert: bool = True
+    enable_consecutive_loss_alert: bool = True
+    consecutive_loss_threshold: int = 3
+    enable_daily_loss_alert: bool = True
+    daily_loss_limit: float = -500000.0
 
     @classmethod
     def from_env(cls) -> "AppSettings":

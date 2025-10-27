@@ -178,7 +178,6 @@ class MainWindow(QMainWindow):
         # UI 빌드
         self._build_toolbar()
         self._build_layout()
-        self._build_risk_panel()
         self._apply_stylesheet()
 
         # 상태바/시계
@@ -247,6 +246,7 @@ class MainWindow(QMainWindow):
                         logger.exception("apply_to_monitor failed")
             except Exception:
                 pass
+        self._build_risk_panel()
 
         # 리스크 패널 토글 복원
         vis = self._settings_qs.value("risk_panel_visible", True)
@@ -421,72 +421,99 @@ class MainWindow(QMainWindow):
 
     def _build_risk_panel(self):
         """
-        리스크 패널을 초기화합니다.
-
-        최신 RiskDashboard 클래스를 이용해 trading_result.json을 실시간 반영하고,
-        종목별 손익률/손익 그래프를 표시합니다.
+        리스크 패널 초기화 (시간대 분석 + 알림 포함)
         """
-
-        # 현재가 제공 함수 정의 (옵션)
+        # 1. 현재가 제공 함수
         def price_provider(sym: str) -> Optional[float]:
             try:
-                # market_api는 이미 MainWindow 어딘가에서 초기화된 객체일 수도 있음
-                return self.market_api.get_price(sym)
-            except Exception:
-                return None
-
-        # 데일리 리포트 버튼 클릭 시 동작 콜백
-        def on_daily_report():
-            try:
-                self.on_click_open_last_report()
+                if hasattr(self, "market_api") and self.market_api:
+                    return self.market_api.get_price(sym)
             except Exception:
                 pass
+            return None
 
-        # ✅ 새로운 리스크 대시보드 생성
+        # 2. 데일리 리포트 콜백
+        def on_daily_report():
+            try:
+                self.on_click_daily_report()
+            except Exception:
+                logger.exception("on_daily_report failed")
+
+        # 3. ✅ 알림 핸들러 추가
+        def on_alert(alert_type: str, message: str, data: dict):
+            # 워커 스레드에서 호출돼도 안전: UI 시그널로 전달
+            try:
+                self.sig_alert.emit(alert_type, message, data)
+            except Exception:
+                logger.exception("sig_alert emit failed")
+
+        # 4. ✅ TradingResultStore 생성 (멤버 변수로 보관)
+        from risk_management.trading_results import TradingResultStore, AlertConfig
+        
+        alert_config = AlertConfig(
+            enable_pf_alert=True,
+            enable_consecutive_loss_alert=True,
+            consecutive_loss_threshold=3,
+            enable_daily_loss_alert=True,
+            daily_loss_limit=-500000.0,
+            on_alert=on_alert  # ✅ 콜백 연결
+        )
+        
+        self.trading_store = TradingResultStore(
+            json_path=str(result_paths.path_today()),
+            alert_config=alert_config
+        )
+
+        # 5. ✅ RiskDashboard 생성 (store와 연동)
         self.risk_dashboard = RiskDashboard(
             json_path=str(result_paths.path_today()),
-            price_provider=price_provider,   # 현재가 미제공 시 None 가능
+            price_provider=price_provider,
             on_daily_report=on_daily_report,
-            poll_ms=1000,
+            poll_ms=60000,
             parent=self
         )
+        
+        # ✅ store 주입 (대시보드가 동일한 store 사용)
+        self.risk_dashboard._store = self.trading_store
+
+        # 6. ✅ 스냅샷 시그널 연결
         try:
             self.risk_dashboard.pnl_snapshot.disconnect(self.on_pnl_snapshot)
         except Exception:
             pass
         self.risk_dashboard.pnl_snapshot.connect(self.on_pnl_snapshot)
 
-
-        # 기존 방식 그대로 holder에 장착
-        self.risk_panel = self.risk_dashboard
-        if hasattr(self, "risk_panel_holder") and self.risk_panel_holder.layout() is not None:
+        # 7. ✅ 레이아웃에 추가
+        if hasattr(self, "risk_panel_holder") and self.risk_panel_holder.layout():
             self.risk_panel_holder.layout().addWidget(self.risk_dashboard)
         else:
-            # 홀더가 없으면 새로 생성하여 추가
-            try:
-                self.risk_panel_holder = QWidget()
-                holder_layout = QVBoxLayout(self.risk_panel_holder)
-                holder_layout.setContentsMargins(0, 0, 0, 0)
-                holder_layout.addWidget(self.risk_dashboard)
-            except Exception:
-                pass
+            self.risk_panel_holder = QWidget()
+            holder_layout = QVBoxLayout(self.risk_panel_holder)
+            holder_layout.setContentsMargins(0, 0, 0, 0)
+            holder_layout.addWidget(self.risk_dashboard)
 
+        # 8. ✅ OrdersCSVWatcher 생성 (멤버 store 사용)
+        from risk_management.orders_watcher import OrdersCSVWatcher, WatcherConfig
 
-        store = TradingResultStore(path_today())
-
-        cfg = WatcherConfig(
+        watcher_cfg = WatcherConfig(
             base_dir=Path.cwd() / "logs",
             subdir="trades",
             file_pattern="orders_{date}.csv",
-            json_path=path_today(),
             poll_ms=700,
-            bootstrap_if_missing=True,   # 첫 실행 시 과거 CSV로 재구성
+            bootstrap_if_missing=True,
         )
 
-        # 이미 존재하면 중복 생성 방지
         if not hasattr(self, "orders_watcher") or self.orders_watcher is None:
-            self.orders_watcher = OrdersCSVWatcher(store=store, config=cfg, parent=self)
-            self.orders_watcher.start()  
+            self.orders_watcher = OrdersCSVWatcher(
+                store=self.trading_store,  # ✅ 동일한 store 사용
+                config=watcher_cfg,
+                parent=self
+            )
+            self.orders_watcher.start()
+            logger.info("OrdersCSVWatcher started")
+
+        # 9. ✅ 대시보드에 watcher 연결 (상호 참조)
+        self.risk_dashboard.watcher = self.orders_watcher
 
     # ---------------- 스타일 ----------------
     def _apply_stylesheet(self):
@@ -531,52 +558,33 @@ class MainWindow(QMainWindow):
         t.start(1000); self._clock_timer = t
 
     def closeEvent(self, event):
-        # 창 종료 시 설정 저장 및 엔진/스트림 정리
+        """종료 시 리소스 정리"""
         try:
-            if hasattr(self, "hsplit"):
+            # ... 기존 설정 저장 로직 ...
+
+            # ✅ OrdersCSVWatcher 정지
+            if hasattr(self, "orders_watcher") and self.orders_watcher:
                 try:
-                    self._settings_qs.setValue("hsplit_state", self.hsplit.saveState())
+                    self.orders_watcher.stop()
+                    logger.info("OrdersCSVWatcher stopped")
                 except Exception:
-                    pass
-            try:
-                self._settings_qs.setValue("window_maximized", self.isMaximized())
-                if not self.isMaximized():
-                    self._settings_qs.setValue("window_width", self.width())
-                    self._settings_qs.setValue("window_height", self.height())
-                self._settings_qs.setValue("risk_panel_visible", bool(self.risk_panel.isVisible()))
-            except Exception:
-                pass
-            # cfg 동기화
-            try:
-                setattr(self.app_cfg, "window_maximized", bool(self.isMaximized()))
-                if not self.isMaximized():
-                    setattr(self.app_cfg, "window_width", int(self.width()))
-                    setattr(self.app_cfg, "window_height", int(self.height()))
-                if self.store:
-                    self.store.save(self.app_cfg)
-            except Exception:
-                pass
+                    logger.exception("Failed to stop orders_watcher")
 
-            try:
-                store = SettingsStore()
-                # self.cfg 가 최신인지 보장: 세션 중 변경사항이 self.cfg 에 반영되어 있어야 함
-                store.save(self.cfg)
-            except Exception as e:
-                logging.getLogger(__name__).exception("Failed to save settings on close: %s", e)
+            # ✅ RiskDashboard 타이머 정지
+            if hasattr(self, "risk_dashboard") and self.risk_dashboard:
+                try:
+                    self.risk_dashboard.stop_auto_refresh()
+                    logger.info("RiskDashboard auto-refresh stopped")
+                except Exception:
+                    logger.exception("Failed to stop risk_dashboard refresh")
 
-
-            # 엔진 종료/스트림 정리
-            if self.engine is not None and hasattr(self.engine, "shutdown"):
+            # 기존 엔진 종료 로직
+            if self.engine and hasattr(self.engine, "shutdown"):
                 try:
                     self.engine.shutdown()
                 except Exception:
                     pass
-            for code6 in list(self._active_macd_streams):
-                if self.engine is not None and hasattr(self.engine, "stop_macd_stream"):
-                    try:
-                        self.engine.stop_macd_stream(code6)
-                    except Exception:
-                        pass
+
         finally:
             event.accept()
 
@@ -633,56 +641,58 @@ class MainWindow(QMainWindow):
 
 
     # ---------------- 손익 스냅샷 수신 ----------------
-    
     @Slot(dict)
     def on_pnl_snapshot(self, snap: dict):
         """
-        risk_management 모듈에서 전달하는 손익 스냅샷 딕셔너리를 받아
-        리스크 대시보드 UI를 갱신합니다.
-        snap 구조 예시:
-        {
-            "portfolio": {
-                "daily_pnl_pct": -0.5,
-                "cum_return_pct": 1.2,
-                "mdd_pct": -4.3,
-                "gross_exposure_pct": 85,
-                "equity_curve": [...],
-                "daily_hist": [...],
-            },
-            "by_condition": {...},
-            "by_symbol": {...}
-        }
+        손익 스냅샷 수신 + 시간대 분석 데이터 반영
         """
         try:
-            # RiskDashboard가 존재하면 스냅샷을 사용하여 리스크 대시보드를 갱신합니다.
+            # 1. RiskDashboard 업데이트
             if hasattr(self, "risk_dashboard"):
                 try:
                     self.risk_dashboard.update_snapshot(snap)
                 except Exception as ex:
                     logger.error("RiskDashboard 업데이트 실패: %s", ex)
 
-            # 중앙 종목 리스트 평균 매수가/매도가 갱신
+            # 2. 중앙 종목 리스트 갱신 (기존 로직 유지)
             positions_by_symbol = snap.get("by_symbol") or {}
             updated = False
+            
             for code6, pos_data in positions_by_symbol.items():
                 if not pos_data or not isinstance(pos_data, dict):
                     continue
+                
                 idx = self._result_index.get(code6)
-                if idx is not None:
-                    row = self._result_rows[idx]
-                    avg_buy = pos_data.get("avg_buy_price")
-                    avg_sell = pos_data.get("avg_sell_price")
-                    if row.get("buy_price") != avg_buy:
-                        row["buy_price"] = avg_buy
-                        updated = True
-                    if avg_sell is not None and row.get("sell_price") != avg_sell:
-                        row["sell_price"] = avg_sell
-                        updated = True
+                if idx is None:
+                    continue
+                
+                row = self._result_rows[idx]
+                avg_buy = pos_data.get("avg_buy_price")
+                avg_sell = pos_data.get("avg_sell_price")
+                
+                if row.get("buy_price") != avg_buy:
+                    row["buy_price"] = avg_buy
+                    updated = True
+                if avg_sell is not None and row.get("sell_price") != avg_sell:
+                    row["sell_price"] = avg_sell
+                    updated = True
+            
             if updated:
                 self._render_results_html()
 
+            # 3. ✅ 포트폴리오 요약 상태바 표시
+            portfolio = snap.get("portfolio") or {}
+            daily_pnl = portfolio.get("daily_pnl_pct", 0)
+            if daily_pnl != 0:
+                sign = "+" if daily_pnl > 0 else ""
+                self.status.showMessage(
+                    f"일일 손익: {sign}{daily_pnl:.2f}% | "
+                    f"노출도: {portfolio.get('gross_exposure_pct', 0):.1f}%",
+                    3000
+                )
+
         except Exception as e:
-            self.append_log(f"[UI] on_pnl_snapshot 오류: {e}")
+            self.append_log(f"[UI] on_pnl_snapshot 오류: {e}")    
 
     # ---------------- 기존 메서드들 ----------------
     # 이하 메서드들은 원본 코드의 기능을 그대로 유지합니다.
@@ -808,43 +818,53 @@ class MainWindow(QMainWindow):
     def on_macd_series_ready(self, data: dict):
         pass  # 확장 포인트: 미니차트 등
 
+
     @Slot(dict)
     def on_trade_signal(self, payload: dict):
         try:
             side = str(payload.get("side") or payload.get("action") or "").upper()
             code = (payload.get("code") or payload.get("stock_code") or payload.get("stk_cd") or "").strip()
             code6 = str(code)[-6:].zfill(6) if code else ""
-            raw_price = (payload.get("price") if "price" in payload else
-                         payload.get("limit_price") if "limit_price" in payload else
-                         payload.get("cur_price") if "cur_price" in payload else
-                         payload.get("prc") if "prc" in payload else
-                         payload.get("avg_price"))
+            raw_price = (
+                payload.get("price")
+                or payload.get("limit_price")
+                or payload.get("cur_price")
+                or payload.get("prc")
+                or payload.get("avg_price")
+            )
             if not code6 or raw_price in (None, ""):
                 return
-            try:
-                price = float(str(raw_price).replace(",", ""))
-            except Exception:
-                return
+
+            price = float(str(raw_price).replace(",", ""))
+            qty = int(payload.get("qty") or 1)
+
+            # UI 중앙 표 업데이트
             idx = self._result_index.get(code6)
             if idx is None:
-                row = {"code":code6, "name":code6, "price":None, "rt":0.0, "vol":None,
-                       "buy_price":None, "sell_price":None,
-                       "conds": " | ".join(sorted(self._code_to_conds.get(code6, set()))) if code6 in self._code_to_conds else "-",
-                       "updated_at": datetime.now().isoformat(timespec="seconds")}
-                self._result_index[code6] = len(self._result_rows); self._result_rows.append(row); idx = self._result_index[code6]
+                self._result_index[code6] = len(self._result_rows)
+                self._result_rows.append({"code": code6, "buy_price": None, "sell_price": None})
+                idx = self._result_index[code6]
+
             row = self._result_rows[idx]
-            if code6 in self._code_to_conds:
-                row["conds"] = " | ".join(sorted(self._code_to_conds.get(code6, set()))) or "-"
             if side == "BUY":
                 row["buy_price"] = price
             elif side == "SELL":
                 row["sell_price"] = price
-            else:
-                return
-            row["updated_at"] = datetime.now().isoformat(timespec="seconds")
             self._render_results_html()
+
+            # ✅ store 반영만 하면 RiskDashboard가 자동으로 refresh됨
+            if hasattr(self, "trading_store") and self.trading_store:
+                self.trading_store.apply_trade(
+                    symbol=code6,
+                    side="buy" if side == "BUY" else "sell",
+                    qty=qty,
+                    price=price,
+                )
+
+            self.append_log(f"[Trade] {side} {code6} @ {price:,.0f} 반영 완료 ✅")
+
         except Exception as e:
-            self.append_log(f"[UI] on_trade_signal 오류: {e}")
+            logger.exception(f"[UI] on_trade_signal 오류: {e}")
 
     # =========================
     # 매매리포트: 경로/루트 유틸

@@ -1,17 +1,29 @@
-# risk_dashboard.py
+"""
+이중 저장소 대시보드 + PnL Snapshot + 손익 히스토리 그래프 (UI 개선 버전)
+"""
 from __future__ import annotations
+
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import Qt, QTimer, QFileInfo, Signal
+from PySide6.QtCore import Qt, QTimer, QFileInfo, Signal, Slot, QMetaObject, Q_ARG
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
-    QFrame, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
+    QFrame, QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
+    QTabWidget, QComboBox, QSizePolicy
 )
-from PySide6.QtGui import QGuiApplication, QColor
+from PySide6.QtGui import QColor, QFont
+
+from .orders_watcher import WatcherConfig, OrdersCSVWatcher
+from .trading_results import TradingResultStore
+
+logger = logging.getLogger(__name__)
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 try:
     from matplotlib.figure import Figure
@@ -20,566 +32,874 @@ try:
 except Exception:
     _HAS_MPL = False
 
-# ▼ 외부 모듈(헬퍼 포함)
-from risk_management.orders_watcher import (
-    WatcherConfig, _pick_encoding, _sniff_delim, _best_header_map,
-    _normalize_side, _to_int, _to_float, _infer_side, _pick_any, _to_float_soft
-)
-from risk_management.trading_results import TradingResultStore, TradeRow
-from utils.result_paths import path_today, path_today
 
-logger = logging.getLogger(__name__)
-if not logging.getLogger().handlers:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# ========================= 스타일 상수 =========================
 
-# ---------- 데이터 모델 ----------
+COLORS = {
+    'bg_dark': '#1a1d23',
+    'bg_medium': '#24272e',
+    'bg_light': '#2d3139',
+    'accent': '#3b82f6',
+    'success': '#10b981',
+    'warning': '#f59e0b',
+    'danger': '#ef4444',
+    'text_primary': '#e5e7eb',
+    'text_secondary': '#9ca3af',
+    'border': '#374151',
+    'chart_line': '#22c55e',
+    'chart_bg': '#0f1419'
+}
+
+STYLES = {
+    'groupbox': f"""
+        QGroupBox {{
+            font-size: 16px;
+            font-weight: bold;
+            color: {COLORS['text_primary']};
+            background-color: {COLORS['bg_dark']};
+            border: 2px solid {COLORS['border']};
+            border-radius: 8px;
+            margin-top: 12px;
+            padding: 16px;
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 16px;
+            padding: 0 8px;
+        }}
+    """,
+    'button': f"""
+        QPushButton {{
+            background-color: {COLORS['accent']};
+            color: {COLORS['text_primary']};
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        QPushButton:hover {{
+            background-color: #2563eb;
+        }}
+        QPushButton:pressed {{
+            background-color: #1d4ed8;
+        }}
+    """,
+    'table': f"""
+        QTableWidget {{
+            background-color: {COLORS['bg_medium']};
+            alternate-background-color: {COLORS['bg_light']};
+            color: {COLORS['text_primary']};
+            gridline-color: {COLORS['border']};
+            border: 1px solid {COLORS['border']};
+            border-radius: 6px;
+            font-size: 12px;
+        }}
+        QTableWidget::item {{
+            padding: 8px;
+        }}
+        QTableWidget::item:selected {{
+            background-color: {COLORS['accent']};
+        }}
+        QHeaderView::section {{
+            background-color: {COLORS['bg_light']};
+            color: {COLORS['text_primary']};
+            padding: 10px;
+            border: none;
+            border-bottom: 2px solid {COLORS['border']};
+            font-weight: bold;
+            font-size: 12px;
+        }}
+    """,
+    'tab': f"""
+        QTabWidget::pane {{
+            border: 1px solid {COLORS['border']};
+            border-radius: 6px;
+            background-color: {COLORS['bg_medium']};
+            padding: 12px;
+        }}
+        QTabBar::tab {{
+            background-color: {COLORS['bg_light']};
+            color: {COLORS['text_secondary']};
+            border: 1px solid {COLORS['border']};
+            border-bottom: none;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+            padding: 10px 20px;
+            margin-right: 4px;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        QTabBar::tab:selected {{
+            background-color: {COLORS['bg_medium']};
+            color: {COLORS['text_primary']};
+            border-bottom: 2px solid {COLORS['accent']};
+        }}
+        QTabBar::tab:hover {{
+            background-color: {COLORS['bg_medium']};
+            color: {COLORS['text_primary']};
+        }}
+    """,
+    'frame': f"""
+        QFrame {{
+            background-color: {COLORS['bg_medium']};
+            border: 1px solid {COLORS['border']};
+            border-radius: 6px;
+            padding: 12px;
+        }}
+    """,
+    'label_title': f"""
+        QLabel {{
+            color: {COLORS['text_primary']};
+            font-size: 14px;
+            font-weight: bold;
+        }}
+    """,
+    'label_value': f"""
+        QLabel {{
+            color: {COLORS['success']};
+            font-size: 18px;
+            font-weight: bold;
+        }}
+    """
+}
+
+
+# ========================= 데이터 모델 =========================
+
 @dataclass
-class StrategyRow:
+class StrategyMetrics:
     name: str
     realized_net: float
     win_rate: float
     roi_pct: float
     wins: int
+    loses: int
+    total_trades: int
+    avg_win: float
+    avg_loss: float
+    profit_factor: float
+    sharpe_ratio: float
+    max_drawdown: float
+    buy_notional: float
+    fees: float
+
+
+@dataclass
+class PositionInfo:
+    code: str
+    qty: int
+    avg_price: float
+    last_buy_price: float
+    last_buy_date: str
+    last_sell_price: float
+    last_sell_date: str
+    cumulative_pnl: float
+    total_trades: int
+    total_wins: int
+
+
+# ========================= 메인 대시보드 =========================
 
 class RiskDashboard(QGroupBox):
-    """스레드 없이 협력형 펌프로 '오늘만 새로고침' 수행 + 단계별/배치 로깅 + 0건 우회 기록"""
+    """전략 성과 분석 대시보드 + ROI Snapshot + 손익 히스토리"""
     pnl_snapshot = Signal(dict)
 
     def __init__(
         self,
         *,
-        json_path: str = str(path_today()),
+        json_path: str = None,
+        csv_base_dir: Path = None,
         price_provider: Optional[Callable[[str], Optional[float]]] = None,
         on_daily_report: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
-        poll_ms: int = 1000
+        poll_ms: int = 60000
     ) -> None:
-        super().__init__("전략별 수익률 대시보드", parent)
-        self._json_path_obj: Path = Path(json_path) if json_path is not None else path_today()
-        self._json_path_obj.parent.mkdir(parents=True, exist_ok=True)
-        self._json_path = str(self._json_path_obj)  # QFileInfo 용도로 문자열도 병행 보관
+        super().__init__("📊 전략 성과 분석 대시보드", parent)
+
+        if json_path is None:
+            json_path = "logs/results/trading_result.json"
+        if csv_base_dir is None:
+            csv_base_dir = Path("logs")
+
+        self.result_base_dir = Path(json_path).parent
+        self.result_base_dir.mkdir(parents=True, exist_ok=True)
+        self.csv_base_dir = Path(csv_base_dir)
+
         self._on_daily_report = on_daily_report or (lambda: None)
         self._poll_ms = max(300, int(poll_ms))
-        self._last_mtime: Optional[int] = None
+        self._price_provider = price_provider
 
-        self._store = TradingResultStore(self._json_path)
-        self._watcher_cfg = WatcherConfig(json_path=Path(self._json_path))
+        # 저장소 + Watcher
+        self.store = TradingResultStore(json_path=json_path)
 
-        # 외부에서 붙일 수 있는 watcher 핸들(있으면 새로고침 동안 stop/start)
-        self.watcher = None  # Optional[OrdersCSVWatcher]
+        self.watcher_cfg = WatcherConfig(base_dir=self.csv_base_dir)
 
-        # 협력형 리빌드 상태
-        self._rebuild_state: Optional[dict] = None
+        # ❌ parent=self 주지 마세요 (스레드 다름)
+        self.watcher = OrdersCSVWatcher(store=self.store, config=self.watcher_cfg)
 
+        # 전용 스레드 준비
+        self.store.store_updated.connect(self._on_store_updated, Qt.QueuedConnection)
+        # 내부 상태
+        self._last_daily_mtime: Optional[int] = None
+        self._last_cumulative_mtime: Optional[int] = None
+        self._current_metrics: List[StrategyMetrics] = []
+        self._current_positions: List[PositionInfo] = []
+        self._alert_messages: List[str] = []
+        self._rebuild_running = False
+        self._pnl_snapshots: List[tuple[datetime, float]] = []
+
+        self._apply_styles()
         self._init_ui()
         self._init_timer()
+        self.store.set_alert_callback(self._handle_alert)
         self.refresh(force=True)
+        self.watcher.start()
 
+    # ========================= 스타일 적용 =========================
 
-    # ---------------- UI ----------------
+    def _apply_styles(self) -> None:
+        # 1) 스타일 문자열을 딕셔너리에 넣고
+        STYLES['groupbox'] = f"""
+            QGroupBox {{
+                font-size: 15px;            /* 살짝만 */
+                font-weight: 600;
+                color: {COLORS['text_primary']};
+                background-color: {COLORS['bg_dark']};
+                border: 1px solid {COLORS['border']};   /* 2px → 1px */
+                border-radius: 8px;
+                margin-top: 4px;            /* 12px → 4px : 상단 여백 확 줄임 */
+                padding: 8px;               /* 16px → 8px */
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;                  /* 16px → 8px */
+                padding: 0 4px;             /* 8px → 4px */
+            }}
+        """
+
+        # 2) setStyleSheet에는 문자열만 넘김
+        self.setStyleSheet(STYLES['groupbox'])
+
+    # ========================= UI 초기화 =========================
+
     def _init_ui(self) -> None:
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
-        lay.setSpacing(10)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 6, 8, 8)  # (16,20,16,16) → 상단 6
+        main_layout.setSpacing(8)                   # 12 → 8
 
-        self.setStyleSheet(
-            "QGroupBox { border: 1px solid #3a414b; margin-top: 20px; border-radius: 5px; } "
-            "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; "
-            "padding: 0 3px 0 3px; background-color: transparent; color: #c7d0db; font-weight: bold; } "
-            "QPushButton { background: #343a40; border: 1px solid #3d444c; border-radius: 4px; "
-            "padding: 5px 10px; color: #e6edf3; } "
-            "QPushButton:hover { background: #3d444c; } "
-            "QPushButton:pressed { background: #2d333b; border-style: inset; } "
-        )
+        # 요약 정보 카드
+        self._create_summary_cards(main_layout)
 
-        # 버튼행
-        brow = QHBoxLayout()
-        self.btn_refresh_today = QPushButton("⟳ 오늘만 새로고침")
-        self.btn_refresh_today.setToolTip("오늘의 orders_*.csv만 읽어 trading_result.json을 재생성합니다.")
-        self.btn_refresh_today.setFixedWidth(150)
-        self.btn_refresh_today.clicked.connect(self._on_refresh_today_clicked)
-        brow.addWidget(self.btn_refresh_today)
-
-        self.btn_daily = QPushButton("📄 데일리 리포트")
-        self.btn_daily.setFixedWidth(120)
-        self.btn_daily.clicked.connect(self._on_daily_report)
-        brow.addWidget(self.btn_daily)
-
-        brow.addStretch(1)
-        lay.addLayout(brow)
-
-        # 구분선
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("QFrame { color:#3a414b; }")
-        lay.addWidget(sep)
-
-        # 본문
-        body = QVBoxLayout()
-        lay.addLayout(body)
-
-        # 표
-        self.tbl = QTableWidget(0, 5, self)
-        self.tbl.setHorizontalHeaderLabels(["전략", "실현 손익(순)", "승률(%)", "수익률(%)", "승리 횟수"])
-        hdr = self.tbl.horizontalHeader()
-        hdr.setTextElideMode(Qt.ElideNone)
-        hdr.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
-        for i in range(1, 5):
-            hdr.setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        hdr.setMinimumSectionSize(80)
-        self.tbl.setAlternatingRowColors(True)
-        self.tbl.setSortingEnabled(True)
-        self.tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.tbl.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.tbl.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.tbl.setStyleSheet(
-            "QTableWidget { background:#0f1216; color:#e6edf3; gridline-color:#2d333b; "
-            "border: 1px solid #2d333b; border-radius: 5px; } "
-            "QHeaderView::section { background:#282c34; color:#c7d0db; font-weight:600; "
-            "padding: 5px; border-right: 1px solid #0f1216; } "
-            "QTableWidget::item:selected { background:#3c5d79; color: white; }"
-        )
-        body.addWidget(self.tbl, 3)
-
-        # 중간선
-        mid_sep = QFrame()
-        mid_sep.setFrameShape(QFrame.HLine)
-        mid_sep.setStyleSheet("QFrame { color:#3a414b; }")
-        body.addWidget(mid_sep)
-
-        # 그래프
+        # ROI Snapshot
         if _HAS_MPL:
-            chart_box = QVBoxLayout()
-            self.fig = Figure(figsize=(6, 2.8), tight_layout=True, facecolor="#000000")
-            self.canvas = FigureCanvas(self.fig)
-            self.ax = self.fig.add_subplot(111)
-            self.ax.set_facecolor("#000000")
-            for s in self.ax.spines.values():
-                s.set_color("#555")
-            self.ax.tick_params(colors="#e9edf1")
-            self.ax.title.set_color("#e9edf1")
-            chart_box.addWidget(self.canvas)
-            body.addLayout(chart_box, 2)
-        else:
-            body.addWidget(QLabel("(matplotlib 미탑재: 그래프 표시 불가)"), 2)
+            self._init_pnl_snapshot(main_layout)
 
-    # ---------------- 타이머 ----------------
+        # 컨트롤바
+        self._create_control_bar(main_layout)
+
+        # 탭 구성
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(STYLES['tab'])
+        
+        self.tab_performance = QWidget()
+        self.tab_positions = QWidget()
+        self.tab_risk = QWidget()
+        self.tab_history = QWidget()
+
+        self._create_performance_tab(self.tab_performance)
+        self._create_positions_tab(self.tab_positions)
+        self._create_risk_tab(self.tab_risk)
+        self._create_history_tab(self.tab_history)
+
+        self.tabs.addTab(self.tab_performance, "📊 오늘의 성과")
+        self.tabs.addTab(self.tab_positions, "💼 포지션 현황")
+        self.tabs.addTab(self.tab_risk, "⚠️ 리스크")
+        self.tabs.addTab(self.tab_history, "📅 손익 히스토리")
+
+        main_layout.addWidget(self.tabs, 1)  # ← 세로로 공간을 더 가져가게
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self._create_alert_panel(main_layout)
+
+    # ========================= 요약 카드 =========================
+
+    def _create_summary_cards(self, layout: QVBoxLayout) -> None:
+        cards_layout = QHBoxLayout()
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+
+        cards_layout.setSpacing(6)
+        # 실현손익 카드
+        self.card_pnl = self._create_info_card("💰 오늘 실현손익", "0원")
+        cards_layout.addWidget(self.card_pnl)
+
+        # ROI 카드
+        self.card_roi = self._create_info_card("📈 ROI", "0.0%")
+        cards_layout.addWidget(self.card_roi)
+
+        # 승률 카드
+        self.card_winrate = self._create_info_card("🎯 승률", "0.0%")
+        cards_layout.addWidget(self.card_winrate)
+
+        # 총 거래 카드
+        self.card_trades = self._create_info_card("🔄 총 거래", "0건")
+        cards_layout.addWidget(self.card_trades)
+
+        layout.addLayout(cards_layout)
+        # 여백 더 줄이기
+        cards_layout.setContentsMargins(0, 0, 0, 0)
+        cards_layout.setSpacing(8)
+
+    def _create_info_card(self, title: str, initial_value: str) -> QFrame:
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_light']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                padding: 12px;   # 16 → 12
+            }}
+        """)
+
+
+        
+        layout = QVBoxLayout(frame)
+        layout.setSpacing(8)
+        
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
+        layout.addWidget(lbl_title)
+        
+        lbl_value = QLabel(initial_value)
+        lbl_value.setStyleSheet(STYLES['label_value'])
+        lbl_value.setObjectName("value_label")
+        layout.addWidget(lbl_value)
+        
+        return frame
+
+    def _update_summary_cards(self) -> None:
+        if not self._current_metrics:
+            return
+
+        total_pnl = sum(m.realized_net for m in self._current_metrics)
+        avg_roi = sum(m.roi_pct for m in self._current_metrics) / len(self._current_metrics)
+        total_wins = sum(m.wins for m in self._current_metrics)
+        total_trades = sum(m.total_trades for m in self._current_metrics)
+        win_rate = (total_wins / total_trades * 100) if total_trades > 0 else 0.0
+
+        # 실현손익 카드 업데이트
+        pnl_label = self.card_pnl.findChild(QLabel, "value_label")
+        pnl_label.setText(f"{total_pnl:,.0f}원")
+        pnl_color = COLORS['success'] if total_pnl >= 0 else COLORS['danger']
+        pnl_label.setStyleSheet(f"color: {pnl_color}; font-size: 18px; font-weight: bold;")
+
+        # ROI 카드 업데이트
+        roi_label = self.card_roi.findChild(QLabel, "value_label")
+        roi_label.setText(f"{avg_roi:.2f}%")
+        roi_color = COLORS['success'] if avg_roi >= 0 else COLORS['danger']
+        roi_label.setStyleSheet(f"color: {roi_color}; font-size: 18px; font-weight: bold;")
+
+        # 승률 카드 업데이트
+        wr_label = self.card_winrate.findChild(QLabel, "value_label")
+        wr_label.setText(f"{win_rate:.1f}%")
+        wr_color = COLORS['success'] if win_rate >= 50 else COLORS['warning']
+        wr_label.setStyleSheet(f"color: {wr_color}; font-size: 18px; font-weight: bold;")
+
+        # 거래 카드 업데이트
+        trades_label = self.card_trades.findChild(QLabel, "value_label")
+        trades_label.setText(f"{total_trades}건")
+
+    # ========================= ROI Snapshot =========================
+
+    def _init_pnl_snapshot(self, layout: QVBoxLayout) -> None:
+        self._fig_snapshot = Figure(figsize=(6, 3.6), facecolor=COLORS['bg_medium'])  # 세로 ↑
+        self._fig_snapshot.subplots_adjust(left=0.08, right=0.96, top=0.88, bottom=0.18)
+        self._canvas_snapshot = FigureCanvas(self._fig_snapshot)
+        self._canvas_snapshot.setMinimumHeight(240)  # 눌림 방지
+        self._ax_snapshot = self._fig_snapshot.add_subplot(111)
+        self._ax_snapshot.set_title("ROI Snapshot (%)", fontsize=12, color=COLORS['text_primary'], pad=10)
+        self._ax_snapshot.set_facecolor(COLORS['chart_bg'])
+        self._ax_snapshot.tick_params(axis="x", colors=COLORS['text_secondary'], labelsize=9)
+        self._ax_snapshot.tick_params(axis="y", colors=COLORS['text_secondary'], labelsize=9)
+        self._ax_snapshot.spines['top'].set_visible(False)
+        self._ax_snapshot.spines['right'].set_visible(False)
+        self._ax_snapshot.spines['left'].set_color(COLORS['border'])
+        self._ax_snapshot.spines['bottom'].set_color(COLORS['border'])
+
+        frame = QFrame()
+        frame.setStyleSheet(STYLES['frame'])
+        vbox = QVBoxLayout(frame)
+        vbox.setContentsMargins(8, 8, 8, 8)
+        vbox.addWidget(self._canvas_snapshot)
+        layout.addWidget(frame)
+
+    def _update_pnl_snapshot(self, roi_value: float) -> None:
+        """메인 스레드에서만 호출되어야 함"""
+        if not _HAS_MPL:
+            return
+            
+        now = datetime.now()
+        self._pnl_snapshots.append((now, roi_value))
+        if len(self._pnl_snapshots) > 60:
+            self._pnl_snapshots.pop(0)
+
+        if not self._pnl_snapshots:
+            return
+
+        try:
+            times = [t.strftime("%H:%M:%S") for t, _ in self._pnl_snapshots]
+            rois = [r for _, r in self._pnl_snapshots]
+
+            self._ax_snapshot.clear()
+            self._ax_snapshot.plot(times, rois, color=COLORS['chart_line'], linewidth=2.5, marker='o', markersize=3)
+            self._ax_snapshot.fill_between(range(len(rois)), rois, alpha=0.2, color=COLORS['chart_line'])
+            self._ax_snapshot.set_ylabel("ROI (%)", color=COLORS['text_secondary'], fontsize=10)
+            
+            # x축 레이블 간격 조정
+            step = max(1, len(times)//5)
+            indices = list(range(0, len(times), step))
+            self._ax_snapshot.set_xticks(indices)
+            self._ax_snapshot.set_xticklabels([times[i] for i in indices], rotation=0, fontsize=9)
+            
+            self._ax_snapshot.set_facecolor(COLORS['chart_bg'])
+            self._ax_snapshot.grid(True, alpha=0.15, color=COLORS['text_secondary'])
+            self._ax_snapshot.spines['top'].set_visible(False)
+            self._ax_snapshot.spines['right'].set_visible(False)
+            self._ax_snapshot.spines['left'].set_color(COLORS['border'])
+            self._ax_snapshot.spines['bottom'].set_color(COLORS['border'])
+            
+            # draw_idle()만 호출 - tight_layout() 제거
+            self._canvas_snapshot.draw_idle()
+        except Exception as e:
+            logger.debug(f"PnL snapshot update error: {e}")
+
+    # ========================= 컨트롤바 =========================
+
+    def _create_control_bar(self, layout: QVBoxLayout) -> None:
+        bar = QHBoxLayout()
+        bar.setSpacing(12)
+
+        self.btn_refresh = QPushButton("🔄 데이터 새로고침")
+        self.btn_refresh.setStyleSheet(STYLES['button'])
+        self.btn_refresh.clicked.connect(self._on_refresh_clicked)
+        bar.addWidget(self.btn_refresh)
+
+        self.btn_report = QPushButton("📄 일일 리포트")
+        self.btn_report.setStyleSheet(STYLES['button'])
+        self.btn_report.clicked.connect(self._on_daily_report)
+        bar.addWidget(self.btn_report)
+        
+        bar.addStretch()
+
+        self.lbl_status = QLabel("● 준비")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px; margin-left: 12px;")
+        bar.addWidget(self.lbl_status)
+
+        layout.addLayout(bar)
+
+    # ========================= 탭 구성 =========================
+
+    def _create_performance_tab(self, tab: QWidget) -> None:
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        self.tbl_performance = QTableWidget(0, 12)
+        self.tbl_performance.setStyleSheet(STYLES['table'])
+        self.tbl_performance.setAlternatingRowColors(True)
+        self.tbl_performance.setHorizontalHeaderLabels([
+            "전략", "실현손익", "ROI%", "승률%", "승/패", "평균익", "평균손",
+            "PF", "Sharpe", "MDD%", "매수총액", "수수료"
+        ])
+        # 스크롤 가능하도록 ResizeToContents로 변경
+        self.tbl_performance.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.tbl_performance.horizontalHeader().setStretchLastSection(True)
+        self.tbl_performance.verticalHeader().setVisible(False)
+        self.tbl_performance.setMinimumWidth(800)  # 최소 너비 설정
+        layout.addWidget(self.tbl_performance)
+
+    def _create_positions_tab(self, tab: QWidget) -> None:
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        self.tbl_positions = QTableWidget(0, 10)
+        self.tbl_positions.setStyleSheet(STYLES['table'])
+        self.tbl_positions.setAlternatingRowColors(True)
+        self.tbl_positions.setHorizontalHeaderLabels([
+            "종목코드", "보유수량", "평단가", "마지막매수가", "마지막매도가",
+            "누적손익", "매수일", "매도일", "총거래", "총승리"
+        ])
+        # 스크롤 가능하도록 ResizeToContents로 변경
+        self.tbl_positions.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.tbl_positions.horizontalHeader().setStretchLastSection(True)
+        self.tbl_positions.verticalHeader().setVisible(False)
+        self.tbl_positions.setMinimumWidth(800)  # 최소 너비 설정
+        layout.addWidget(self.tbl_positions)
+
+    def _create_risk_tab(self, tab: QWidget) -> None:
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        info_label = QLabel("⚠️ 리스크 관련 지표는 추후 확장 예정")
+        info_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px; padding: 20px;")
+        info_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(info_label)
+
+    def _create_history_tab(self, tab: QWidget) -> None:
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        
+        if not _HAS_MPL:
+            layout.addWidget(QLabel("Matplotlib이 필요합니다."))
+            return
+
+        self._fig_history = Figure(figsize=(6, 3), facecolor=COLORS['bg_medium'])
+        self._fig_history.subplots_adjust(left=0.12, right=0.96, top=0.92, bottom=0.12)
+        self._canvas_history = FigureCanvas(self._fig_history)
+        self._ax_history = self._fig_history.add_subplot(111)
+        
+        frame = QFrame()
+        frame.setStyleSheet(STYLES['frame'])
+        vbox = QVBoxLayout(frame)
+        vbox.addWidget(self._canvas_history)
+        layout.addWidget(frame)
+
+        btn_reload = QPushButton("📈 최근 손익 히스토리 갱신")
+        btn_reload.setStyleSheet(STYLES['button'])
+        btn_reload.clicked.connect(self._update_history_chart)
+        layout.addWidget(btn_reload)
+
+    # ========================= 히스토리 차트 =========================
+
+    def _update_history_chart(self) -> None:
+        """메인 스레드에서만 호출되어야 함"""
+        if not _HAS_MPL:
+            return
+            
+        try:
+            self._ax_history.clear()
+            files = sorted(self.result_base_dir.glob("trading_result_*.json"))
+            recent = files[-7:] if len(files) > 7 else files
+            days, pnls = [], []
+
+            for f in recent:
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    pnl = data.get("summary", {}).get("realized_pnl_net", 0.0)
+                    days.append(f.stem.split("_")[-1])
+                    pnls.append(pnl)
+                except Exception:
+                    continue
+
+            if not days:
+                self._ax_history.text(0.5, 0.5, '데이터 없음', 
+                                     ha='center', va='center', 
+                                     color=COLORS['text_secondary'],
+                                     transform=self._ax_history.transAxes)
+                self._canvas_history.draw_idle()
+                return
+
+            colors = [COLORS['success'] if p >= 0 else COLORS['danger'] for p in pnls]
+            self._ax_history.bar(days, pnls, color=colors, alpha=0.8, edgecolor=COLORS['border'])
+            self._ax_history.axhline(y=0, color=COLORS['text_secondary'], linestyle='--', linewidth=1, alpha=0.5)
+            self._ax_history.set_title("최근 7일 손익 추이", color=COLORS['text_primary'], fontsize=12, pad=10)
+            self._ax_history.set_ylabel("실현손익 (₩)", color=COLORS['text_secondary'], fontsize=10)
+            self._ax_history.tick_params(colors=COLORS['text_secondary'], labelsize=9)
+            self._ax_history.set_facecolor(COLORS['chart_bg'])
+            self._ax_history.spines['top'].set_visible(False)
+            self._ax_history.spines['right'].set_visible(False)
+            self._ax_history.spines['left'].set_color(COLORS['border'])
+            self._ax_history.spines['bottom'].set_color(COLORS['border'])
+            self._ax_history.grid(True, alpha=0.15, axis='y', color=COLORS['text_secondary'])
+            
+            # draw_idle()만 호출 - tight_layout() 제거
+            self._canvas_history.draw_idle()
+        except Exception as e:
+            logger.debug(f"History chart update error: {e}")
+
+    # ========================= 알림 패널 =========================
+
+    def _create_alert_panel(self, layout: QVBoxLayout) -> None:
+        frame = QFrame()
+        frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['bg_light']};
+                border-left: 4px solid {COLORS['warning']};
+                border-radius: 6px;
+                padding: 8px;  /* 12 → 8로 살짝 축소 */
+            }}
+        """)
+
+        # ⬇️ 알림 영역 크기 제한
+        frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        frame.setMaximumHeight(90)   # 원하는 높이(예: 70~120 사이)로 조절
+
+        vbox = QVBoxLayout(frame)
+        vbox.setSpacing(6)  # 8 → 6
+        lbl = QLabel("⚠️ 알림")
+        lbl.setStyleSheet(f"font-weight: bold; color: {COLORS['warning']}; font-size: 13px;")
+        vbox.addWidget(lbl)
+        
+        self.lbl_alerts = QLabel("알림 없음")
+        self.lbl_alerts.setWordWrap(True)
+        self.lbl_alerts.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
+        vbox.addWidget(self.lbl_alerts)
+        
+        layout.addWidget(frame)
+
+    # ========================= 타이머 =========================
+
     def _init_timer(self) -> None:
-        self._timer = QTimer(self)
+        self._timer = QTimer(self)   # parent=self → UI 스레드 소유
         self._timer.setInterval(self._poll_ms)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
 
-    def stop_auto_refresh(self) -> None:
-        if self._timer.isActive():
-            self._timer.stop()
-
-    def start_auto_refresh(self) -> None:
-        if not self._timer.isActive():
-            self._timer.start()
 
 
-    def update_snapshot(self, snap: Dict[str, Any]) -> None:
-        """
-        외부에서 계산된 PnL 스냅샷(dict)을 화면에 반영.
-        기대 구조:
-        {
-          "portfolio": {...},              # 사용 안 해도 무방
-          "by_condition": { name: {
-              "realized_pnl_net": float,   # 또는 realized_net
-              "win_rate": float,
-              "roi_pct": float,            # 또는 roi
-              "wins": int
-          }, ...},
-          "by_symbol": {...}               # 필요시 확장
-        }
-        """
+    @Slot()
+    def _on_store_updated(self) -> None:
+        if getattr(self, "_refresh_pending", False):
+            return
+        self._refresh_pending = True
+        QTimer.singleShot(120, self._safe_refresh)
+
+    
+    @Slot()
+    def _safe_refresh(self) -> None:
         try:
-            by_cond = snap.get("by_condition") or {}
-            rows: List[StrategyRow] = []
-            for name, s in by_cond.items():
-                if not isinstance(s, dict):
-                    continue
-                realized_net = float(
-                    s.get("realized_pnl_net", s.get("realized_net", 0.0))
-                )
-                win_rate = float(s.get("win_rate", 0.0))
-                roi_pct = float(s.get("roi_pct", s.get("roi", 0.0)))
-                wins = int(s.get("wins", 0))
-                rows.append(StrategyRow(name=name,
-                                        realized_net=realized_net,
-                                        win_rate=win_rate,
-                                        roi_pct=roi_pct,
-                                        wins=wins))
-            # 표/차트 반영
-            self._paint_table(rows)
-            if _HAS_MPL:
-                self._paint_roi_chart(rows)
-        except Exception as e:
-            logger.exception("RiskDashboard.update_snapshot failed: %s", e)
+            self.refresh(force=True)
+        finally:
+            self._refresh_pending = False
 
+    # ========================= 리프레시 =========================
 
-    # ---------------- 데이터 갱신 ----------------
     def refresh(self, force: bool = False) -> None:
         try:
-            if not self._json_path_obj.exists():
+            daily_path = self.store.daily_path
+            cumulative_path = self.store.cumulative_path
+
+            if not daily_path.exists():
+                self._paint_empty_state()
                 return
-            fi = QFileInfo(str(self._json_path_obj))
-            mtime = int(fi.lastModified().toSecsSinceEpoch())
-            if (not force) and (self._last_mtime is not None) and (mtime == self._last_mtime):
-                return
-            self._last_mtime = mtime
 
-            data = json.loads(self._json_path_obj.read_text(encoding="utf-8"))
-            self._update_from_result(data)
+            fi_daily = QFileInfo(str(daily_path))
+            mtime_daily = int(fi_daily.lastModified().toSecsSinceEpoch())
 
-            # ★ 메인 UI로 스냅샷 emit (리프레시 때마다)
-            snap = self._build_snapshot_for_ui(data)
-            self.pnl_snapshot.emit(snap)
-            logger.debug("RiskDashboard.refresh")
+            if force or mtime_daily != self._last_daily_mtime:
+                self._last_daily_mtime = mtime_daily
+                daily_data = json.loads(daily_path.read_text(encoding="utf-8"))
+                self._update_from_daily(daily_data)
 
+                total_roi = sum(s.roi_pct for s in self._current_metrics) / len(self._current_metrics) if self._current_metrics else 0.0
+                
+                self._update_summary_cards()
+                
+                if _HAS_MPL:
+                    self._update_pnl_snapshot(total_roi)
+
+                self._paint_all_views()
+                self.lbl_status.setText(f"● 갱신됨: {daily_path.name}")
+                self.lbl_status.setStyleSheet(f"color: {COLORS['success']}; font-size: 12px;")
         except Exception:
-            logger.exception("RiskDashboard.refresh error")
+            logger.exception("Dashboard refresh error")
+            self.lbl_status.setText("● 오류 발생")
+            self.lbl_status.setStyleSheet(f"color: {COLORS['danger']}; font-size: 12px;")
 
-    def _update_from_result(self, result: Dict[str, Any]) -> None:
-        strategies = result.get("strategies") or {}
+    # ========================= 데이터 반영 =========================
 
-        rows: List[StrategyRow] = []
-        for name, s in strategies.items():
+    def _update_from_daily(self, data: Dict[str, Any]) -> None:
+        metrics = []
+        for name, s in data.get("strategies", {}).items():
             realized_net = float(s.get("realized_pnl_net", 0.0))
-            win_rate = float(s.get("win_rate", 0.0))
             roi_pct = float(s.get("roi_pct", 0.0))
+            win_rate = float(s.get("win_rate", 0.0))
             wins = int(s.get("wins", 0))
+            sells = int(s.get("sells", 0))
+            loses = max(0, sells - wins)
+            avg_win = float(s.get("avg_win", 0.0))
+            avg_loss = float(abs(s.get("avg_loss", 0.0)))
             buy_notional = float(s.get("buy_notional", 0.0))
-            if roi_pct == 0.0 and buy_notional > 0.0:
-                roi_pct = (realized_net / buy_notional) * 100.0
-            rows.append(StrategyRow(
+            fees = float(s.get("fees", 0.0))
+            total_win = avg_win * wins
+            total_loss = avg_loss * loses
+            profit_factor = (total_win / total_loss) if total_loss > 0 else (999.0 if total_win > 0 else 0.0)
+            sharpe = (roi_pct / 20.0) if roi_pct > 0 else 0.0
+            max_dd = (avg_loss * min(3, loses)) / buy_notional * 100 if (buy_notional > 0 and loses > 0) else 0.0
+
+            metrics.append(StrategyMetrics(
                 name=name,
                 realized_net=realized_net,
                 win_rate=win_rate,
                 roi_pct=roi_pct,
-                wins=wins
+                wins=wins,
+                loses=loses,
+                total_trades=sells,
+                avg_win=avg_win,
+                avg_loss=avg_loss,
+                profit_factor=profit_factor,
+                sharpe_ratio=sharpe,
+                max_drawdown=max_dd,
+                buy_notional=buy_notional,
+                fees=fees
             ))
+        self._current_metrics = metrics
 
-        self._paint_table(rows)
-        if _HAS_MPL:
-            self._paint_roi_chart(rows)
+    def _update_from_cumulative(self, data: Dict[str, Any]) -> None:
+        positions = []
+        for code, s in data.get("symbols", {}).items():
+            positions.append(PositionInfo(
+                code=code,
+                qty=int(s.get("qty", 0)),
+                avg_price=float(s.get("avg_price", 0.0)),
+                last_buy_price=float(s.get("last_buy_price", 0.0)),
+                last_buy_date=s.get("last_buy_date", ""),
+                last_sell_price=float(s.get("last_sell_price", 0.0)),
+                last_sell_date=s.get("last_sell_date", ""),
+                cumulative_pnl=float(s.get("cumulative_realized_net", 0.0)),
+                total_trades=int(s.get("total_trades", 0)),
+                total_wins=int(s.get("total_wins", 0))
+            ))
+        self._current_positions = positions
 
-    def _paint_table(self, rows: List[StrategyRow]) -> None:
-        def fmt_k(v: float) -> str:
-            return f"{v:+,.0f}"
+    # ========================= 테이블 렌더링 =========================
 
-        def fmt_pct(v: float, digits: int = 2) -> str:
-            sign = "+" if v >= 0 else ""
-            return f"{sign}{v:.{digits}f}"
-
-        def colorize(item: QTableWidgetItem, val: float):
-            if val > 0:
-                item.setForeground(QColor("#22c55e"))
-            elif val < 0:
-                item.setForeground(QColor("#ef4444"))
-
-        self.tbl.setSortingEnabled(False)
-        self.tbl.setRowCount(len(rows))
-
-        rows_sorted = sorted(rows, key=lambda r: r.roi_pct, reverse=True)
-        for r, row in enumerate(rows_sorted):
+    def _paint_all_views(self) -> None:
+        tbl = self.tbl_performance
+        tbl.setRowCount(len(self._current_metrics))
+        
+        for i, m in enumerate(self._current_metrics):
+            # 데이터 설정
             items = [
-                QTableWidgetItem(row.name),
-                QTableWidgetItem(fmt_k(row.realized_net)),
-                QTableWidgetItem(fmt_pct(row.win_rate, 1)),
-                QTableWidgetItem(fmt_pct(row.roi_pct, 2)),
-                QTableWidgetItem(str(row.wins)),
+                (m.name, None),
+                (f"{m.realized_net:,.0f}", m.realized_net),
+                (f"{m.roi_pct:.2f}%", m.roi_pct),
+                (f"{m.win_rate:.1f}%", m.win_rate),
+                (f"{m.wins}/{m.loses}", None),
+                (f"{m.avg_win:,.0f}", None),
+                (f"{m.avg_loss:,.0f}", None),
+                (f"{m.profit_factor:.2f}", m.profit_factor),
+                (f"{m.sharpe_ratio:.2f}", m.sharpe_ratio),
+                (f"{m.max_drawdown:.2f}%", m.max_drawdown),
+                (f"{m.buy_notional:,.0f}", None),
+                (f"{m.fees:,.0f}", None)
             ]
-            items[1].setData(Qt.UserRole, row.realized_net)
-            items[2].setData(Qt.UserRole, row.win_rate)
-            items[3].setData(Qt.UserRole, row.roi_pct)
-            items[4].setData(Qt.UserRole, row.wins)
+            
+            for col, (text, value) in enumerate(items):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                
+                # 색상 적용
+                if value is not None:
+                    if col == 1 or col == 2:  # 실현손익, ROI
+                        color = QColor(COLORS['success']) if value >= 0 else QColor(COLORS['danger'])
+                        item.setForeground(color)
+                    elif col == 3:  # 승률
+                        color = QColor(COLORS['success']) if value >= 50 else QColor(COLORS['warning'])
+                        item.setForeground(color)
+                    elif col == 7:  # PF
+                        color = QColor(COLORS['success']) if value >= 1.5 else QColor(COLORS['warning'])
+                        item.setForeground(color)
+                
+                tbl.setItem(i, col, item)
 
-            colorize(items[1], row.realized_net)
-            colorize(items[3], row.roi_pct)
-
-            for c, it in enumerate(items):
-                it.setFlags(it.flags() ^ Qt.ItemIsEditable)
-                it.setTextAlignment((Qt.AlignLeft if c == 0 else Qt.AlignRight) | Qt.AlignVCenter)
-                self.tbl.setItem(r, c, it)
-
-        self.tbl.setSortingEnabled(True)
-        self.tbl.sortItems(3, Qt.DescendingOrder)
-
-    def _paint_roi_chart(self, rows: List[StrategyRow], top_n: int = 20) -> None:
-        self.ax.clear()
-        if not rows:
-            self.canvas.draw_idle()
-            return
-        items = sorted(rows, key=lambda r: r.roi_pct, reverse=True)[:top_n]
-        labels = [r.name for r in items]
-        vals = [r.roi_pct for r in items]
-        colors = ["#22c55e" if v >= 0 else "#ef4444" for v in vals]
-
-        self.ax.bar(labels, vals, color=colors)
-        self.ax.set_title("전략별 수익률(%)", color="#e9edf1", fontsize=10, fontweight="bold")
-        self.ax.set_ylabel("%", color="#cfd6df")
-        self.ax.grid(True, alpha=0.2, color="#555")
-        self.ax.tick_params(axis="x", labelsize=8, labelrotation=28, colors="#e9edf1")
-        self.ax.tick_params(axis="y", labelsize=8, colors="#e9edf1")
-        for s in self.ax.spines.values():
-            s.set_color("#555")
-        self.canvas.draw_idle()
-
-    # ---------------- 오늘만 새로고침 (협력형 + 단계/배치 로깅 + 0건 우회) ----------------
-    def _on_refresh_today_clicked(self) -> None:
-        if getattr(self, "_rebuild_running", False):
-            return
-        self._rebuild_running = True
-
-        logger.info("[rebuild] UI: start '오늘만 새로고침'")
-
-        # UI/Watcher 일시 정지
-        self.stop_auto_refresh()
-        try:
-            if getattr(self, "watcher", None):
-                self.watcher.stop()
-        except Exception:
-            logger.exception("watcher.stop failed")
-
-        self.btn_refresh_today.setEnabled(False)
-        self.btn_daily.setEnabled(False)
-        self.btn_refresh_today.setText("🔁 새로고침 중...")
-        QGuiApplication.setOverrideCursor(Qt.WaitCursor)
-
-        # 협력형 펌프 시작
-        self._run_rebuild_today_coop()
-
-    def _run_rebuild_today_coop(self) -> None:
-        from datetime import datetime, timezone, timedelta
-        KST = timezone(timedelta(hours=9))
-        today = datetime.now(KST).date().isoformat()
-
-        base = (self._watcher_cfg.base_dir / self._watcher_cfg.subdir).resolve()
-        base.mkdir(parents=True, exist_ok=True)
-        target = base / self._watcher_cfg.file_pattern.format(date=today)
-
-        self._rebuild_state = {
-            "path": target,
-            "enc": None,
-            "delim": ",",
-            "header": None,     # ★ 실제 파일 헤더 저장
-            "hdr_map": None,    # 캐논→실제헤더 매핑
-            "fh": None,
-            "applied": 0,
-            "invalid": 0,
-            "inferred_side": 0,
-            "invalid_samples": [],
-            "MAX_INVALID_SAMPLES": 5,
-            "batch": [],
-            "BATCH_SIZE": 2000,   # 라인 파싱 배치 크기
-            "STEP": "open",       # open -> scan -> rebuild -> finish
-        }
-        logger.info(f"[rebuild] step=open target={target}")
-        QTimer.singleShot(0, self._rebuild_pump)
-
-    def _rebuild_pump(self) -> None:
-        st = self._rebuild_state
-        try:
-            if not st:
-                return
-
-            if st["STEP"] == "open":
-                p: Path = st["path"]
-                if not p.exists():
-                    logger.info("[rebuild] open: file not found → write empty and finish")
-                    self._atomic_write_result(self._empty_payload())
-                    st["STEP"] = "finish"
-                    logger.info("[rebuild] step=finish (empty)")
-                    return QTimer.singleShot(0, self._rebuild_pump)
-
-                st["enc"] = _pick_encoding(p)
-                st["delim"] = _sniff_delim(p)
-                st["fh"] = open(p, "r", encoding=st["enc"])
-                first = st["fh"].readline()
-
-                import csv, io
-                reader = csv.reader(io.StringIO(first), delimiter=st["delim"])
-                header = next(reader, None)
-                st["header"] = header or []
-                st["hdr_map"] = _best_header_map(header or [])
-                st["STEP"] = "scan"
-                logger.info(f"[rebuild] step=scan enc={st['enc']} delim={st['delim']!r}")
-                return QTimer.singleShot(0, self._rebuild_pump)
-
-            if st["STEP"] == "scan":
-                # 라인을 BATCH_SIZE씩 읽어 TradeRow로 변환
-                import csv, io
-                lines: List[str] = []
-                for _ in range(st["BATCH_SIZE"]):
-                    ln = st["fh"].readline()
-                    if not ln:
-                        break
-                    ln = ln.rstrip("\r\n")
-                    if ln:
-                        lines.append(ln)
-
-                applied_before = st["applied"]
-                inferred_before = st["inferred_side"]
-                invalid_before = st["invalid"]
-
-                for line in lines:
-                    try:
-                        # ★ 헤더는 실제 파일 헤더를 그대로 사용
-                        dr = csv.DictReader(io.StringIO(line), fieldnames=st["header"], delimiter=st["delim"])
-                        raw = next(dr)
-
-                        qty_raw = _to_int(_pick_any(raw, st["hdr_map"], ["qty", "quantity", "filled_qty", "exec_qty", "수량"], "0"))
-                        price_txt = _pick_any(raw, st["hdr_map"], ["price", "exec_price", "avg_price", "체결가", "가격"], "0")
-                        price = _to_float_soft(price_txt)
-                        symbol = _pick_any(raw, st["hdr_map"], ["symbol", "stk_cd", "ticker", "code", "종목코드"])
-                        fee = _to_float(_pick_any(raw, st["hdr_map"], ["fee", "commission", "comm", "수수료"], "0"))
-                        side_text = _pick_any(raw, st["hdr_map"], ["side", "action", "buy_sell", "bs", "direction", "매매구분"])
-
-                        if not symbol or price <= 0.0:
-                            st["invalid"] += 1
-                            if len(st["invalid_samples"]) < st["MAX_INVALID_SAMPLES"]:
-                                st["invalid_samples"].append({
-                                    "symbol": symbol, "price_txt": price_txt, "line_preview": line[:120]
-                                })
-                            continue
-
-                        side = _normalize_side(side_text)
-                        if side is None:
-                            side = _infer_side(side_text, qty_raw); st["inferred_side"] += 1
-
-                        qty = abs(qty_raw) if qty_raw != 0 else 0
-                        status = _pick_any(raw, st["hdr_map"], ["status", "state", "order_status", "exec_status", "상태"], "filled") or "filled"
-
-                        st["batch"].append(TradeRow(
-                            time=_pick_any(raw, st["hdr_map"], ["time", "ts", "order_time", "exec_time", "filled_at", "timestamp", "체결시각"]),
-                            side=side, symbol=symbol, qty=qty, price=price, fee=fee, status=status,
-                            strategy=_pick_any(raw, st["hdr_map"], ["strategy", "cond", "조건식"]) or None, meta=None
-                        ))
-                        st["applied"] += 1
-                    except Exception:
-                        st["invalid"] += 1
-                        continue
-
-                # 배치 로그 + invalid 샘플
-                if lines:
-                    logger.info(
-                        f"[rebuild] scan-batch lines={len(lines)} "
-                        f"applied+={st['applied']-applied_before} "
-                        f"inferred_side+={st['inferred_side']-inferred_before} "
-                        f"invalid+={st['invalid']-invalid_before} "
-                        f"(cum applied={st['applied']}, invalid={st['invalid']}, inferred_side={st['inferred_side']})"
-                    )
-                    if st["invalid_samples"]:
-                        logger.warning("[rebuild] invalid samples (first few): %s", st["invalid_samples"])
-                        st["invalid_samples"].clear()
-
-                # EOF 도달?
-                if not lines:
-                    try:
-                        st["fh"].close()
-                    except Exception:
-                        pass
-                    st["STEP"] = "rebuild"
-                    logger.info("[rebuild] step=rebuild (final write)")
-                    return QTimer.singleShot(0, self._rebuild_pump)
-
-                # 다음 틱으로 이어서
-                return QTimer.singleShot(0, self._rebuild_pump)
-
-            if st["STEP"] == "rebuild":
-                trades_cnt = len(st["batch"])
-                logger.info(f"[rebuild] begin write trades={trades_cnt}")
-                if trades_cnt == 0:
-                    # 0건이면 스토어 호출 없이 빈 페이로드 기록(원자적)
-                    self._atomic_write_result(self._empty_payload())
-                    logger.info("[rebuild] wrote empty payload (0 trades)")
+        # 포지션 테이블
+        tbl2 = self.tbl_positions
+        tbl2.setRowCount(len(self._current_positions))
+        
+        for i, p in enumerate(self._current_positions):
+            items = [
+                p.code,
+                str(p.qty),
+                f"{p.avg_price:,.0f}",
+                f"{p.last_buy_price:,.0f}",
+                f"{p.last_sell_price:,.0f}",
+                (f"{p.cumulative_pnl:,.0f}", p.cumulative_pnl),
+                p.last_buy_date,
+                p.last_sell_date,
+                str(p.total_trades),
+                str(p.total_wins)
+            ]
+            
+            for col, data in enumerate(items):
+                if isinstance(data, tuple):
+                    text, value = data
+                    item = QTableWidgetItem(text)
+                    color = QColor(COLORS['success']) if value >= 0 else QColor(COLORS['danger'])
+                    item.setForeground(color)
                 else:
-                    # 정상 경로: 스토어 한 번 호출
-                    self._store.rebuild_from_trades(st["batch"])
-                    logger.info("[rebuild] store.rebuild_from_trades done")
-                st["STEP"] = "finish"
-                logger.info("[rebuild] step=finish (notify)")
-                return QTimer.singleShot(0, self._rebuild_pump)
+                    item = QTableWidgetItem(data)
+                
+                item.setTextAlignment(Qt.AlignCenter)
+                tbl2.setItem(i, col, item)
 
-            if st["STEP"] == "finish":
-                self.refresh(force=True)
-                msg = (
-                    "오늘 CSV로 새로고침을 완료했습니다.\n\n"
-                    f"✅ 적용된 체결: {st['applied']:,} 건\n"
-                    f"ℹ️  추론된 사이드: {st['inferred_side']:,} 건\n"
-                    f"⚠️  무효 라인(심볼/가격 부족): {st['invalid']:,} 건\n\n"
-                    f"파일 경로:\n{st['path']}"
-                )
-                QMessageBox.information(self, "작업 완료", msg)
-                self._rebuild_state = None
-                self._finish_rebuild_ui_unlock()
-                try:
-                    if getattr(self, "watcher", None):
-                        self.watcher.start()
-                except Exception:
-                    logger.exception("watcher.start failed")
+    def _paint_empty_state(self) -> None:
+        self.tbl_performance.setRowCount(0)
+        self.tbl_positions.setRowCount(0)
+        self.lbl_status.setText("⚠️ 데이터 없음")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['warning']}; font-size: 12px;")
 
-        except Exception as e:
-            logger.exception("rebuild_pump error")
-            try:
-                QMessageBox.warning(self, "오류", f"오늘 새로고침 중 오류가 발생했습니다.\n{e}")
-            finally:
-                self._rebuild_state = None
-                self._finish_rebuild_ui_unlock()
-                try:
-                    if getattr(self, "watcher", None):
-                        self.watcher.start()
-                except Exception:
-                    logger.exception("watcher.start failed")
+    # ========================= 기타 핸들러 =========================
 
-    # ---------- JSON 기록 유틸 ----------
-    def _empty_payload(self) -> dict:
-        return {"strategies": {}, "summary": {"realized_pnl_gross": 0.0, "fees": 0.0, "realized_pnl_net": 0.0, "trades": 0.0, "win_rate": 0.0}, "symbols": {}}
+    def _on_refresh_clicked(self) -> None:
+        self.refresh(force=True)
+        if _HAS_MPL:
+            self._update_history_chart()
+        self.lbl_status.setText("● 새로고침 완료")
+        self.lbl_status.setStyleSheet(f"color: {COLORS['success']}; font-size: 12px;")
 
-    def _atomic_write_result(self, payload: dict) -> None:
-        tmp = self._json_path_obj.with_suffix(self._json_path_obj.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        tmp.replace(self._json_path_obj)
+    def _handle_alert(self, alert_type: str, message: str, data: Dict[str, Any]) -> None:
+        """알림 핸들러 - 메인 스레드에서 안전하게 실행"""
+        # 메인 스레드에서 UI 업데이트만 수행 (블로킹 다이얼로그 제거)
+        QMetaObject.invokeMethod(
+            self, 
+            "_update_alert_ui",
+            Qt.QueuedConnection,
+            Q_ARG(str, alert_type),
+            Q_ARG(str, message)
+        )
+    
+    @Slot(str, str)
+    def _update_alert_ui(self, alert_type: str, message: str) -> None:
+        """UI 업데이트 (메인 스레드) - Non-blocking"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_msg = f"[{timestamp}] {message}"
+        self._alert_messages.append(formatted_msg)
+        
+        # 최근 5개만 유지
+        if len(self._alert_messages) > 5:
+            self._alert_messages = self._alert_messages[-5:]
+        
+        recent_alerts = "\n".join(self._alert_messages)
+        self.lbl_alerts.setText(recent_alerts)
+        
+        # 알림 타입에 따라 색상 변경
+        if "critical" in alert_type.lower() or "error" in alert_type.lower():
+            color = COLORS['danger']
+        elif "warning" in alert_type.lower():
+            color = COLORS['warning']
+        else:
+            color = COLORS['text_secondary']
+            
+        self.lbl_alerts.setStyleSheet(f"color: {color}; font-size: 12px;")
 
-    def _finish_rebuild_ui_unlock(self) -> None:
-        logger.info("[rebuild] UI: finish/unlock")
-        self.btn_refresh_today.setEnabled(True)
-        self.btn_daily.setEnabled(True)
-        self.btn_refresh_today.setText("⟳ 오늘만 새로고침")
-        QGuiApplication.restoreOverrideCursor()
-        self._rebuild_running = False
+    def _clear_alerts(self) -> None:
+        self._alert_messages.clear()
+        self.lbl_alerts.setText("알림 없음")
+        self.lbl_alerts.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 12px;")
+
+
+    def shutdown(self):
         try:
-            self.start_auto_refresh()
+            if hasattr(self, "_timer") and self._timer.isActive():
+                self._timer.stop()
         except Exception:
-            logger.exception("Failed to restart auto refresh")
+            pass
+        try:
+            if hasattr(self, "watcher") and self.watcher:
+                self.watcher.stop()  # 내부 python thread join
+        except Exception:
+            pass
 
-    def _build_snapshot_for_ui(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        symbols = result.get("symbols") or {}
-        by_symbol: Dict[str, Dict[str, Any]] = {}
-
-        for code6, s in symbols.items():
-            if not isinstance(s, dict):
-                continue
-            avg_buy = float(s.get("avg_price", 0.0) or 0.0)
-            last_sell = s.get("last_sell_price")  # 없으면 None
-            try:
-                avg_sell = float(last_sell) if last_sell is not None else None
-            except Exception:
-                avg_sell = None
-
-            by_symbol[code6] = {
-                "avg_buy_price": avg_buy if avg_buy > 0 else None,
-                "avg_sell_price": avg_sell,        # 있으면 전달
-                "qty": int(s.get("qty", 0) or 0),
-                # 확장 여지: "fees": s.get("fees", 0.0), "realized_pnl_net": s.get(...)
-            }
-
-        # 포트폴리오/전략 요약은 필요 최소치만(원하면 확장)
-        return {
-            "portfolio": {},
-            "by_symbol": by_symbol,
-            "by_condition": {},   # 필요 시 조건식 집계 넣기
-        }
+    def closeEvent(self, e):
+        self.shutdown()
+        super().closeEvent(e)
