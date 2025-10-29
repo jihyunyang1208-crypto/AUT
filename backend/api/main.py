@@ -77,7 +77,7 @@ async def start_condition(
 @app.get("/api/v1/risk/dashboard")
 async def get_risk_dashboard(user_id: str = Depends(get_current_user)):
     """리스크 대시보드 데이터"""
-    store = TradingResultStore(f"data/trading_result_{user_id}.json")
+    store = TradingResultStore(f"data/trading_results_{user_id}.json")
     snapshot = store.get_latest_snapshot()
     return snapshot
 

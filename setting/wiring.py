@@ -90,7 +90,9 @@ class AppWiring:
             logger.warning("[Wiring] apply ladder settings failed: %s", e)
 
         # --- 매수/매도 브로커(증권사/시뮬) 설정 적용 (HOT-SWAP) ---
-        if hasattr(self.trader, "broker"):
+        # a) 단일 브로커 핫스왑(레거시 유지)
+        if hasattr(self.trader, "broker") and not (cfg.accounts and len(cfg.accounts) > 0):
+
             try:
                 # 1. 설정값에서 벤더 추출
                 vendor = None
@@ -143,6 +145,15 @@ class AppWiring:
             except Exception as e:
                 # 이 에러는 핫스왑이 실패했음을 의미하며, 기존 브로커가 유지됩니다.
                 logger.critical("[Wiring] BROKER HOT-SWAP FAILED. Using existing broker. Error: %s", e)
+
+            # b) 멀티 계정 지원
+            try:
+                if cfg.accounts and hasattr(self.trader, "set_accounts") and callable(self.trader.set_accounts):
+                    # 활성/권한체크는 트레이더에서 한 번 더 수행
+                    self.trader.set_accounts(cfg.accounts)
+                    logger.info("[Wiring] multi-accounts applied (%d)", len(cfg.accounts))
+            except Exception as e:
+                logger.warning("[Wiring] set_accounts failed: %s", e)
 
 
         # --- 시뮬/실거래 분기 ---

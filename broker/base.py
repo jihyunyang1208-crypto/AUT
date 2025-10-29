@@ -14,6 +14,8 @@ class OrderRequest:
     trde_tp: str = "0"                # '0': 지정가, '3': 시장가 등
     side: OrderSide = "BUY"
     cond_uv: str = ""
+    account_id: Optional[str] = None    
+
 
 @dataclass
 class OrderResponse:

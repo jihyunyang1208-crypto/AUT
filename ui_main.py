@@ -1,7 +1,6 @@
 
 import os
 import sys
-import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
 
@@ -45,6 +44,8 @@ from PySide6.QtWidgets import QFileDialog
 
 from trading_report.report_dialog import ReportDialog
 import utils.result_paths as result_paths
+import logging
+logger = logging.getLogger(__name__)
 
 # 설정 / 와이어링  (분리해서 임포트하고 에러 로그 남김)
 try:
@@ -61,6 +62,7 @@ except Exception as e:
     apply_to_autotrader = lambda *a, **k: None
     AppSettings = type("Cfg", (), {})  # 최소 호환용
 
+
 try:
     from setting.wiring import AppWiring
 except Exception as e:
@@ -70,11 +72,11 @@ except Exception as e:
 # 포지션 관리 및 리스크 집계 모듈
 from trade_pro.auto_trader import AutoTrader
 # RiskDashboard 모듈 가져오기: 리스크 대시보드를 별도 모듈에서 관리
-from risk_management.risk_dashboard import RiskDashboard
 from utils.stock_info_manager import StockInfoManager 
 from utils.result_paths import path_today, path_today
 
-from risk_management.trading_results import TradingResultStore
+from risk_management.trading_results import TradingResultStore, AlertConfig
+from risk_management.risk_dashboard import RiskDashboard
 from risk_management.orders_watcher import OrdersCSVWatcher, WatcherConfig
 
 logger = logging.getLogger("ui_main")
@@ -135,7 +137,7 @@ class DataFrameModel(QAbstractTableModel):
 # 메인 윈도우
 # ----------------------------
 class MainWindow(QMainWindow):
-    # 외부 스레드 → UI 프록시 시그널 정의
+    sig_alert = Signal(str)   
     sig_new_stock_detail = Signal(dict)
     sig_trade_signal = Signal(dict)
 
@@ -421,9 +423,14 @@ class MainWindow(QMainWindow):
 
     def _build_risk_panel(self):
         """
-        리스크 패널 초기화 (시간대 분석 + 알림 포함)
+        리스크 패널 초기화 (JSONL 기반 / CSV 워처 제거)
+        - TradingResultStore가 JSONL을 append
+        - RiskDashboard가 JSONL을 tail해서 UI 갱신
         """
-        # 1. 현재가 제공 함수
+        # 0) 공통 경로(파일) 하나만 정합니다. 두 컴포넌트가 같은 parent 폴더를 보게!
+        #    logs/results/trading_results.jsonl -> parent: logs/results/
+        common_json = Path.cwd() / "logs" / "results" / "trading_results.jsonl"
+        # 1) 현재가 제공 함수 (옵션)
         def price_provider(sym: str) -> Optional[float]:
             try:
                 if hasattr(self, "market_api") and self.market_api:
@@ -432,88 +439,87 @@ class MainWindow(QMainWindow):
                 pass
             return None
 
-        # 2. 데일리 리포트 콜백
+        # 2) 일일 리포트 콜백 (UI 쪽에 이미 구현되어 있다면 재사용)
         def on_daily_report():
             try:
+                # 사용 중인 함수명에 맞춰 호출하세요. (예: on_click_daily_report / on_click_open_last_report)
                 self.on_click_daily_report()
             except Exception:
-                logger.exception("on_daily_report failed")
+                pass
 
-        # 3. ✅ 알림 핸들러 추가
+        # 3) 알림 콜백: 워커 스레드 → UI 스레드로 안전하게 전달
         def on_alert(alert_type: str, message: str, data: dict):
-            # 워커 스레드에서 호출돼도 안전: UI 시그널로 전달
             try:
-                self.sig_alert.emit(alert_type, message, data)
+                # UI에 시그널이 있다면 활용 (ex: self.sig_alert.emit(...))
+                if hasattr(self, "sig_alert"):
+                    self.sig_alert.emit(alert_type, message, data)
             except Exception:
-                logger.exception("sig_alert emit failed")
+                pass
 
-        # 4. ✅ TradingResultStore 생성 (멤버 변수로 보관)
-        from risk_management.trading_results import TradingResultStore, AlertConfig
-        
-        alert_config = AlertConfig(
+
+        #  JSONL 부트스트랩: 오늘 CSV → JSONL 1회 변환
+        try:
+            from risk_management.bootstrap import bootstrap_jsonl_from_csv
+            results_dir = Path.cwd() / "logs" / "results"
+            trades_dir  = Path.cwd() / "logs" / "trades"
+            results_dir.mkdir(parents=True, exist_ok=True)
+
+            # 오늘 날짜만 검사 (중복 append 방지: JSONL 존재하고 1줄 이상이면 skip)
+            day = datetime.now().date().isoformat()
+            daily_jsonl = results_dir / f"trading_results_{day}.jsonl"
+            need_bootstrap = (not daily_jsonl.exists()) or (daily_jsonl.stat().st_size == 0)
+
+            if need_bootstrap:
+                bootstrap_jsonl_from_csv(
+                    results_dir=results_dir,
+                    trades_dir=trades_dir,
+                    date_str=day,
+                    file_pattern="orders_{date}.csv",
+                    write_daily_close=True,
+                )
+        except Exception:
+            # 부트스트랩 실패해도 앱은 계속 동작
+            pass
+
+        # 4) TradingResultStore 생성 (JSONL 이중저장 담당)
+        alert_cfg = AlertConfig(
             enable_pf_alert=True,
             enable_consecutive_loss_alert=True,
             consecutive_loss_threshold=3,
             enable_daily_loss_alert=True,
-            daily_loss_limit=-500000.0,
-            on_alert=on_alert  # ✅ 콜백 연결
+            daily_loss_limit=-500_000.0,
+            on_alert=on_alert
         )
-        
         self.trading_store = TradingResultStore(
-            json_path=str(result_paths.path_today()),
-            alert_config=alert_config
+            json_path=str(Path.cwd() / "logs" / "results" / "trading_results.jsonl"),
+            alert_config=alert_cfg,
         )
-
-        # 5. ✅ RiskDashboard 생성 (store와 연동)
+        # 5) RiskDashboard 생성 (JSONL tail 담당)
         self.risk_dashboard = RiskDashboard(
-            json_path=str(result_paths.path_today()),
+            json_path=str(common_json),    # ← 중요: 위와 동일 경로!
             price_provider=price_provider,
             on_daily_report=on_daily_report,
-            poll_ms=60000,
+            poll_ms=60_000,
             parent=self
         )
-        
-        # ✅ store 주입 (대시보드가 동일한 store 사용)
-        self.risk_dashboard._store = self.trading_store
 
-        # 6. ✅ 스냅샷 시그널 연결
+        # 6) ROI 스냅샷 신호 연결 (상단 카드/요약에 쓰는 경우)
         try:
             self.risk_dashboard.pnl_snapshot.disconnect(self.on_pnl_snapshot)
         except Exception:
             pass
-        self.risk_dashboard.pnl_snapshot.connect(self.on_pnl_snapshot)
+        if hasattr(self, "on_pnl_snapshot"):
+            self.risk_dashboard.pnl_snapshot.connect(self.on_pnl_snapshot)
 
-        # 7. ✅ 레이아웃에 추가
-        if hasattr(self, "risk_panel_holder") and self.risk_panel_holder.layout():
+        # 7) 레이아웃 부착
+        if hasattr(self, "risk_panel_holder") and self.risk_panel_holder and self.risk_panel_holder.layout():
             self.risk_panel_holder.layout().addWidget(self.risk_dashboard)
         else:
+            from PySide6.QtWidgets import QWidget, QVBoxLayout
             self.risk_panel_holder = QWidget()
             holder_layout = QVBoxLayout(self.risk_panel_holder)
             holder_layout.setContentsMargins(0, 0, 0, 0)
             holder_layout.addWidget(self.risk_dashboard)
-
-        # 8. ✅ OrdersCSVWatcher 생성 (멤버 store 사용)
-        from risk_management.orders_watcher import OrdersCSVWatcher, WatcherConfig
-
-        watcher_cfg = WatcherConfig(
-            base_dir=Path.cwd() / "logs",
-            subdir="trades",
-            file_pattern="orders_{date}.csv",
-            poll_ms=700,
-            bootstrap_if_missing=True,
-        )
-
-        if not hasattr(self, "orders_watcher") or self.orders_watcher is None:
-            self.orders_watcher = OrdersCSVWatcher(
-                store=self.trading_store,  # ✅ 동일한 store 사용
-                config=watcher_cfg,
-                parent=self
-            )
-            self.orders_watcher.start()
-            logger.info("OrdersCSVWatcher started")
-
-        # 9. ✅ 대시보드에 watcher 연결 (상호 참조)
-        self.risk_dashboard.watcher = self.orders_watcher
 
     # ---------------- 스타일 ----------------
     def _apply_stylesheet(self):
@@ -968,10 +974,13 @@ class MainWindow(QMainWindow):
             self.store.save(new_cfg)
 
             # 6) wiring 준비(없으면 생성)
-            if not getattr(self, "wiring", None):
-                logging.getLogger(__name__).warning("wiring was None; initializing now")
-                self.wiring = AppWiring(trader=self.trader, monitor=getattr(self, "monitor", None))
-
+            try:
+                # AppWiring가 클래스인지 확인 (callable(None) 같은 오판 방지)
+                if 'AppWiring' in globals() and isinstance(AppWiring, type):
+                    return AppWiring(trader=self.trader, monitor=getattr(self, "monitor", None))
+            except Exception as e:
+                logger.exception("AppWiring init failed: %s", e)
+            return None
             # 7) ✅ 단일 진입점으로 모든 대상에 설정 반영
             #    - trader / monitor / wiring(옵션) 순차 적용
             apply_all_settings(

@@ -16,15 +16,12 @@ def today_str() -> str:
 
 
 def path_today() -> Path:
-    """오늘 일자별 결과 파일 경로"""
-    return BASE_DIR / f"trading_result_{today_str()}.json"
-
+    # ✅ 일별 JSONL
+    return BASE_DIR / f"trading_results_{today_str()}.jsonl"
 
 def path_cumulative() -> Path:
-    """누적 관리용 trading_result.json 경로"""
-    return BASE_DIR / "trading_result.json"
-
+    # ✅ 누적 JSONL
+    return BASE_DIR / "trading_results.jsonl"
 
 def ensure_data_dir() -> None:
-    """data 폴더 보장 (존재하지 않으면 생성)"""
     BASE_DIR.mkdir(parents=True, exist_ok=True)

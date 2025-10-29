@@ -553,7 +553,11 @@ def perform_filtering():
 # ─────────────────────────────────────────────────────────
 def _build_trader_from_cfg(cfg: AppSettings):
     # AutoTrader 인스턴스 생성(설정은 settings_manager 헬퍼로 변환)
-    from trade_pro.auto_trader import AutoTrader  # 지연 임포트(툴체인 의존성 회피)
+    from trade_pro.auto_trader import AutoTrader  
+    from utils.token_manager import (
+        get_access_token_cached, load_keys, main_account_id
+    )
+
     trade_settings = to_trade_settings(cfg)
     ladder_settings = to_ladder_settings(cfg)
 
@@ -561,10 +565,41 @@ def _build_trader_from_cfg(cfg: AppSettings):
         base = cfg.api_base_url or os.getenv("HTTP_API_BASE", "https://api.kiwoom.com")
         return base.rstrip("/")
 
+    # --- 토큰 공급자 구성 ---
+    # 우선순위: cfg.app_key/secret > .env(load_keys) > 에러
+    app_key     = (getattr(cfg, "app_key", None) or os.getenv("APP_KEY") or "").strip()
+    app_secret  = (getattr(cfg, "app_secret", None) or os.getenv("APP_SECRET") or "").strip()
+    if not app_key or not app_secret:
+        ak, sk = load_keys()
+        app_key = app_key or (ak or "").strip()
+        app_secret = app_secret or (sk or "").strip()
+    if not app_key or not app_secret:
+        raise RuntimeError("Kiwoom APP_KEY/APP_SECRET이 설정되지 않았습니다. cfg 또는 .env에 값을 넣어주세요.")
+
+    # 계좌ID: cfg.account_id > token_manager의 메인 프로필 > 미지정("")
+    account_id = (getattr(cfg, "account_id", None) or "").strip()
+    if not account_id:
+        try:
+            account_id = (main_account_id() or "").strip()
+        except Exception:
+            account_id = ""
+
+    # namespace: 운영/스테이징 구분 가능 (기본 'kiwoom-prod')
+    cache_namespace = getattr(cfg, "cache_namespace", None) or os.getenv("KIWOOM_CACHE_NS", "kiwoom-prod")
+
+    def token_provider():
+        # 만료 60초 전에 자동 재발급, .cache/{ns}-{acc|na}-{hash}.json 사용
+        return get_access_token_cached(
+            app_key=app_key,
+            app_secret=app_secret,
+            account_id=account_id,
+            cache_namespace=cache_namespace,
+        )
+
     trader = AutoTrader(
         settings=trade_settings,
         ladder=to_ladder_settings(cfg),
-        token_provider=lambda: get_access_token_cached(),
+        token_provider=lambda: token_provider_for_main(),
         base_url_provider=base_url_provider,
     )
     return trader
