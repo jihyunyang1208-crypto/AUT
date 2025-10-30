@@ -8,11 +8,11 @@ import os
 
 from .base import Broker, OrderRequest, OrderResponse
 
-# --- 로깅 설정 ---
 logger = logging.getLogger(__name__)
 DEBUG_TAG = "[KIWOOM_REST_BROKER]"
-# -----------------
+
 AccountCtx = Dict[str, Any]  # {"token":str, "acc_no":str|None, "enabled":bool, "alias":str|None}
+
 def _load_accounts_from_env() -> List[AccountCtx]:
     raw = os.getenv("KIWOOM_ACCOUNTS_JSON", "").strip()
     if not raw:
@@ -20,7 +20,21 @@ def _load_accounts_from_env() -> List[AccountCtx]:
     try:
         data = json.loads(raw)
         if isinstance(data, list):
-            return [x for x in data if isinstance(x, dict)]
+            out: List[AccountCtx] = []
+            for x in data:
+                if not isinstance(x, dict):
+                    continue
+                tok = (x.get("token") or "").strip()
+                if not tok:
+                    # 빈 토큰은 스킵(네트워크 호출 무의미)
+                    continue
+                out.append({
+                    "token": tok,
+                    "acc_no": x.get("acc_no") or None,
+                    "enabled": bool(x.get("enabled", True)),
+                    "alias": x.get("alias") or (x.get("acc_no") or None),
+                })
+            return out
     except Exception:
         logger.warning(f"{DEBUG_TAG} Failed to parse KIWOOM_ACCOUNTS_JSON")
     return []
@@ -34,8 +48,9 @@ class KiwoomRestBroker(Broker):
         api_id_buy: str = "kt10000",
         api_id_sell: str = "kt10001",
         timeout: int = 10,
-        account_provider: Optional[Callable[[], List[AccountCtx]]] = None,  # ✅ 추가
-        max_workers: int = 6,  # ✅ 병렬 전송 스레드 수
+        account_provider: Optional[Callable[[], List[AccountCtx]]] = None,
+        max_workers: int = 6,
+        order_path: str = "/api/dostk/ordr",
     ):
         self._token_provider = token_provider
         self._base_url = (base_url or "https://api.kiwoom.com").rstrip("/")
@@ -44,15 +59,15 @@ class KiwoomRestBroker(Broker):
         self._timeout = timeout
         self._account_provider = account_provider
         self._max_workers = max_workers
+        self._order_path = order_path
 
     def name(self) -> str:
         return "kiwoom"
 
     def _headers(self, token: str, api_id: str) -> Dict[str, str]:
-        """요청 헤더 생성 + 토큰 마스킹 디버그 로그"""
         headers = {
             "Content-Type": "application/json;charset=UTF-8",
-            "authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token}",
             "api-id": api_id,
         }
         tok = (token or "").strip()
@@ -60,14 +75,12 @@ class KiwoomRestBroker(Broker):
             safe = "(empty)"
         else:
             safe = (tok[:6] + "..." + tok[-4:]) if len(tok) > 12 else "*" * len(tok)
-        logger.debug(f"{DEBUG_TAG} HTTP.HEADERS | authorization=Bearer {safe} | api-id={api_id}")
+        logger.debug(f"{DEBUG_TAG} HTTP.HEADERS | Authorization=Bearer {safe} | api-id={api_id}")
         return headers
-
-
 
     def _resolve_accounts(self) -> List[AccountCtx]:
         """
-        1) account_provider()가 있으면 그것을 사용
+        1) account_provider()가 있으면 그것을 사용 (추천)
         2) token_provider()가 리스트를 리턴하면 계좌 리스트로 간주
         3) env(KIWOOM_ACCOUNTS_JSON) 파싱
         4) 최종적으로 단일 토큰이면 단일 계좌 모드
@@ -94,11 +107,10 @@ class KiwoomRestBroker(Broker):
         # 4) 단일 토큰만
         if isinstance(tp, str) and tp.strip():
             return [{"token": tp.strip(), "acc_no": None, "enabled": True, "alias": None}]
-        # 비정상 상황: 빈 토큰
         return [{"token": "", "acc_no": None, "enabled": True, "alias": None}]
 
     def _do_place(self, token: str, api_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self._base_url}/api/dostk/ordr"
+        url = f"{self._base_url}{self._order_path}"
         logger.debug(f"{DEBUG_TAG} HTTP.REQ | API_ID={api_id} | URL={url}")
         logger.debug(f"{DEBUG_TAG} HTTP.REQ | BODY={body}")
         try:
@@ -117,14 +129,12 @@ class KiwoomRestBroker(Broker):
 
     def place_order(self, req: OrderRequest) -> OrderResponse:
         """
-        - 싱글/멀티 계좌 자동 판별
-        - 토큰 마스킹/모드 식별 로그
-        - 빈 토큰 가드
-        - 멀티 브로드캐스트 요약 로그
+        - 저장된 모든 토큰에 대해 브로드캐스트(병렬) 주문
+        - account_id는 내부 분기 키로 사용되지 않음(표시/요청필드에만 삽입)
+        - 단일 토큰이면 단일 경로로 동작
         """
         api_id = self._api_id_buy if req.side.upper() == "BUY" else self._api_id_sell
 
-        # 공통 바디 (acc_no는 계좌 컨텍스트에 있을 때만 주입)
         base_body: Dict[str, Any] = {
             "dmst_stex_tp": req.dmst_stex_tp,
             "stk_cd": req.stk_cd,
@@ -134,11 +144,9 @@ class KiwoomRestBroker(Broker):
             "cond_uv": req.cond_uv,
         }
 
-        # 계좌 해석
         accounts = self._resolve_accounts()
         enabled_accounts = [a for a in accounts if a.get("enabled", True)]
 
-        # 계좌/토큰 마스킹 로그
         def _mask(tok: Optional[str]) -> str:
             t = (tok or "").strip()
             if not t:
@@ -157,36 +165,30 @@ class KiwoomRestBroker(Broker):
             ctx = enabled_accounts[0] if enabled_accounts else {"token": self._token_provider(), "acc_no": None}
             token = (ctx.get("token") or "").strip()
             if not token:
-                # token_provider 최후 보루 시도
                 tp = self._token_provider()
                 token = (tp or "").strip() if isinstance(tp, str) else token
-
             if not token:
-                raise RuntimeError(f"{DEBUG_TAG} Empty token resolved (single-account). "
-                                f"Check token_provider() or KIWOOM_ACCOUNTS_JSON.")
+                raise RuntimeError(f"{DEBUG_TAG} Empty token resolved (single-account). Check token source.")
 
             body = dict(base_body)
             if "acc_no" not in body and ctx.get("acc_no"):
                 body["acc_no"] = ctx["acc_no"]
 
             single = self._do_place(token, api_id, body)
-            # 단일 경로는 기존 응답 그대로 전달
             return OrderResponse(
                 status_code=single.get("status_code", 500),
                 header=single.get("header", {}),
                 body=single.get("body", {}),
             )
 
-        # --- 멀티 계좌 모드 ---
+        # --- 멀티 계좌 모드(브로드캐스트) ---
         logger.info(f"{DEBUG_TAG} MODE=multi-account | fanout={len(enabled_accounts)}")
 
         results: List[Dict[str, Any]] = []
-        from concurrent.futures import ThreadPoolExecutor, as_completed  # (안전: 상단 import 이미 있음)
 
         def _submit_one(ctx: Dict[str, Any]):
             token = (ctx.get("token") or "").strip()
             if not token:
-                # 빈 토큰은 네트워크 호출 없이 실패로 기록
                 return {
                     "account": ctx.get("alias") or ctx.get("acc_no") or "unknown",
                     "acc_no": ctx.get("acc_no"),
@@ -215,21 +217,17 @@ class KiwoomRestBroker(Broker):
                     "body": {"error": str(e)},
                 }
 
-        # 병렬 전송
         with ThreadPoolExecutor(max_workers=self._max_workers) as ex:
             futs = []
             for ctx in enabled_accounts:
-                # 빈 토큰은 바로 동기 처리(네트워크 미호출)로 실패 기록
                 tok = (ctx.get("token") or "").strip()
                 if not tok:
                     results.append(_submit_one(ctx))
                     continue
                 futs.append(ex.submit(_submit_one, ctx))
-
             for fut in as_completed(futs):
                 results.append(fut.result())
 
-        # 상태코드 합산/요약
         codes = [int(x.get("status_code") or 0) for x in results]
         all_ok = all(200 <= c < 300 for c in codes if c)
         any_ok = any(200 <= c < 300 for c in codes if c)
@@ -245,13 +243,8 @@ class KiwoomRestBroker(Broker):
         logger.info(f"{DEBUG_TAG} MULTI-ORDER SUMMARY | total={len(results)} | success={success_cnt} | failed={failed_cnt}")
 
         header = {"api-id": api_id, "multi-account": "true", "cont-yn": "", "next-key": ""}
-
         body = {
             "results": results,
-            "summary": {
-                "total": len(results),
-                "success": success_cnt,
-                "failed": failed_cnt,
-            }
+            "summary": {"total": len(results), "success": success_cnt, "failed": failed_cnt}
         }
         return OrderResponse(status_code=overall, header=header, body=body)

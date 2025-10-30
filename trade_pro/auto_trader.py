@@ -9,19 +9,13 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Literal, Tuple
 import logging
 
 logger = logging.getLogger(__name__)  # 모듈별 로거
-
-# --- Optional import: PositionManager (graceful if missing) ---
-try:
-    from trade_pro.position_manager import PositionManager  # type: ignore
-except Exception:  # pragma: no cover
-    PositionManager = None  # type: ignore
 
 from broker.base import Broker, OrderRequest, OrderResponse
 from broker.factory import create_broker
@@ -148,9 +142,9 @@ class TradeLogger:
             else:
                 resp_body = (record.get("response") or {}).get("body") or {}
                 if resp_code is None:
-                    resp_code = resp_body.get("return_code")
+                    resp_code = resp_body.get("return_code") or resp_body.get("code")
                 if resp_msg is None:
-                    resp_msg = resp_body.get("return_msg", "")
+                    resp_msg = resp_body.get("return_msg", "") or resp_body.get("message", "")
 
             log_entry = {
                 "ts": ts,
@@ -216,18 +210,14 @@ class AutoTrader:
         *,
         settings: Optional[TradeSettings] = None,
         ladder: Optional[LadderSettings] = None,
-        token_provider: Optional[Callable[[], str]] = None,
-        base_url_provider: Optional[Callable[[], str]] = None,
         paper_mode: Optional[bool] = None,
         log: Optional[Callable[[str], None]] = None,
         bridge: Optional[object] = None,
-        position_mgr: Optional[PositionManager] = None,
         use_mock: Optional[bool] = None,
+        broker: Optional[Broker] = None,
     ):
         self.settings = settings or TradeSettings()
         self.ladder = ladder or LadderSettings()
-        self._token_provider = token_provider or (lambda: os.getenv("ACCESS_TOKEN", ""))
-        self._base_url_provider = base_url_provider
 
         env_mode = (os.getenv("TRADE_MODE") or "").strip().lower()
         env_pm = _parse_bool(os.getenv("PAPER_MODE"), default=False)
@@ -252,12 +242,8 @@ class AutoTrader:
         self.session_id = uuid.uuid4().hex[:12]
         self.trade_logger = TradeLogger(slim=True)
         self.bridge = bridge
-        self.position_mgr = position_mgr
 
-        self.broker: Broker = create_broker(
-            token_provider=self._token_provider,
-            base_url_provider=(self._base_url_provider or (lambda: os.getenv("HTTP_API_BASE", ""))),
-        )
+        self.broker: Broker = broker or create_broker()
 
         self._seen_exec_keys: set[tuple[str, Optional[str]]] = set()
         self._exec_lock = threading.Lock()
@@ -287,26 +273,14 @@ class AutoTrader:
             return int(default)
 
     def submit_buy_order(self, code: str, qty: int, price: float, **kwargs) -> None:
-        if self.position_mgr:
-            self.position_mgr.reserve_buy(code, qty)
-        response = self._submit_order(code=code, side="BUY", qty=qty, price=price, **kwargs)
-        if self.position_mgr and not getattr(response, "ok", True):
-            self.position_mgr.release_buy(code, qty)
+        self._submit_order(code=code, side="BUY", qty=qty, price=price, **kwargs)
 
     def submit_sell_order(self, code: str, qty: int, price: float, **kwargs) -> None:
-        if self.position_mgr:
-            self.position_mgr.reserve_sell(code, qty)
-        response = self._submit_order(code=code, side="SELL", qty=qty, price=price, **kwargs)
-        if self.position_mgr and not getattr(response, "ok", True):
-            self.position_mgr.release_sell(code, qty)
+        self._submit_order(code=code, side="SELL", qty=qty, price=price, **kwargs)
 
     def on_order_fill(self, code: str, side: str, qty: int, price: float) -> None:
-        if not self.position_mgr:
-            return
-        if side.upper() == "BUY":
-            self.position_mgr.apply_fill_buy(code, qty, price)
-        elif side.upper() == "SELL":
-            self.position_mgr.apply_fill_sell(code, qty, price)
+        # PositionManager 제거됨 → 외부에서 필요 시 별도 저장/통계 처리
+        return
 
     # ---------- Signal handling ----------
     async def handle_signal(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -356,17 +330,11 @@ class AutoTrader:
 
             elif signal == "SELL":
                 mode = "ladder_sell"
-                qty = 1
-                if self.position_mgr:
-                    try:
-                        qty = max(1, int(self.position_mgr.get_qty(stk_cd)))
-                    except Exception:
-                        qty = 1
                 data.setdefault("cur_price", last_price)
                 data["num_slices"]        = int(self.ladder.num_slices)
                 data["start_ticks_above"] = int(self.ladder.start_ticks_above)
                 data["step_ticks"]        = int(self.ladder.step_ticks)
-                data.setdefault("total_qty", int(qty))
+                data.setdefault("total_qty", 1)  # PM 제거: 기본 1주
                 data.setdefault("trde_tp", trde_tp)
                 if tick: data.setdefault("tick", int(tick))
                 self._dbg("handle_signal.autofill.SELL",
@@ -374,15 +342,6 @@ class AutoTrader:
                           num_slices=data.get("num_slices"),
                           start_ticks_above=data.get("start_ticks_above"),
                           step_ticks=data.get("step_ticks"))
-
-                # 보유 0이면 simple_sell로 강등
-                if self.position_mgr:
-                    try:
-                        cur_qty = int(self.position_mgr.get_qty(stk_cd))
-                    except Exception:
-                        cur_qty = 0
-                    if cur_qty <= 0:
-                        mode = "simple_sell"
 
         if payload.get("ladder_buy") or data.get("ladder_buy"):
             mode = "ladder_buy"
@@ -421,7 +380,7 @@ class AutoTrader:
                 "step_ticks": int(data.get("step_ticks") or self.ladder.step_ticks),
                 "total_qty": data.get("total_qty"),
                 "slice_qty": data.get("slice_qty"),
-                "trde_tp": str(data.get("trde_tp") or "0"),
+                "trde_tp": str(data.get("trde_tp") or self._resolve_trde_tp()),
                 "tick": int(data.get("tick") or 0),
             }
             ret = await self._handle_ladder_sell(ls)
@@ -437,7 +396,7 @@ class AutoTrader:
                 "strategy_name": strategy_name,
                 "ord_qty": str(data.get("ord_qty") or "0"),
                 "ord_uv": str(data.get("ord_uv") or "0"),
-                "trde_tp": str(data.get("trde_tp") or "0"),
+                "trde_tp": str(data.get("trde_tp") or self._resolve_trde_tp()),
                 "cond_uv": str(data.get("cond_uv") or ""),
             }
             ret = await self._handle_simple_sell(ss)
@@ -503,8 +462,7 @@ class AutoTrader:
                 last_price = int(float(price_attr)) if price_attr is not None else 0
                 condition_name = str(getattr(sig_obj, "condition_name", "") or "").strip()
                 source = str(getattr(sig_obj, "source", "") or "")
-                extra = getattr(sig_obj, "extra", None)  
-
+                extra = getattr(sig_obj, "extra", None)
             except Exception:
                 return
 
@@ -526,8 +484,7 @@ class AutoTrader:
                     "stk_cd": symbol,
                     "dmst_stex_tp": "KRX",
                     "ord_uv": str(last_price),
-                    "cur_price": last_price,       
-
+                    "cur_price": last_price,
                 },
                 "strategy": condition_name,
                 "source": source,
@@ -544,12 +501,13 @@ class AutoTrader:
 
             self._dbg("on_signal.dispatch", payload_minimal=True, signal=side, stk_cd=symbol, ord_uv=last_price)
             try:
-                asyncio.create_task(self.handle_signal(payload))
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.handle_signal(payload))
             except RuntimeError:
-                threading.Thread(
-                    target=lambda: asyncio.run(self.handle_signal(payload)),
-                    daemon=True
-                ).start()
+                # 실행중인 루프가 없으면 별도 루프에서 안전 실행
+                def _runner():
+                    asyncio.run(self.handle_signal(payload))
+                threading.Thread(target=_runner, daemon=True).start()
 
         return _handler
 
@@ -601,32 +559,31 @@ class AutoTrader:
         start_ticks_above: int, step_ticks: int,
         tick_fn: Callable[[int], int]
     ) -> List[int]:
-        """항상 1×tick 간격으로 위 방향 ladder 생성"""
+        """가변 tick을 사용하되, 시작/증가 틱(step)을 반영하여 위 방향으로 생성"""
         prices: List[int] = []
-        base = cur_price
+        ticks = int(start_ticks_above)
         for _ in range(count):
-            t = max(1, tick_fn(base))
-            p = self._snap_to_tick(base + t, t)
+            t = max(1, tick_fn(cur_price))
+            p = self._snap_to_tick(cur_price + (ticks * t), t)
             prices.append(p)
-            base = p
+            ticks += int(step_ticks)
         return prices
 
     def _compute_ladder_prices_dynamic(
-        self, *, cur_price: int, count: int, 
-        start_ticks_below: int, step_ticks: int, 
+        self, *, cur_price: int, count: int,
+        start_ticks_below: int, step_ticks: int,
         tick_fn: Callable[[int], int]
     ) -> List[int]:
-        """항상 1×tick 간격으로 아래 방향 ladder 생성"""
+        """가변 tick을 사용하되, 시작/증가 틱(step)을 반영하여 아래 방향으로 생성"""
         prices: List[int] = []
-        ticks_to_go = start_ticks_below
-        base = cur_price
+        ticks = int(start_ticks_below)
         for _ in range(count):
-            t = max(1, tick_fn(base))
-            p = self._snap_to_tick(base - t, t)
+            t = max(1, tick_fn(cur_price))
+            p = self._snap_to_tick(cur_price - (ticks * t), t)
             if p <= 0:
                 break
             prices.append(p)
-            base = p
+            ticks += int(step_ticks)
         return prices
 
     def _resolve_trde_tp(self) -> str:
@@ -665,7 +622,7 @@ class AutoTrader:
         if "tick" in payload and int(payload["tick"]) > 0:
             tick = int(payload["tick"]); tick_mode = "fixed"
         else:
-            tick = self._krx_tick(cur_price); tick_mode = "fixed"
+            tick = self._krx_tick(cur_price); tick_mode = "dynamic"
 
         unit_amount = int(payload.get("unit_amount") or self.ladder.unit_amount)
         num_slices = int(payload.get("num_slices") or self.ladder.num_slices)
@@ -674,14 +631,12 @@ class AutoTrader:
         trde_tp = str(payload.get("trde_tp") or self._resolve_trde_tp())
         min_qty = self.ladder.min_qty
 
+        # PM 제거: target_total_qty가 주어지면 이번 실행 내 누적 상한으로만 사용
         target_total_qty = payload.get("target_total_qty")
         remaining_cap = None
-        if self.position_mgr and target_total_qty is not None:
+        if target_total_qty is not None:
             try:
-                target = int(target_total_qty)
-                cur_qty = int(self.position_mgr.get_qty(stk_cd))
-                pend_buy, _ = self.position_mgr.get_pending(stk_cd)
-                remaining_cap = max(0, target - (cur_qty + int(pend_buy)))
+                remaining_cap = max(0, int(target_total_qty))
             except Exception:
                 remaining_cap = None
 
@@ -921,7 +876,7 @@ class AutoTrader:
         if "tick" in payload and int(payload["tick"]) > 0:
             tick = int(payload["tick"]); tick_mode = "fixed"
         else:
-            tick = self._krx_tick(cur_price); tick_mode = "fixed"
+            tick = self._krx_tick(cur_price); tick_mode = "dynamic"
 
         num_slices = int(payload.get("num_slices") or self.ladder.num_slices)
         start_ticks_above = int(payload.get("start_ticks_above") or 1)
@@ -931,16 +886,11 @@ class AutoTrader:
         total_qty = payload.get("total_qty")
         qty_plan: List[int] = []
 
-        if slice_qty is None and total_qty is None and self.position_mgr:
-            cur_qty = int(self.position_mgr.get_qty(stk_cd))
-            _, pend_sell = self.position_mgr.get_pending(stk_cd)
-            sellable = max(0, cur_qty - int(pend_sell))
-            if sellable <= 0:
-                logger.info("ℹ️ (ladder-sell) 매도 가능 수량 없음")
-                self._dbg_ret("ladder_sell.block", reason="no_sellable_qty", cur_qty=cur_qty, pend_sell=pend_sell)
-                return {"ladder_sell_results": []} if not self.simulation else {"ladder_sell_submitted": 0}
-            base = sellable // num_slices
-            rem = sellable % num_slices
+        if slice_qty is None and total_qty is None:
+            # PM 없음: 외부에서 수량을 주지 않으면 최소 동작(1주 균등 분할)로 가정
+            total_qty = 1
+            base = total_qty // num_slices
+            rem = total_qty % num_slices
             qty_plan = [(base + 1 if i < rem else base) for i in range(num_slices)]
         else:
             if slice_qty is not None:
@@ -976,12 +926,14 @@ class AutoTrader:
                 cur_price=cur_price, tick=tick, count=num_slices,
                 start_ticks_above=start_ticks_above, step_ticks=step_ticks
             )
+            tick_mode = "fixed"
         else:
             prices = self._compute_ladder_prices_dynamic_up(
                 cur_price=cur_price, count=num_slices,
                 start_ticks_above=start_ticks_above, step_ticks=step_ticks,
                 tick_fn=self._krx_tick
             )
+            tick_mode = "dynamic"
         self._dbg("ladder_sell.prices", count=len(prices), first=prices[:3], last=prices[-3:])
 
         results: List[Dict[str, Any]] = []
@@ -1123,7 +1075,7 @@ class AutoTrader:
             self._dbg_ret("buy_immediate")
             return ret
 
-    def _submit_order(self, *, code: str, side: str, qty: int, price: float, trde_tp: Optional[str] = None):
+    def _submit_order(self, *, code: str, side: str, qty: int, price: float, trde_tp: Optional[str] = None) -> Dict[str, Any]:
         """레거시 내부 경로도 브로커로 우회."""
         trde_tp = trde_tp or self._resolve_trde_tp()
         req = OrderRequest(
@@ -1135,8 +1087,8 @@ class AutoTrader:
             side=side.upper(),
             cond_uv=""
         )
-        r = self.broker.place_order(req)
-        return {"status_code": r.status_code, "header": r.header, "body": r.body}
+        r: OrderResponse = self.broker.place_order(req)
+        return {"status_code": int(r.status_code or 0), "header": dict(r.header or {}), "body": dict(r.body or {})}
 
     # =========================
     # WebSocket events mapping
@@ -1240,17 +1192,8 @@ class AutoTrader:
             return True
 
     def _apply_fill(self, info: Dict[str, Any]) -> None:
-        if not self.position_mgr:
-            return
-        side = info["side"]; sym = info["symbol"]
-        qty = int(info["fill_qty"]); price = float(info["fill_price"])
-        self._dbg("pm.apply_fill", side=side, sym=sym, qty=qty, price=price)
-        if side == "BUY":
-            try: self.position_mgr.apply_fill_buy(sym, qty, price)
-            except Exception: pass
-        elif side == "SELL":
-            try: self.position_mgr.apply_fill_sell(sym, qty, price)
-            except Exception: pass
+        # PositionManager 제거: 내부 포지션 반영 없음. 필요 시 외부 콜백/로거에서 처리.
+        return
 
     # ---------- UI event emit ----------
     def _emit_order_event(self, evt: Dict[str, Any]) -> None:

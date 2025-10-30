@@ -22,22 +22,8 @@ except Exception:
     _TradeSettings = None  # type: ignore
     _LadderSettings = None  # type: ignore
 
-# 토큰 매니저 (있으면 사용, 없으면 폴백)
-try:
-    from utils.token_manager import (
-        request_new_token as tm_request_new_token,
-        get_token_for_account, refresh_kiwoom_env,
-
-    )
-    try:
-        # 선택된 프로필(벤더/계좌/키/시크릿)로 토큰을 발급/캐시하는 헬퍼(있으면 사용)
-        from utils.token_manager import token_provider_for_profile as tm_token_for_profile  # type: ignore
-    except Exception:
-        tm_token_for_profile = None  # type: ignore
-except Exception:
-    def tm_request_new_token(appkey: Optional[str] = None, appsecret: Optional[str] = None, token_url: str = "") -> str:
-        raise RuntimeError("token_manager가 준비되지 않았습니다.")
-    tm_token_for_profile = None  # type: ignore
+# ----- 토큰 매니저(행별 토큰 테스트에 사용)
+from utils.token_manager import get_access_token_cached as tm_get_token_cached
 
 
 # ===================== 유틸 =====================
@@ -141,7 +127,7 @@ class AppSettings:
 @dataclass
 class KiwoomProfile:
     id: str                 # 내부 식별자(임의 문자열)
-    account_id: Optional[str] = ""   
+    account_id: Optional[str] = ""   # 계좌번호(메인 선택시 필수)
     alias: str = ""         # 별칭
     app_key: str = ""
     app_secret: str = ""
@@ -238,9 +224,9 @@ class SettingsStore:
         if getattr(cfg, "broker_vendor", ""):
             os.environ["BROKER_VENDOR"] = cfg.broker_vendor
         if getattr(cfg, "ws_uri", ""):
-            os.environ["WS_URI"] = cfg.ws_uri
+            os.environ["WS_URI"] = cfg.ws_uri  # 선택적
 
-        # 3) .env 반영
+        # 3) .env 반영(존재 시)
         try:
             from pathlib import Path
             env_path = Path(".env")
@@ -305,7 +291,7 @@ class KiwoomStore:
         # 중복 제거: (account_id, app_key)
         seen: Dict[str, KiwoomProfile] = {}
         for p in cfg.profiles:
-            k = f"{p.account_id.strip()}::{p.app_key.strip()}"
+            k = f"{(p.account_id or '').strip()}::{p.app_key.strip()}"
             if k not in seen:
                 seen[k] = p
             else:
@@ -328,18 +314,16 @@ class KiwoomStore:
 # ===================== (신규) 키움 계좌 관리 탭 =====================
 class _KiwoomAccountsTab(QWidget):
     """
-    요청사항 반영:
-    - 멀티계좌 전용 탭 제거, 로그인 페이지를 "키움 계좌 관리"로 대체
-    - "메인 계좌"(조건검색/시세수신) 1개 라디오 선택
-    - 나머지 계좌는 매수/매도 브로드캐스트용 (enabled 체크)
-    - 각 계좌 App Key / Secret을 저장하고 행별로 토큰 발급 테스트 가능
+    - '키움 계좌 관리' 탭에서 멀티계정 설정/저장
+    - 메인 계좌(라디오 버튼) 1개 선택
+    - 각 행에 App Key/Secret 입력 후 '선택 토큰 발급'으로 캐시 발급 확인
     """
     COLS = ["메인", "활성", "계좌번호", "별칭", "App Key", "App Secret", "토큰 상태"]
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.store = KiwoomStore()
-        self._radio_group = QButtonGroup(self)  # 메인계좌 단일 선택
+        self._radio_group = QButtonGroup(self)      # 메인계좌 단일 선택
         self._radio_group.setExclusive(True)
         self._build_ui()
         self._load()
@@ -452,16 +436,14 @@ class _KiwoomAccountsTab(QWidget):
             sec_it  = self.tbl.item(r, 5)
             app_sec = (sec_it.data(Qt.UserRole) if sec_it and sec_it.data(Qt.UserRole) else (sec_it.text() if sec_it else "")).strip()
 
-            # 🔴 App Key/Secret 필수 검증
+            # App Key/Secret 필수
             if not app_key or not app_sec:
-                # 필수 누락 행은 스킵 (또는 예외 던져도 됨)
                 continue
 
             if is_main:
                 # 메인 계정은 데이터 수신/조건식에 쓰이므로 계좌번호 필수
                 if not account:
-                    # 메인 체크했는데 계좌번호가 없다면 무효 처리(저장 전에 경고)
-                    main_id = ""  # 나중에 _on_save에서 경고
+                    main_id = ""  # 저장시 경고
                 else:
                     main_id = account
 
@@ -477,8 +459,9 @@ class _KiwoomAccountsTab(QWidget):
         return KiwoomSettings(
             profiles=profiles,
             base_url=self.le_base.text().strip(),
-            main_account_id=main_id,  # 빈 문자열이면 아래 _on_save에서 보정/경고
+            main_account_id=main_id,  # 빈 문자열이면 저장 시 보정/경고
         )
+
     # ---- 버튼 핸들러 ----
     @Slot()
     def _on_add(self):
@@ -496,8 +479,27 @@ class _KiwoomAccountsTab(QWidget):
         if not cfg.profiles:
             QMessageBox.warning(self, "입력 필요", "최소 1개 프로필(App Key/Secret)을 입력하세요.")
             return
+        # 메인 계좌 경고
+        if not cfg.main_account_id:
+            QMessageBox.warning(self, "메인 계좌 확인", "메인 계좌로 사용할 행에 라디오 체크 후 계좌번호를 입력하세요.")
+            return
         self.store.save(cfg)
-        QMessageBox.information(self, "저장", "키움 계좌 설정이 저장되었습니다.")
+        # 2) 저장 직후, ENV/.env 동기화 (전체 프로필 기반 재빌드)
+        try:
+            # 지연 import로 순환참조 회피
+            from utils.kiwoom_env_sync import rebuild_kiwoom_accounts_env
+            accs = rebuild_kiwoom_accounts_env(write_dotenv=True)  # ← ENV, .env 모두 갱신
+            QMessageBox.information(
+                self, "저장 완료",
+                f"키움 계좌 설정 저장 및 ENV/.env 갱신 완료\n"
+                f"(계정 {len(accs)}개)"
+            )
+        except Exception as e:
+            # 설정 저장은 성공했으나 ENV 반영 실패 시 경고만
+            QMessageBox.warning(
+                self, "저장(일부)",
+                f"설정은 저장했으나 ENV(.env) 갱신에 실패했습니다.\n사유: {e}"
+            )
 
     @Slot()
     def _on_token(self):
@@ -505,28 +507,26 @@ class _KiwoomAccountsTab(QWidget):
         if r < 0:
             QMessageBox.warning(self, "선택 필요", "토큰을 발급할 행을 선택하세요.")
             return
-            
-        account_id = (self.tbl.item(r, 3).text() if self.tbl.item(r,3) else "").strip()
 
+        account_id = (self.tbl.item(r, 2).text() if self.tbl.item(r,2) else "").strip()  # 2=계좌번호
         app_key = (self.tbl.item(r, 4).text() if self.tbl.item(r,4) else "").strip()
         sec_it  = self.tbl.item(r, 5)
-        app_sec = (sec_it.data(Qt.UserRole) if sec_it and sec_it.data(Qt.UserRole) else sec_it.text()).strip()
-        if not ( app_key and app_sec):
-            QMessageBox.warning(self, "입력 필요", "계좌번호 / App Key / App Secret 을 모두 입력하세요.")
+        app_sec = (sec_it.data(Qt.UserRole) if sec_it and sec_it.data(Qt.UserRole) else (sec_it.text() if sec_it else "")).strip()
+
+        if not (app_key and app_sec):
+            QMessageBox.warning(self, "입력 필요", "App Key / App Secret 을 입력하세요. (계좌번호는 선택)")
             return
         try:
-            token = get_token_for_account(
-                appkey=app_key,
-                appsecret=app_sec,
-                account_id=account_id,        # ← 중요: 계정별 파일 분리
+            token = tm_get_token_cached(
+                app_key=app_key,
+                app_secret=app_sec,
+                account_id=account_id,            # 계정별 분리 캐시
                 cache_namespace="kiwoom-prod",
-                update_env=True               # ← 이 슬롯에서 바로 env 갱신 원하면 True
+                update_env=True,
             )
-            # UI 업데이트
-            self.access_token = token  # 필요 시 보관
+            _ = token  # 필요 시 보관/브릿지 송신 가능
             self.tbl.setItem(r, 6, QTableWidgetItem("발급 성공"))
             QMessageBox.information(self, "성공", "토큰 발급 성공(캐시에 저장됨)")
-
         except Exception as e:
             self.tbl.setItem(r, 6, QTableWidgetItem("발급 실패"))
             QMessageBox.critical(self, "실패", f"토큰 발급 실패: {e}")
@@ -652,7 +652,7 @@ class SettingsDialog(QDialog):
         # ---------- (탭2) 키움 계좌 관리 ----------
         self.tab_kiwoom = _KiwoomAccountsTab(self)
 
-        # 탭 추가 (요청대로: 멀티계좌 탭 제거, 로그인 → "키움 계좌 관리")
+        # 탭 추가
         self.tabs.addTab(self.tab_general, "매매 설정")
         self.tabs.addTab(self.tab_kiwoom, "키움 계좌 관리")
         outer.addWidget(self.tabs)
@@ -763,99 +763,11 @@ class SettingsDialog(QDialog):
         super().reject()
 
 
-# ===================== AutoTrader 연동(기존 헬퍼 유지) =====================
+# ===================== AutoTrader 연동 헬퍼 =====================
 @runtime_checkable
 class _Configurable(Protocol):
     def apply_settings(self, cfg: AppSettings) -> None: ...
 
-def _adapt_autotrader(trader) -> _Configurable:
-    """AutoTrader에 apply_settings가 없을 때를 위한 어댑터."""
-    class _ATAdapter:
-        def __init__(self, t): self.t = t
-        def apply_settings(self, cfg: AppSettings) -> None:
-            apply_to_autotrader(self.t, cfg)
-    return _ATAdapter(trader)
-
-def _adapt_monitor(monitor) -> _Configurable:
-    """
-    Monitor에 apply_settings가 없으면 set_custom 등으로 폴백.
-    (ExitEntryMonitor가 apply_settings를 직접 구현했다면 그걸 우선 사용)
-    """
-    class _MonAdapter:
-        def __init__(self, m): self.m = m
-        def apply_settings(self, cfg: AppSettings) -> None:
-            # 정식 API가 있으면 우선 사용
-            if hasattr(self.m, "apply_settings") and callable(self.m.apply_settings):
-                self.m.apply_settings(cfg)
-                return
-            # 폴백: 핵심 스위치 전달
-            if hasattr(self.m, "set_custom") and callable(self.m.set_custom):
-                try:
-                    self.m.set_custom(
-                        enabled=True,
-                        auto_buy=cfg.auto_buy,
-                        auto_sell=cfg.auto_sell,
-                        allow_intrabar_condition_triggers=True,
-                        buy_pro=cfg.buy_pro,
-                        sell_pro=cfg.sell_pro,
-                    )
-                except Exception:
-                    pass
-            # 루프/창 파라미터 속성 반영(있을 때만)
-            for name, val in [
-                ("poll_interval_sec", int(cfg.poll_interval_sec)),
-                ("_win_start", int(cfg.bar_close_window_start_sec)),
-                ("_win_end",   int(cfg.bar_close_window_end_sec)),
-                ("tz",         cfg.timezone or "Asia/Seoul"),
-            ]:
-                if hasattr(self.m, name):
-                    try: setattr(self.m, name, val)
-                    except Exception: pass
-    return _MonAdapter(monitor)
-
-def apply_all_settings(
-    cfg: AppSettings,
-    *,
-    trader=None,
-    monitor=None,
-    extra: Iterable[object] | None = None,
-) -> None:
-    """
-    단일 진입점: 전달된 모든 대상에게 AppSettings 일괄 반영.
-    대상이 이미 apply_settings(cfg)를 구현했으면 그걸 호출,
-    아니면 적절한 어댑터로 동일하게 반영.
-    """
-    targets: list[_Configurable] = []
-
-    if trader is not None:
-        if isinstance(trader, _Configurable):
-            targets.append(trader)
-        else:
-            targets.append(_adapt_autotrader(trader))
-
-    if monitor is not None:
-        if isinstance(monitor, _Configurable):
-            targets.append(monitor)
-        else:
-            targets.append(_adapt_monitor(monitor))
-
-    if extra:
-        for obj in extra:
-            if obj is None:
-                continue
-            if isinstance(obj, _Configurable):
-                targets.append(obj)
-            # 필요 시 추가 어댑터 분기 가능
-
-    for t in targets:
-        try:
-            t.apply_settings(cfg)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).exception("apply_all_settings target failed: %s", e)
-
-
-# ===================== (기존 헬퍼) AutoTrader 적용 =====================
 def to_trade_settings(cfg: AppSettings):
     """AppSettings → AutoTrader.TradeSettings 변환"""
     if _TradeSettings is None:
@@ -880,7 +792,7 @@ def to_ladder_settings(cfg: AppSettings):
 def apply_to_autotrader(trader, cfg: AppSettings):
     """
     이미 생성된 AutoTrader 인스턴스에 UI 설정 반영.
-    (하위호환을 위해 유지. 신규 코드는 apply_all_settings 사용 권장)
+    (하위호환 유지. 신규 코드는 apply_all_settings 사용 권장)
     """
     if hasattr(trader, "set_simulation_mode"):
         trader.set_simulation_mode(bool(cfg.sim_mode))
@@ -902,12 +814,6 @@ def apply_to_autotrader(trader, cfg: AppSettings):
 
     if cfg.api_base_url:
         os.environ["HTTP_API_BASE"] = _normalize_base_url(cfg.api_base_url)
-
-
-# ===================== 통합 적용(신규 권장) =====================
-@runtime_checkable
-class _Configurable(Protocol):
-    def apply_settings(self, cfg: AppSettings) -> None: ...
 
 def _adapt_autotrader(trader) -> _Configurable:
     """AutoTrader에 apply_settings가 없을 때를 위한 어댑터."""
@@ -963,7 +869,7 @@ def apply_all_settings(
 ) -> None:
     """
     단일 진입점: 전달된 모든 대상에게 AppSettings 일괄 반영.
-    대상이 이미 apply_settings(cfg)를 구현했으면 그걸 호출,
+    대상이 already apply_settings(cfg)를 구현했으면 그걸 호출,
     아니면 적절한 어댑터로 동일하게 반영.
     """
     targets: list[_Configurable] = []
