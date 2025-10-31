@@ -532,47 +532,65 @@ class _KiwoomAccountsTab(QWidget):
     def _on_del(self):
         r = self.tbl.currentRow()
         if r >= 0:
-            # 1) .env에서 해당 인덱스(i = r+1)의 APP_KEY_i / APP_SECRET_i 제거
-            self.__remove_indexed_keys_from_env(r + 1)
-
-            # 2) UI 테이블에서 행 삭제
+            # 1) 테이블에서 행 삭제
             self.tbl.removeRow(r)
 
-            # (선택 사항) 상태 표시 갱신 또는 안내 메시지 필요 시 아래와 같이 추가 가능
-            QMessageBox.information(self, "삭제", f"APP_KEY_{r+1} / APP_SECRET_{r+1} 제거 및 행 삭제 완료")
+            # 2) 현재 테이블 기준으로 .env APP_KEY_i/APP_SECRET_i 1..N 재기록
+            self.__rewrite_all_indexed_keys_to_env()
 
-    def __remove_indexed_keys_from_env(self, index: int) -> None:
+            # (선택) 안내 메시지
+            QMessageBox.information(self, "삭제", "행 삭제 및 .env 키 인덱스 재정렬 완료")
+
+    def __rewrite_all_indexed_keys_to_env(self) -> None:
         """
-        .env에서 APP_KEY_{index}, APP_SECRET_{index} 라인을 제거하고
-        os.environ에서도 제거한다.
+        현재 테이블 순서대로 APP_KEY_1..N / APP_SECRET_1..N 를 .env에 재기록하고
+        os.environ도 동기화한다.
+        - 기존 APP_KEY_i/APP_SECRET_i 라인은 모두 제거 후 새로 작성
         """
+        import re
+        from pathlib import Path
+
+        # 1) 현재 테이블에서 키/시크릿 수집 (1..N)
+        pairs: list[tuple[str, str]] = []
+        for r in range(self.tbl.rowCount()):
+            ak = (self.tbl.item(r, 4).text() if self.tbl.item(r,4) else "").strip()
+            it = self.tbl.item(r, 5)
+            sk = (it.data(Qt.UserRole) if it and it.data(Qt.UserRole) else (it.text() if it else "")).strip()
+            if ak and sk:
+                pairs.append((ak, sk))
+
+        # 2) .env 읽고 APP_KEY_/APP_SECRET_ 라인 제거
         try:
-            from pathlib import Path
             env_path = Path(".env")
             if env_path.exists():
                 lines = env_path.read_text(encoding="utf-8").splitlines()
             else:
                 lines = []
 
-            key_prefix  = f"APP_KEY_{index}="
-            sec_prefix  = f"APP_SECRET_{index}="
+            pat = re.compile(r"^(APP_KEY_\d+|APP_SECRET_\d+)=.*$")
+            kept = [ln for ln in lines if not pat.match(ln)]
 
-            new_lines = [
-                ln for ln in lines
-                if not (ln.startswith(key_prefix) or ln.startswith(sec_prefix))
-            ]
+            # 3) 1..N로 재기록
+            for i, (ak, sk) in enumerate(pairs, start=1):
+                kept.append(f"APP_KEY_{i}={ak}")
+                kept.append(f"APP_SECRET_{i}={sk}")
 
-            # 파일 업데이트 (.env가 비게 되더라도 정상 동작)
-            env_text = "\n".join(new_lines)
-            if env_text and not env_text.endswith("\n"):
-                env_text += "\n"
-            env_path.write_text(env_text, encoding="utf-8")
+            text = "\n".join(kept)
+            if text and not text.endswith("\n"):
+                text += "\n"
+            env_path.write_text(text, encoding="utf-8")
 
-            # 프로세스 환경변수도 함께 정리
-            os.environ.pop(f"APP_KEY_{index}", None)
-            os.environ.pop(f"APP_SECRET_{index}", None)
+            # 4) 프로세스 환경변수 동기화: 기존 인덱스 모두 제거 후 1..N 채움
+            #    (넉넉히 1..200 범위를 정리 — 필요시 조정 가능)
+            for i in range(1, 201):
+                os.environ.pop(f"APP_KEY_{i}", None)
+                os.environ.pop(f"APP_SECRET_{i}", None)
+            for i, (ak, sk) in enumerate(pairs, start=1):
+                os.environ[f"APP_KEY_{i}"] = ak
+                os.environ[f"APP_SECRET_{i}"] = sk
+
         except Exception:
-            # 조용히 무시 (UI 상에서 삭제는 계속 진행)
+            # 조용히 무시 (UI 동작에는 영향 없음)
             pass
 
     @Slot()
