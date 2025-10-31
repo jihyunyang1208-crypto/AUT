@@ -1,7 +1,9 @@
+# ui_main.py
 import os
 import sys
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any
 from datetime import datetime
+
 import pandas as pd
 
 # Qt
@@ -14,20 +16,16 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QStatusBar,
     QTableView, QHeaderView, QLineEdit, QToolBar, QListWidget,
     QTextEdit, QListWidgetItem, QTextBrowser, QSplitter, QCheckBox,
-    QComboBox, QGroupBox, QScrollArea, QFrame, QProgressBar, QTabWidget, QTableWidgetItem, QFileDialog
+    QComboBox, QGroupBox, QScrollArea, QFrame, QProgressBar, QTabWidget, QTableWidgetItem
 )
 
-# Matplotlib (optional)
 try:
     from matplotlib.dates import DateFormatter
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     import matplotlib
     from matplotlib.ticker import FuncFormatter
-    try:
-        matplotlib.rc('font', family='Malgun Gothic')
-    except Exception:
-        pass
+    matplotlib.rc('font', family='Malgun Gothic')
     matplotlib.rc('axes', unicode_minus=False)
     _HAS_MPL = True
 except Exception:
@@ -40,11 +38,12 @@ except Exception:
     MacdDialog = None
 
 from pathlib import Path
-from trading_report.report_dialog import ReportDialog
+from PySide6.QtWidgets import QFileDialog
 
+from trading_report.report_dialog import ReportDialog
+import utils.result_paths as result_paths
 import logging
 logger = logging.getLogger(__name__)
-logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
 
 # 설정 / 와이어링
 try:
@@ -60,7 +59,6 @@ except Exception as e:
     SettingsDialog = None
     apply_to_autotrader = lambda *a, **k: None
     AppSettings = type("Cfg", (), {})
-    def apply_all_settings(*args, **kwargs): pass
 
 try:
     from setting.wiring import AppWiring
@@ -71,15 +69,16 @@ except Exception as e:
 # 포지션 관리 및 리스크 집계 모듈
 from trade_pro.auto_trader import AutoTrader
 from utils.stock_info_manager import StockInfoManager
+from utils.result_paths import path_today, path_today
 
-# ⬇️ AlertConfig 제거하여 ImportError 해결
-from risk_management.trading_results import TradingResultStore
+from risk_management.trading_results import TradingResultStore  # [CHANGED] AlertConfig 제거 (존재 X)
 from risk_management.risk_dashboard import RiskDashboard
 
 logger = logging.getLogger("ui_main")
+logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
 
 # -------------------------------
-# 테이블 컬럼 인덱스
+# 📊 테이블 컬럼 인덱스 상수
 # -------------------------------
 COL_RT          = 0
 COL_PRICE       = 1
@@ -130,7 +129,7 @@ class DataFrameModel(QAbstractTableModel):
 # 메인 윈도우
 # ----------------------------
 class MainWindow(QMainWindow):
-    sig_alert = Signal(str, str, dict)
+    sig_alert = Signal(str)   
     sig_new_stock_detail = Signal(dict)
     sig_trade_signal = Signal(dict)
 
@@ -155,7 +154,7 @@ class MainWindow(QMainWindow):
         self.project_root = self._resolve_project_root(project_root)
         self.wiring = (AppWiring(trader=self.trader, monitor=self.monitor) if callable(AppWiring) else None)
 
-        self.stock_info = StockInfoManager() if StockInfoManager else None
+        self.stock_info = StockInfoManager() if StockInfoManager else None 
 
         # UI 상태 변수
         self._last_report_path: Optional[str] = None
@@ -167,6 +166,11 @@ class MainWindow(QMainWindow):
         self._stream_debounce_sec = 15
         self._cond_seq_to_name: dict[str, str] = {}
         self._code_to_conds: dict[str, set[str]] = {}
+
+        # [ADDED] 대시보드 핸들 (탭 2개)
+        self.risk_tabs: Optional[QTabWidget] = None
+        self.risk_dashboard_daily: Optional[RiskDashboard] = None
+        self.risk_dashboard_cum: Optional[RiskDashboard] = None
 
         # UI 빌드
         self._build_toolbar()
@@ -212,11 +216,11 @@ class MainWindow(QMainWindow):
         # 앱 설정 로드 및 적용
         self.store = SettingsStore() if SettingsStore else None
         loaded = self.store.load() if self.store else type("Cfg", (), {})()
-        self.cfg = loaded
-        self.app_cfg = self.cfg
+        self.cfg = loaded                
+        self.app_cfg = self.cfg         
 
         if getattr(self.app_cfg, "broker_vendor", ""):
-            os.environ["BROKER_VENDOR"] = self.app_cfg.broker_vendor
+            os.environ["BROKER_VENDOR"] = self.app_cfg.broker_vendor  
         if self.wiring and hasattr(self.wiring, "apply_settings"):
             try:
                 self.wiring.apply_settings(self.app_cfg)
@@ -224,14 +228,22 @@ class MainWindow(QMainWindow):
                     self.monitor = self.wiring.monitor
                 if self.monitor is not None:
                     try:
-                        from setting.settings_manager import apply_to_monitor
-                        apply_to_monitor(self.monitor, self.app_cfg)
+                        apply_to_monitor(self.monitor, self.app_cfg)  # type: ignore[name-defined]
+                        logger.info(
+                            "Monitor custom applied: buy_pro=%s sell_pro=%s auto_buy=%s auto_sell=%s",
+                            getattr(self.app_cfg, "buy_pro", False),
+                            getattr(self.app_cfg, "sell_pro", False),
+                            getattr(self.app_cfg, "auto_buy", True),
+                            getattr(self.app_cfg, "auto_sell", True),
+                        )
                     except Exception:
-                        logger.info("apply_to_monitor not available; skipped.")
+                        logger.exception("apply_to_monitor failed")
             except Exception:
                 pass
 
-        self._build_risk_panel()
+        # 리스크 패널 구성 (탭 2개)  ---------------------------------------
+        self._build_risk_panel()  # [CHANGED]
+        # ---------------------------------------------------------------
 
         # 리스크 패널 토글 복원
         vis = self._settings_qs.value("risk_panel_visible", True)
@@ -240,7 +252,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'act_toggle_risk'):
             self.act_toggle_risk.setChecked(bool(vis))
 
-    # ---------------- UI 구성 ----------------
+    # ---------------- UI 구성 함수들 ----------------
     def _build_toolbar(self):
         tb = QToolBar("Main"); tb.setMovable(False)
         self.addToolBar(Qt.TopToolBarArea, tb)
@@ -254,7 +266,6 @@ class MainWindow(QMainWindow):
         act_refresh = tb.addAction("후보 새로고침"); act_refresh.setShortcut("F5"); act_refresh.triggered.connect(self.load_candidates)
         tb.addSeparator()
         self.btn_settings = tb.addAction("환경설정…")
-
         tb.addSeparator()
         self.act_toggle_risk = tb.addAction("리스크패널")
         self.act_toggle_risk.setCheckable(True)
@@ -275,6 +286,7 @@ class MainWindow(QMainWindow):
         self.btn_filter = QPushButton("종목 필터링 실행 (재무+기술)")
         self.list_conditions = QListWidget()
         self.lbl_cond_info = QLabel("0개 / 선택: 0")
+        
         left.addWidget(self.search_conditions)
         left.addWidget(QLabel("조건식 목록"))
         left.addWidget(self.list_conditions, 1)
@@ -288,16 +300,18 @@ class MainWindow(QMainWindow):
         right_panel = QWidget(); right = QVBoxLayout(right_panel)
         vsplit = QSplitter(Qt.Vertical); right.addWidget(vsplit, 1)
         hsplit = QSplitter(Qt.Horizontal); vsplit.addWidget(hsplit); self.hsplit = hsplit
-
-        # 상단-좌
+        
+        # 상단-좌: 후보 테이블
         pane_top_left = QWidget(); top_left = QVBoxLayout(pane_top_left)
         self.search_candidates = QLineEdit(placeholderText="후보 종목 실시간 검색…")
         top_left.addWidget(self.search_candidates)
+        
         self.cand_table = QTableView()
         self.cand_table.horizontalHeader().setStretchLastSection(True)
         self.cand_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.cand_table.setAlternatingRowColors(True)
         self.cand_table.verticalHeader().setVisible(False)
+
         self.cand_model = DataFrameModel(pd.DataFrame(columns=["회사명", "종목코드", "현재가"]))
         self.cand_proxy = QSortFilterProxyModel(self)
         self.cand_proxy.setSourceModel(self.cand_model)
@@ -309,29 +323,38 @@ class MainWindow(QMainWindow):
         self.cand_table.setCornerButtonEnabled(False)
         top_left.addWidget(self.cand_table, 1)
 
-        # 상단-우
+        # 상단-우: 종목 검색 결과
         pane_top_right = QWidget(); top_right = QVBoxLayout(pane_top_right)
         header_row = QHBoxLayout(); header_row.addStretch(1); top_right.addLayout(header_row)
+        
         sort_row = QHBoxLayout()
         self.cmb_sort_key = QComboBox()
         self.cmb_sort_key.addItems(["등락률(%)", "현재가", "거래량", "매수가", "매도가", "코드", "이름", "최근 갱신시간", "조건식"])
         self.cmb_sort_key.setCurrentText("최근 갱신시간")
         self.SORT_COL_MAP = {
-            "등락률(%)": COL_RT, "현재가": COL_PRICE, "거래량": COL_VOL,
-            "매수가": COL_BUY_PRICE, "매도가": COL_SELL_PRICE,
-            "코드": COL_CODE, "이름": COL_NAME, "최근 갱신시간": COL_UPDATED_AT, "조건식": COL_CONDS,
+            "등락률(%)": COL_RT,
+            "현재가": COL_PRICE,
+            "거래량": COL_VOL,
+            "매수가": COL_BUY_PRICE,
+            "매도가": COL_SELL_PRICE,
+            "코드": COL_CODE,
+            "이름": COL_NAME,
+            "최근 갱신시간": COL_UPDATED_AT,
+            "조건식": COL_CONDS,
         }
         self.btn_sort_dir = QPushButton("내림차순")
-        self.btn_sort_dir.setCheckable(True)
-        self.btn_sort_dir.setChecked(True)
+        self.btn_sort_dir.setCheckable(True); self.btn_sort_dir.setChecked(True)
         sort_row.addWidget(QLabel("정렬:")); sort_row.addWidget(self.cmb_sort_key); sort_row.addWidget(self.btn_sort_dir); sort_row.addStretch(1)
         top_right.addLayout(sort_row)
+
         self.text_result = QTextBrowser(); self.text_result.setOpenExternalLinks(False); self.text_result.setOpenLinks(False); self.text_result.setReadOnly(True)
         self.text_result.anchorClicked.connect(self._on_result_anchor_clicked)
         top_right.addWidget(self.text_result, 1)
 
         tab_top = QTabWidget()
-        tab_top.setDocumentMode(True); tab_top.setMovable(True); tab_top.setTabPosition(QTabWidget.North)
+        tab_top.setDocumentMode(True)
+        tab_top.setMovable(True)
+        tab_top.setTabPosition(QTabWidget.North)
         tab_top.setStyleSheet("""
         QTabWidget::pane { border: 1px solid #3a414b; border-radius: 10px; top: -1px; background: #23272e; }
         QTabBar::tab { background: #2a2f36; color: #cfd6df; padding: 10px 18px; margin-right: 6px;
@@ -354,6 +377,8 @@ class MainWindow(QMainWindow):
         vsplit.addWidget(pane_bottom)
         vsplit.setSizes([540, 220])
 
+        # 좌/우/리스크 패널
+        root_parent = main_split
         main_split.addWidget(left_panel)
         main_split.addWidget(right_panel)
 
@@ -365,66 +390,79 @@ class MainWindow(QMainWindow):
         main_split.setSizes([380, 800, 360])
 
     def _build_risk_panel(self):
-        """리스크 패널 초기화 (JSON overwrite + CSV→JSON 동기화 버전)"""
+        """
+        [CHANGED]
+        리스크 패널을 Daily/Cumulative 2개 탭으로 구성.
+        """
+        from pathlib import Path
+
         results_dir = Path.cwd() / "logs" / "results"
         results_dir.mkdir(parents=True, exist_ok=True)
-        json_path = results_dir / "trading_results.json"
 
-        def price_provider(sym: str) -> Optional[float]:
-            try:
-                if hasattr(self, "market_api") and self.market_api:
-                    return self.market_api.get_price(sym)
-            except Exception:
-                pass
-            return None
+        # 누적 JSON (여러 날 합산)
+        json_path_cum = results_dir / "trading_results.json"
+        # 당일 JSON (YYYY-MM-DD)
+        today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%Y-%m-%d")
+        json_path_daily = results_dir / f"trading_results_{today}.json"
 
-        def on_daily_report():
-            try:
-                self.on_click_daily_report()
-            except Exception:
-                pass
-
-        def on_alert(alert_type: str, message: str, data: dict):
-            try:
-                self.sig_alert.emit(alert_type, message, data)
-            except Exception:
-                pass
-
-        # ⬇️ AlertConfig 없이 TradingResultStore만 사용
+        # ✅ TradingResultStore는 누적 파일 경로로 유지 (내부에서 overwrite 사용)
         try:
-            self.trading_store = TradingResultStore(json_path=str(json_path))
-            logger.info("[UI] TradingResultStore initialized (JSON overwrite mode)")
+            self.trading_store = TradingResultStore(json_path=str(json_path_cum))
+            logger.info("[UI] TradingResultStore initialized (json overwrite @ cumulative)")
         except Exception as e:
             logger.exception(f"TradingResultStore 초기화 실패: {e}")
 
-        self.risk_dashboard = RiskDashboard(
-            json_path=str(json_path),
-            price_provider=price_provider,
-            on_daily_report=on_daily_report,
+        # 탭 위젯 생성
+        tabs = QTabWidget(self.risk_panel_holder)
+        tabs.setDocumentMode(True)
+        tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #3a414b; border-radius: 10px; top: -1px; background: #23272e; }
+            QTabBar::tab { background: #2a2f36; color: #cfd6df; padding: 8px 16px; margin-right: 6px;
+                           border: 1px solid #3a414b; border-bottom: 2px solid #3a414b;
+                           border-top-left-radius: 10px; border-top-right-radius: 10px; font-weight: 600; }
+            QTabBar::tab:selected { background: #343b47; color: #ffffff; border-bottom: 2px solid #60a5fa; }
+        """)
+
+        # ✅ Daily 대시보드
+        self.risk_dashboard_daily = RiskDashboard(
+            json_path=str(json_path_daily),
+            price_provider=self._price_provider_safe,
+            on_daily_report=self.on_click_daily_report,
             poll_ms=60_000,
             parent=self,
         )
+        tabs.addTab(self.risk_dashboard_daily, "당일 (Daily)")
 
-        if hasattr(self, "on_pnl_snapshot"):
-            try:
-                self.risk_dashboard.pnl_snapshot.connect(self.on_pnl_snapshot)
-            except Exception:
-                pass
+        # ✅ Cumulative 대시보드
+        self.risk_dashboard_cum = RiskDashboard(
+            json_path=str(json_path_cum),
+            price_provider=self._price_provider_safe,
+            on_daily_report=self.on_click_daily_report,
+            poll_ms=60_000,
+            parent=self,
+        )
+        tabs.addTab(self.risk_dashboard_cum, "누적 (Cumulative)")
 
-        if self.risk_panel_holder and self.risk_panel_holder.layout():
-            self.risk_panel_holder.layout().addWidget(self.risk_dashboard)
-        else:
-            self.risk_panel_holder = QWidget()
-            holder_layout = QVBoxLayout(self.risk_panel_holder)
-            holder_layout.setContentsMargins(0, 0, 0, 0)
-            holder_layout.addWidget(self.risk_dashboard)
+        self.risk_tabs = tabs
 
-        self.risk_dashboard.refresh_json()
+        # 홀더 레이아웃에 장착
+        lay = self.risk_panel_holder.layout() or QVBoxLayout(self.risk_panel_holder)
+        self.risk_panel_holder.setLayout(lay)
+        lay.addWidget(tabs)
+
+        # 최초 1회 리프레시
+        try:
+            self.risk_dashboard_daily.refresh_json()
+        except Exception:
+            pass
+        try:
+            self.risk_dashboard_cum.refresh_json()
+        except Exception:
+            pass
 
     # ---------------- 스타일 ----------------
     def _apply_stylesheet(self):
-        self.setStyleSheet(
-            """
+        self.setStyleSheet("""
             QMainWindow, QWidget { background: #1e2126; color: #e9edf1; }
             QLineEdit, QTextEdit, QListWidget, QTableView, QTextBrowser {
                 background: #23272e; color: #e9edf1; border: 1px solid #3a414b;
@@ -452,8 +490,7 @@ class MainWindow(QMainWindow):
             }
             QSplitter::handle { background: #2a2f36; }
             QStatusBar { background: #1a1d22; color: #cfd6df; }
-            """
-        )
+        """)
 
     # ---------------- 시계/종료 ----------------
     def _start_clock(self):
@@ -462,20 +499,23 @@ class MainWindow(QMainWindow):
         t.start(1000); self._clock_timer = t
 
     def closeEvent(self, event):
+        """종료 시 리소스 정리"""
         try:
-            if hasattr(self, "orders_watcher") and getattr(self, "orders_watcher", None):
+            # ✅ RiskDashboard 타이머 정지 (두 탭 모두)  [CHANGED]
+            for dash in (getattr(self, "risk_dashboard_daily", None), getattr(self, "risk_dashboard_cum", None)):
+                if dash:
+                    try:
+                        dash.stop_auto_refresh()
+                        logger.info("RiskDashboard auto-refresh stopped")
+                    except Exception:
+                        logger.exception("Failed to stop risk_dashboard refresh")
+
+            if hasattr(self, "orders_watcher") and self.orders_watcher:
                 try:
                     self.orders_watcher.stop()
                     logger.info("OrdersCSVWatcher stopped")
                 except Exception:
                     logger.exception("Failed to stop orders_watcher")
-
-            if hasattr(self, "risk_dashboard") and getattr(self, "risk_dashboard", None):
-                try:
-                    self.risk_dashboard.stop_auto_refresh()
-                    logger.info("RiskDashboard auto-refresh stopped")
-                except Exception:
-                    logger.exception("Failed to stop risk_dashboard refresh")
 
             if self.engine and hasattr(self.engine, "shutdown"):
                 try:
@@ -511,6 +551,7 @@ class MainWindow(QMainWindow):
                 if hasattr(self.bridge, name):
                     try: getattr(self.bridge, name).connect(slot)
                     except Exception: pass
+
             if hasattr(self.bridge, "pnl_snapshot_ready"):
                 try:
                     self.bridge.pnl_snapshot_ready.connect(self.on_pnl_snapshot, Qt.UniqueConnection)
@@ -532,43 +573,63 @@ class MainWindow(QMainWindow):
     # ---------------- 손익 스냅샷 수신 ----------------
     @Slot(dict)
     def on_pnl_snapshot(self, snap: dict):
+        """
+        [CHANGED]
+        1) RiskDashboard(Daily/Cumulative) 갱신 트리거 (필요 시)
+        2) 중앙 종목 리스트의 매수가/매도가를 '당일 누적 평단/매도가'로 업데이트
+        """
         try:
-            if hasattr(self, "risk_dashboard") and self.risk_dashboard:
+            # (선택) 즉시 리프레시 — 내부 타이머가 있지만 수신 시 동기화 가속
+            for dash in (self.risk_dashboard_daily, self.risk_dashboard_cum):
                 try:
-                    self.risk_dashboard.update_snapshot(snap)
-                except Exception as ex:
-                    logger.error("RiskDashboard 업데이트 실패: %s", ex)
+                    if dash:
+                        dash.update_snapshot(snap)  # RiskDashboard가 스냅샷 직접 반영 지원 시
+                        dash.refresh_json()
+                except Exception:
+                    pass
 
-            positions_by_symbol = snap.get("by_symbol") or {}
+            # 2) 중앙 종목 리스트 갱신
+            positions_by_symbol = (snap or {}).get("by_symbol") or {}
             updated = False
-            for code6, pos_data in positions_by_symbol.items():
-                if not pos_data or not isinstance(pos_data, dict):
+            for code6, pos in positions_by_symbol.items():
+                if not isinstance(pos, dict):
                     continue
                 idx = self._result_index.get(code6)
                 if idx is None:
                     continue
+
+                # [ADDED] 스냅샷 키 다양성 흡수
+                avg_buy = self._pick_first_num(pos,
+                    "avg_buy_price", "avg_price", "avg_entry", "avg_cost")
+                last_sell = self._pick_first_num(pos,
+                    "avg_sell_price", "sell_avg", "last_sell_price", "avg_exit")
+
                 row = self._result_rows[idx]
-                avg_buy = pos_data.get("avg_buy_price")
-                avg_sell = pos_data.get("avg_sell_price")
-                if row.get("buy_price") != avg_buy:
-                    row["buy_price"] = avg_buy; updated = True
-                if avg_sell is not None and row.get("sell_price") != avg_sell:
-                    row["sell_price"] = avg_sell; updated = True
+                if avg_buy is not None and row.get("buy_price") != avg_buy:
+                    row["buy_price"] = avg_buy
+                    updated = True
+                if last_sell is not None and row.get("sell_price") != last_sell:
+                    row["sell_price"] = last_sell
+                    updated = True
+
             if updated:
                 self._render_results_html()
 
+            # 3) 상태바 요약
             portfolio = snap.get("portfolio") or {}
             daily_pnl = portfolio.get("daily_pnl_pct", 0)
             if daily_pnl != 0:
                 sign = "+" if daily_pnl > 0 else ""
                 self.status.showMessage(
-                    f"일일 손익: {sign}{daily_pnl:.2f}% | 노출도: {portfolio.get('gross_exposure_pct', 0):.1f}%",
+                    f"일일 손익: {sign}{daily_pnl:.2f}% | "
+                    f"노출도: {portfolio.get('gross_exposure_pct', 0):.1f}%",
                     3000
                 )
+
         except Exception as e:
             self.append_log(f"[UI] on_pnl_snapshot 오류: {e}")
 
-    # ---------------- 기본 메서드 ----------------
+    # ---------------- 기존 메서드들 ----------------
     def append_log(self, text: str):
         ts = datetime.now().strftime("%H:%M:%S")
         self.text_log.append(f"[{ts}] {str(text)}")
@@ -626,8 +687,8 @@ class MainWindow(QMainWindow):
             if code_from_payload:
                 name = self.stock_info.get_name(code_from_payload.strip())
         name = name or "종목명 없음"
-        cond_name = (flat.get("condition_name") or flat.get("cond_name") or "").strip()
 
+        cond_name = (flat.get("condition_name") or flat.get("cond_name") or "").strip()
         def _num(*keys):
             for k in keys:
                 v = flat.get(k)
@@ -637,7 +698,6 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
             return None
-
         price = _num("cur_prc", "stck_prpr", "price")
         rt    = _num("flu_rt", "prdy_ctrt") or 0.0
         vol   = _num("now_trde_qty", "acml_vol", "trqu")
@@ -647,7 +707,8 @@ class MainWindow(QMainWindow):
         updated_at = datetime.now().isoformat(timespec="seconds")
         row = {
             "code": code6, "name": name, "price": price, "rt": rt, "vol": vol,
-            "buy_price": None, "sell_price": None, "updated_at": updated_at, "conds": cond_name or "-",
+            "buy_price": None, "sell_price": None,
+            "updated_at": updated_at, "conds": cond_name or "-",
         }
         idx = self._result_index.get(code6)
         if idx is None:
@@ -655,10 +716,8 @@ class MainWindow(QMainWindow):
         else:
             keep_buy = self._result_rows[idx].get("buy_price")
             keep_sell = self._result_rows[idx].get("sell_price")
-            if keep_buy is not None:
-                row["buy_price"] = keep_buy
-            if keep_sell is not None:
-                row["sell_price"] = keep_sell
+            if keep_buy is not None: row["buy_price"] = keep_buy
+            if keep_sell is not None: row["sell_price"] = keep_sell
             self._result_rows[idx] = row
         self._render_results_html()
         self._ensure_macd_stream(code6)
@@ -712,18 +771,24 @@ class MainWindow(QMainWindow):
             logger.exception(f"[UI] on_trade_signal 오류: {e}")
 
     # =========================
-    # 유틸
+    # 매매리포트: 경로/루트 유틸
     # =========================
     def _resolve_project_root(self, root_like: str) -> str:
+        cand = Path(root_like or ".").resolve()
         def _ok(p: Path) -> bool:
             return (p / "candidate_stocks.csv").exists() or (p / "trading_report").exists()
-        cand = Path(root_like or ".").resolve()
-        if _ok(cand): return str(cand)
+        if _ok(cand):
+            return str(cand)
         here = Path(__file__).resolve().parent
-        if _ok(here): return str(here)
-        if _ok(here.parent): return str(here.parent)
+        if _ok(here):
+            return str(here)
+        if _ok(here.parent):
+            return str(here.parent)
         return str(cand)
 
+    # =========================
+    # 추가: 클릭 핸들러
+    # =========================
     def on_click_init(self) -> None:
         try:
             if getattr(self.engine, "_initialized", False):
@@ -778,32 +843,21 @@ class MainWindow(QMainWindow):
             logger.warning("SettingsDialog is None (settings_manager import failed earlier)")
             QMessageBox.information(self, "안내", "SettingsDialog 모듈이 없습니다.")
             return
+
         if not getattr(self, "store", None):
             self.store = SettingsStore()
         current_cfg = getattr(self, "cfg", None) or self.store.load()
         dlg = SettingsDialog(self, current_cfg)
+
         if dlg.exec() == QDialog.Accepted:
             new_cfg = dlg.get_settings()
             self.store.save(new_cfg)
             try:
                 if 'AppWiring' in globals() and isinstance(AppWiring, type):
-                    self.wiring = AppWiring(trader=self.trader, monitor=getattr(self, "monitor", None))
+                    return AppWiring(trader=self.trader, monitor=getattr(self, "monitor", None))
             except Exception as e:
                 logger.exception("AppWiring init failed: %s", e)
-            apply_all_settings(
-                new_cfg,
-                trader=getattr(self, "trader", None),
-                monitor=getattr(self, "monitor", None),
-                extra=[self.wiring] if self.wiring else []
-            )
-            if getattr(self.wiring, "monitor", None) and self.monitor is not self.wiring.monitor:
-                self.monitor = self.wiring.monitor
-                if hasattr(self, "engine") and self.engine is not None:
-                    self.engine.monitor = self.monitor
-                if hasattr(self, "bridge") and self.bridge is not None:
-                    self.bridge.monitor = self.monitor
-            self.cfg = new_cfg
-            self.append_log("⚙️ 설정이 적용되었습니다.")
+            return None
 
     def on_click_daily_report(self) -> None:
         try:
@@ -842,7 +896,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.append_log(f"[UI] on_click_open_last_report 오류: {e}")
 
-    # ---------------- 후보 로드/필터 ----------------
+    # -------------------------------
+    # 후보 로드/필터/유틸
+    # -------------------------------
     def load_candidates(self, path: str = None):
         if path is None:
             path = os.path.join(self.project_root, "candidate_stocks.csv")
@@ -952,8 +1008,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.append_log(f"[UI] _toggle_risk_panel 오류: {e}")
 
-    # ---------------- 숫자 포맷/렌더 ----------------
-    def _fmt_num(self, v: Any, digits: int = 0) -> str:
+    # ---------------- 숫자 포맷 ----------------
+    def _fmt_num(self, v, digits: int = 0) -> str:
         try:
             if v is None or v == "":
                 return "-"
@@ -962,10 +1018,12 @@ class MainWindow(QMainWindow):
         except Exception:
             return str(v)
 
+    # ---------------- 결과 테이블 렌더링 ----------------
     def _render_results_html(self) -> None:
         if not self._result_rows:
             self.text_result.setHtml("<div style='color:#9aa0a6;'>표시할 결과가 없습니다.</div>")
             return
+
         key_map = {
             "등락률(%)":"rt", "현재가":"price", "거래량":"vol",
             "매수가":"buy_price", "매도가":"sell_price",
@@ -988,8 +1046,8 @@ class MainWindow(QMainWindow):
                 return str(v)
 
         rows = sorted(self._result_rows, key=sort_key, reverse=desc)
-        html = [
-            """
+
+        html = ["""
             <style>
               table.res { width:100%; border-collapse:collapse; font-size:12px; }
               table.res th, table.res td { border-bottom:1px solid #2f3338; padding:8px 10px; }
@@ -1014,8 +1072,7 @@ class MainWindow(QMainWindow):
                 <th style='width:18%;'>조건식</th>
                 <th style='width:8%;'></th>
               </tr></thead><tbody>
-            """
-        ]
+        """]
         for r in rows:
             name = r.get("name", "-")
             code6 = r.get("code", "-")
@@ -1046,7 +1103,7 @@ class MainWindow(QMainWindow):
         html.append("</tbody></table>")
         self.text_result.setHtml("".join(html))
 
-    # ---------------- MACD 스트림/다이얼로그 ----------------
+    # ---------------- MACD 스트림 보조 ----------------
     def _ensure_macd_stream(self, code6: str):
         try:
             now = pd.Timestamp.now(tz="Asia/Seoul")
@@ -1065,6 +1122,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    # ---------------- MACD 상세 다이얼로그 ----------------
     def _open_macd_dialog(self, code: str) -> None:
         code6 = str(code)[-6:].zfill(6)
         dlg = self._macd_dialogs.get(code6)
@@ -1086,14 +1144,49 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    # 레거시 no-op
     def on_trade_applied(self, symbol: str, side: str, qty: int, price: float, avg_after: float):
-        logger.debug("on_trade_applied called (legacy UI path). No action in current HTML-based table.")
-        return
+        try:
+            row = self._find_row_by_symbol(symbol)
+            if row is None:
+                return
+            if side == "buy":
+                self.positions_table.setItem(row, COL_BUY_PRICE, self._mk_item(f"{price:,.0f}"))
+                self.positions_table.setItem(row, COL_AVG_PRICE, self._mk_item(f"{avg_after:,.2f}"))
+            else:
+                self.positions_table.setItem(row, COL_SELL_PRICE, self._mk_item(f"{price:,.0f}"))
+            from datetime import datetime
+            now_txt = datetime.now().strftime("%H:%M:%S")
+            self.positions_table.setItem(row, COL_UPDATED_AT, self._mk_item(now_txt))
+            self.positions_table.viewport().update()
+        except Exception as e:
+            logger.warning("on_trade_applied update failed for %s: %s", symbol, e)
 
-    def _mk_item(self, text: str, sort_value: Optional[Union[float, int, str]] = None):
+    def _mk_item(self, text: str, sort_value: Optional[float | int | str] = None):
         it = QTableWidgetItem(text)
         it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         if sort_value is not None:
             it.setData(Qt.UserRole, sort_value)
         return it
+
+    # ---------------- 내부 유틸 (추가) ----------------
+    def _price_provider_safe(self, sym: str) -> Optional[float]:
+        """[ADDED] RiskDashboard price_provider 래퍼"""
+        try:
+            if hasattr(self, "market_api") and self.market_api:
+                return self.market_api.get_price(sym)
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _pick_first_num(d: Dict[str, Any], *keys: str) -> Optional[float]:
+        """[ADDED] 다양한 스냅샷 키에서 첫 번째 숫자 추출"""
+        for k in keys:
+            v = d.get(k)
+            if v in (None, "", "-"):
+                continue
+            try:
+                return float(str(v).replace(",", ""))
+            except Exception:
+                continue
+        return None
