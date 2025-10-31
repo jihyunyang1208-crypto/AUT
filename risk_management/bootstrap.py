@@ -1,39 +1,41 @@
-# bootstrap.py 
+from datetime import timedelta, timezone
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
-import json, os
+import logging, sys
+
+# TradingResultStore 호출
+from risk_management.trading_results import TradingResultStore
+
+# --- 로깅 강제 리셋 ---
+for h in logging.root.handlers[:]:
+    logging.root.removeHandler(h)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout,
+                    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+
+logger = logging.getLogger("bootstrap")
 
 KST = timezone(timedelta(hours=9))
-base = Path("C:/trade/AutoTrader/logs/results")
-base.mkdir(parents=True, exist_ok=True)
+BASE_DIR = Path("C:/trade/AutoTrader/logs/results")
+BASE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 누적 스냅샷(비어있는 기본 구조)
-cum = base / "trading_results.jsonl"
-if not cum.exists():
-    payload = {
-        "type": "snapshot",
-        "time": datetime.now(KST).isoformat(),
-        "last_updated": datetime.now(KST).isoformat(),
-        "symbols": {}
-    }
-    with cum.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-# 오늘 일별 스냅샷(선택)
-today = datetime.now(KST).date().isoformat()
-daily = base / f"trading_results_{today}.jsonl"
-if not daily.exists():
-    payload = {
-        "type": "snapshot",
-        "time": datetime.now(KST).isoformat(),
-        "date": today,
-        "strategies": {},
-        "summary": {
-            "realized_pnl_gross": 0.0, "fees": 0.0, "realized_pnl_net": 0.0,
-            "trades": 0.0, "win_rate": 0.0, "morning_pnl": 0.0, "afternoon_pnl": 0.0
-        }
-    }
-    with daily.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+def bootstrap_results():
+    logger.info("=== bootstrap 시작 ===")
+    try:
+        store = TradingResultStore(json_path=BASE_DIR / "trading_results.jsonl")
+        logger.info(f"store initialized | daily={store.daily_jsonl} | cum={store.cumulative_jsonl}")
 
-print("bootstrap ok")
+        if not store.cumulative_jsonl.exists() or store.cumulative_jsonl.stat().st_size == 0:
+            store._append_cumulative_total_event()
+            logger.info("[bootstrap] cumulative file created (total)")
+
+        if not store.daily_jsonl.exists() or store.daily_jsonl.stat().st_size == 0:
+            store._append_daily_total_event()
+            logger.info("[bootstrap] daily file created (total)")
+
+        store.store_updated.emit()
+        logger.info("=== bootstrap 완료 ===")
+    except Exception as e:
+        logger.exception(f"bootstrap 실패: {e}")
+
+if __name__ == "__main__":
+    bootstrap_results()
