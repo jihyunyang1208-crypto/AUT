@@ -1,9 +1,9 @@
 logs/
 token.json
 youtube/client_secret.json
-.env
-.env.*
+.env*
 *.pem
 *.p12
 6136*
 6212*
+.cache

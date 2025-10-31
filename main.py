@@ -17,10 +17,12 @@ from matplotlib import rcParams
 # ---- 앱 유틸/코어 ----
 from utils.utils import load_api_keys  # (다른 곳에서 사용할 수 있어 보존)
 from utils.token_manager import (
-    get_token,                 # ✅ 전역 토큰 공급자 우선 사용
+    # ✅ 메인 토큰은 반드시 이 함수로 획득
+    get_main_token,
+    # 필요 시(백업 경로) 전역 supplier 구성
     build_token_supplier,
     set_global_token_supplier,
-    load_keys,                 # .env 백업 경로용
+    load_keys,  # .env 백업 경로용
 )
 
 from core.websocket_client import WebSocketClient
@@ -43,7 +45,7 @@ from trade_pro.entry_exit_monitor import ExitEntryMonitor
 # ---- 설정: settings_manager에 일원화 ----
 from setting.settings_manager import (
     SettingsStore, AppSettings, SettingsDialog,
-    to_trade_settings, to_ladder_settings, apply_to_autotrader
+    to_trade_settings, to_ladder_settings, apply_to_autotrader, apply_all_settings
 )
 
 # ─────────────────────────────────────────────────────────
@@ -185,8 +187,6 @@ class Engine(QObject):
 
         # 자원
         self.access_token: Optional[str] = None
-        self.appkey: Optional[str] = None
-        self.secretkey: Optional[str] = None
         self.market_api: Optional[SimpleMarketAPI] = None
         self.websocket_client: Optional[WebSocketClient] = None
 
@@ -211,19 +211,20 @@ class Engine(QObject):
         self._initialized = True
 
         try:
-            # 1) 토큰: 전역 공급자(get_token) 우선 사용
+            # 1) ✅ 메인 토큰: get_main_token() 강제 사용
             try:
-                self.access_token = get_token()
+                self.access_token = get_main_token()
             except Exception:
-                # 전역 공급자가 없다면 .env(.ini)에서 키를 읽어 백업 공급자 구성
+                # 전역 supplier가 아직 없다면 .env 키로 백업 공급자 구성
                 ak, sk = load_keys()
                 if not (ak and sk):
-                    raise RuntimeError("토큰 공급자/프로필이 없고 .env APP_KEY/APP_SECRET도 없습니다.")
+                    raise RuntimeError("전역 토큰 공급자/프로필이 없고 .env APP_KEY/APP_SECRET도 없습니다.")
                 supplier = build_token_supplier(app_key=ak, app_secret=sk)
                 set_global_token_supplier(supplier)
-                self.access_token = get_token()
+                # 재시도
+                self.access_token = get_main_token()
 
-            self.bridge.log.emit("🔐 액세스 토큰 발급 완료")
+            self.bridge.log.emit("🔐 액세스 토큰 발급 완료 (main)")
 
             # 2) HTTP 클라이언트 (토큰 주입)
             if not self.market_api:
@@ -246,7 +247,8 @@ class Engine(QObject):
                     on_condition_list=self._on_condition_list,
                     dedup_ttl_sec=3,
                     detail_timeout_sec=6.0,
-                    refresh_token_cb=self._refresh_token_sync,  # ✅ 토큰 재발급도 전역 공급자 경유
+                    # ✅ 재발급도 get_main_token() 경유
+                    refresh_token_cb=self._refresh_token_sync,
                 )
             self.websocket_client.start(loop=self.loop)
             self.bridge.log.emit("🌐 WebSocket 클라이언트 시작")
@@ -259,21 +261,20 @@ class Engine(QObject):
             self.bridge.token_ready.emit(self.access_token)
 
         except Exception as e:
-            # 원인 단서 노출(타입/메시지). 민감정보는 노출하지 않음.
             self.bridge.log.emit(f"❌ 초기화 실패: {type(e).__name__}: {e}")
             raise
 
     def _refresh_token_sync(self) -> Optional[str]:
-        """WS 레이어에서 요청하는 동기적 토큰 재발급 콜백: 전역 공급자(get_token) 경유"""
+        """WS 레이어에서 요청하는 동기적 토큰 재발급 콜백: get_main_token() 경유"""
         try:
-            new_token = get_token()
+            new_token = get_main_token()
             if new_token:
                 self.access_token = new_token
                 if self.market_api:
                     self.market_api.set_token(new_token)
                 if self.getter:
                     self.getter.token = new_token
-                self.bridge.log.emit("🔁 액세스 토큰 재발급 완료")
+                self.bridge.log.emit("🔁 액세스 토큰 재발급 완료 (main)")
                 return new_token
         except Exception as e:
             self.bridge.log.emit(f"❌ 토큰 재발급 실패: {e}")
@@ -466,21 +467,15 @@ class Engine(QObject):
 
         async def job_1d():
             try:
-                # 오늘 날짜를 YYYYMMDD 형식으로 준비
                 today = date.today().strftime("%Y%m%d")
-                # 일봉 차트 데이터 요청
                 res = await asyncio.to_thread(self.getter.fetch_daily_chart_ka10081, code, base_dt=today, need=need_1d)
-                # 응답에서 rows 추출 후 UI로 전달
                 rows1d = _extract_rows(res)
                 self.bridge.chart_rows_received.emit(code, "1d", rows1d)
 
                 if rows1d:
-                    # ✅ 1d도 정규화 후 적용 (5m/30m과 일관성)
                     rows1d_norm = normalize_ka10080_rows(rows1d) or []
                     if rows1d_norm:
-                        # 일봉 데이터의 MACD 초기값 적용
                         calculator.apply_rows_full(code=code, tf="1d", rows=rows1d_norm, need=need_1d)
-                        # 초기 일봉 데이터도 모니터 캐시에 주입
                         try:
                             df_push = _rows_to_df_ohlcv(rows1d_norm, tz="Asia/Seoul")
                             mon = getattr(self, "monitor", None) or getattr(self.bridge, "monitor", None)
@@ -539,7 +534,6 @@ def perform_filtering():
     logger.info("--- 필터링 프로세스 시작 ---")
     today = datetime.now()
 
-    # 분기 재무 업데이트 기준일 (예시)
     finance_filter_dates = [(4, 1), (5, 16), (8, 15), (11, 15)]
     run_finance_filter_today = any(today.month == m and today.day == d for (m, d) in finance_filter_dates)
 
@@ -573,17 +567,12 @@ def _build_trader_from_cfg(cfg: AppSettings):
     """
     AppSettings -> AutoTrader + KiwoomRestBroker 결선
     - APP_KEY/APP_SECRET: cfg > .env(load_keys) 우선순위
-    - account_id: cfg.account_id > token_manager.main_account_id() > ""
-    - 멀티계좌: KIWOOM_ACCOUNTS_JSON(환경변수) 또는 account_provider로 팬아웃
-    - ✅ 토큰은 전역 싱글톤 공급자(get_token) 경유로만 사용해 중복 발급/락 타임아웃 방지
+    - ✅ 토큰은 전역 싱글톤 공급자(get_main_token) 경유로만 접근
+    - ✅ 브로커는 list_order_accounts_strict() (ENV 최신 리스트) 기반 브로드캐스트
     """
     import os
     from trade_pro.auto_trader import AutoTrader
-    from broker.kiwoom import KiwoomRestBroker
-    from utils.token_manager import (
-        load_keys, main_account_id,
-        build_token_supplier, set_global_token_supplier, get_token, DEFAULT_TOKEN_URL,
-    )
+    from broker.kiwoom import KiwoomRestBroker  # (브로커 내부에서 strict 계정 목록 사용)
 
     # 1) Settings 변환
     trade_settings = to_trade_settings(cfg)
@@ -595,58 +584,34 @@ def _build_trader_from_cfg(cfg: AppSettings):
     api_id_buy   =  getattr(cfg, "api_id_buy", None)     or "kt10000"
     api_id_sell  =  getattr(cfg, "api_id_sell", None)    or "kt10001"
     http_timeout = int(getattr(cfg, "http_timeout", 10))
-    token_url    =  getattr(cfg, "token_url", None)      or DEFAULT_TOKEN_URL
 
-    # 3) 자격/계좌 해석
-    app_key    = (getattr(cfg, "app_key", None)    or os.getenv("APP_KEY")    or "").strip()
-    app_secret = (getattr(cfg, "app_secret", None) or os.getenv("APP_SECRET") or "").strip()
-    if not app_key or not app_secret:
-        ak, sk = load_keys()
-        app_key    = app_key    or (ak or "").strip()
-        app_secret = app_secret or (sk or "").strip()
-    if not app_key or not app_secret:
-        raise RuntimeError("Kiwoom APP_KEY/APP_SECRET이 없습니다. cfg 또는 .env를 확인하세요.")
-
-    account_id = (getattr(cfg, "account_id", None) or "").strip() or (main_account_id() or "")
-    cache_namespace = getattr(cfg, "cache_namespace", None) or os.getenv("KIWOOM_CACHE_NS", "kiwoom-prod")
-
-    # 4) ✅ 전역(싱글톤) 토큰 공급자 구성 + 등록
-    supplier = build_token_supplier(
-        app_key=app_key,
-        app_secret=app_secret,
-        account_id=account_id,
-        cache_namespace=cache_namespace,
-        token_url=token_url,
-    )
-    set_global_token_supplier(supplier)
-
-    # 4-1) ✅ 프리-워밍(초기 1회 발급으로 실패를 조기 감지)
+    # 3) (필요 시) 전역 supplier 구성 — 이미 설정돼 있다면 생략
+    #    메인 UI에서는 세팅 다이얼로그가 프로필/ENV를 관리하므로,
+    #    여기서는 supplier가 없을 때만 .env를 사용해 구성
     try:
-        _ = get_token()  # 파일 캐시 사용, 만료 임박시 자동 갱신
-    except Exception as e:
-        # 초기화 단계에서 바로 원인 확인 가능
-        raise RuntimeError(f"토큰 초기 발급 실패: {e}")
+        _ = get_main_token()
+    except Exception:
+        ak, sk = load_keys()
+        if ak and sk:
+            supplier = build_token_supplier(app_key=ak, app_secret=sk)
+            set_global_token_supplier(supplier)
+            # 프리워밍으로 조기 오류 감지
+            _ = get_main_token()
+        else:
+            # supplier가 없어도 브로커는 ENV 계정 리스트만으로 동작 가능하나,
+            # WS/시세 등 메인 토큰이 필요한 구성에서는 오류가 될 수 있음
+            logger.warning("전역 토큰 supplier가 없고 .env 키도 없어 get_main_token 준비를 건너뜁니다.")
 
-    # 5) (옵션) 멀티계좌 팬아웃 공급자
-    # - KIWOOM_ACCOUNTS_JSON(환경변수)이 이미 구성되어 있다면 생략해도 브로커가 자동 인식
-    account_provider = getattr(cfg, "account_provider", None)
-    if account_provider is not None and not callable(account_provider):
-        logger.warning("cfg.account_provider가 callable이 아닙니다. 무시하고 단일 토큰 모드로 진행합니다.")
-        account_provider = None
-
-    # 6) 브로커 생성
-    #    토큰은 오직 get_token()을 통해서만 조회 → 중복 요청/락 타임아웃 예방
+    # 4) 브로커 생성 (토큰 공급자는 내부적으로 사용하지 않음: strict 계정 리스트 사용)
     broker = KiwoomRestBroker(
-        token_provider=get_token,          # ✅ 전역 공급자 경유
         base_url=base_url,
         api_id_buy=api_id_buy,
         api_id_sell=api_id_sell,
         order_path=order_path,
         timeout=http_timeout,
-        account_provider=account_provider, # 멀티계좌 팬아웃을 쓰려면 callable을 넘기세요 (또는 KIWOOM_ACCOUNTS_JSON 준비)
     )
 
-    # 7) AutoTrader 생성 + 브로커 주입 (PositionManager 제거된 최신 버전 가정)
+    # 5) AutoTrader 생성 + 브로커 주입
     trader = AutoTrader(
         settings=trade_settings,
         ladder=ladder_settings,
@@ -659,8 +624,8 @@ def _build_trader_from_cfg(cfg: AppSettings):
         setattr(trader, "broker", broker)  # 안전망: 속성 주입
 
     logger.info(
-        "AutoTrader wired: base_url=%s, order_path=%s, api_id(BUY/SELL)=%s/%s, ns=%s, acc_id=%s",
-        base_url, order_path, api_id_buy, api_id_sell, cache_namespace, account_id or "(na)"
+        "AutoTrader wired: base_url=%s, order_path=%s, api_id(BUY/SELL)=%s/%s",
+        base_url, order_path, api_id_buy, api_id_sell
     )
     return trader
 
@@ -710,7 +675,6 @@ def main():
     engine.monitor = monitor
     bridge.monitor = monitor
 
-    from setting.settings_manager import apply_all_settings
     apply_all_settings(app_cfg, trader=trader, monitor=monitor)
 
     ui.show()

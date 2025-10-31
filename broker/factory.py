@@ -2,13 +2,13 @@
 from __future__ import annotations
 import os
 import logging
-from typing import Callable, Optional, Any, List, Dict
+from typing import Callable, Optional, Any
 
 from .base import Broker
 from .simulator import SimulatorBroker
 from .kiwoom import KiwoomRestBroker
 from .mirae import MiraeAssetBroker
-from utils import token_manager
+from utils.token_manager import get_main_token  # ✅ 메인 토큰 공급자
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def _normalize_vendor(v: Optional[str]) -> str:
     return x
 
 def _resolve_base_url(vendor: str, base_url_provider: Optional[Callable[[], str]]) -> Optional[str]:
-    # 1) provider
+    # 1) 외부 provider 우선
     if callable(base_url_provider):
         try:
             u = (base_url_provider() or "").strip()
@@ -36,13 +36,13 @@ def _resolve_base_url(vendor: str, base_url_provider: Optional[Callable[[], str]
         except Exception as e:
             logger.warning("[factory] base_url_provider error: %s", e)
 
-    # 2) vendor별
+    # 2) 벤더별 환경변수
     env_key_vendor = f"BROKER_BASE_URL_{vendor.upper()}"
     u = (os.getenv(env_key_vendor) or "").strip()
     if u:
         return u
 
-    # 3) 공통
+    # 3) 공통 환경변수
     u = (os.getenv("BROKER_BASE_URL") or "").strip()
     if u:
         return u
@@ -57,58 +57,27 @@ def create_broker(
 ) -> Broker:
     raw = dealer or os.getenv("BROKER_VENDOR") or os.getenv("BROKER_TYPE") or "sim"
     vendor = _normalize_vendor(raw)
-
     base_url = _resolve_base_url(vendor, base_url_provider)
 
-    # ---------- 분기 ----------
     if vendor == "sim":
         logger.info("[factory] using SimulatorBroker (vendor=%s)", raw)
         return SimulatorBroker()
 
     if vendor == "kiwoom":
         logger.info("[factory] using KiwoomRestBroker (base_url=%s)", base_url or "-")
-
-        # 기본 토큰 공급자: 메인 프로필 토큰
-        tp = token_provider or token_manager.token_provider_for_main
-
-        # account_provider: token_manager에서 활성 계좌를 가져와,
-        # 계좌별 토큰이 포함된 AccountCtx 리스트로 변환
-        def _account_provider() -> List[Dict[str, Any]]:
-            acc_ids = token_manager.active_account_ids()
-            ctxs: List[Dict[str, Any]] = []
-            if acc_ids:
-                for acc in acc_ids:
-                    try:
-                        tok = token_manager.token_provider_for_account_id(acc)
-                    except Exception:
-                        tok = ""  # 안전 폴백
-                    ctxs.append({
-                        "token": tok,
-                        "acc_no": acc,
-                        "enabled": True,
-                        "alias": None,
-                    })
-                return ctxs
-
-            # 활성 계좌가 없으면 단일(메인) 토큰 모드로 폴백
-            try:
-                tok = tp()
-            except Exception:
-                tok = ""
-            main_acc = token_manager.main_account_id()
-            return [{"token": tok, "acc_no": main_acc, "enabled": True, "alias": None}]
-
+        # ✅ 멀티계좌는 브로커가 ENV(KIWOOM_ACCOUNTS_JSON)만 신뢰해 팬아웃
+        tp = token_provider or get_main_token  # 하위호환: 인자 우선, 없으면 메인 토큰
         return KiwoomRestBroker(
-            token_provider=tp,
+            token_provider=tp,                    # 시그니처 유지(내부에서 사용 안 함)
             base_url=(base_url or "https://api.kiwoom.com"),
-            account_provider=_account_provider,  # ✅ 시그니처 일치
+            account_provider=None,                # ✅ 사용 안 함(ENV만 신뢰)
         )
 
     if vendor == "mirae":
         logger.info("[factory] using MiraeAssetBroker (base_url=%s)", base_url or "-")
         return MiraeAssetBroker(
-            token_provider=token_manager.token_provider_for_main,
-            base_url=base_url
+            token_provider=(token_provider or get_main_token),
+            base_url=base_url,
         )
 
     if vendor == "kis":

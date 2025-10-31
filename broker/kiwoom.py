@@ -1,69 +1,55 @@
 # broker/kiwoom.py
-import requests
+from __future__ import annotations
+
 import logging
-from typing import Dict, Any, Optional, List, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
-import os
+from typing import Dict, Any, Optional, List, Callable
+
+import requests
 
 from .base import Broker, OrderRequest, OrderResponse
+# ✅ 주문 계정/토큰은 오직 최신 ENV 리스트만 사용
+from utils.token_manager import list_order_accounts_strict
 
 logger = logging.getLogger(__name__)
 DEBUG_TAG = "[KIWOOM_REST_BROKER]"
 
 AccountCtx = Dict[str, Any]  # {"token":str, "acc_no":str|None, "enabled":bool, "alias":str|None}
 
-def _load_accounts_from_env() -> List[AccountCtx]:
-    raw = os.getenv("KIWOOM_ACCOUNTS_JSON", "").strip()
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-        if isinstance(data, list):
-            out: List[AccountCtx] = []
-            for x in data:
-                if not isinstance(x, dict):
-                    continue
-                tok = (x.get("token") or "").strip()
-                if not tok:
-                    # 빈 토큰은 스킵(네트워크 호출 무의미)
-                    continue
-                out.append({
-                    "token": tok,
-                    "acc_no": x.get("acc_no") or None,
-                    "enabled": bool(x.get("enabled", True)),
-                    "alias": x.get("alias") or (x.get("acc_no") or None),
-                })
-            return out
-    except Exception:
-        logger.warning(f"{DEBUG_TAG} Failed to parse KIWOOM_ACCOUNTS_JSON")
-    return []
-
 class KiwoomRestBroker(Broker):
+    """
+    - Main 토큰은 별도(get_main_token). 본 브로커는 '주문' 시
+      SettingsManager가 최신으로 덮어쓴 ENV(KIWOOM_ACCOUNTS_JSON)만 신뢰하여 팬아웃.
+    - 단일 진입점: list_order_accounts_strict()
+    """
+
     def __init__(
         self,
         *,
-        token_provider: Callable[[], Any],
+        token_provider: Optional[Callable[[], Any]] = None,  # 하위호환(보관용)
         base_url: Optional[str] = None,
         api_id_buy: str = "kt10000",
         api_id_sell: str = "kt10001",
         timeout: int = 10,
-        account_provider: Optional[Callable[[], List[AccountCtx]]] = None,
+        account_provider: Optional[Callable[[], List[AccountCtx]]] = None,  # 하위호환(미사용 권장)
         max_workers: int = 6,
         order_path: str = "/api/dostk/ordr",
     ):
-        self._token_provider = token_provider
         self._base_url = (base_url or "https://api.kiwoom.com").rstrip("/")
         self._api_id_buy = api_id_buy
         self._api_id_sell = api_id_sell
         self._timeout = timeout
-        self._account_provider = account_provider
         self._max_workers = max_workers
         self._order_path = order_path
+
+        # 하위호환 필드(사용하지 않음)
+        self._token_provider = token_provider
+        self._account_provider = account_provider
 
     def name(self) -> str:
         return "kiwoom"
 
+    # ---------------------------- 내부 유틸 ----------------------------
     def _headers(self, token: str, api_id: str) -> Dict[str, str]:
         headers = {
             "Content-Type": "application/json;charset=UTF-8",
@@ -71,43 +57,31 @@ class KiwoomRestBroker(Broker):
             "api-id": api_id,
         }
         tok = (token or "").strip()
-        if not tok:
-            safe = "(empty)"
-        else:
-            safe = (tok[:6] + "..." + tok[-4:]) if len(tok) > 12 else "*" * len(tok)
+        safe = "(empty)" if not tok else ((tok[:6] + "..." + tok[-4:]) if len(tok) > 12 else "*" * len(tok))
         logger.debug(f"{DEBUG_TAG} HTTP.HEADERS | Authorization=Bearer {safe} | api-id={api_id}")
         return headers
 
     def _resolve_accounts(self) -> List[AccountCtx]:
-        """
-        1) account_provider()가 있으면 그것을 사용 (추천)
-        2) token_provider()가 리스트를 리턴하면 계좌 리스트로 간주
-        3) env(KIWOOM_ACCOUNTS_JSON) 파싱
-        4) 최종적으로 단일 토큰이면 단일 계좌 모드
-        """
-        # 1) 외부 주입
-        if callable(self._account_provider):
-            try:
-                accs = self._account_provider() or []
-                if isinstance(accs, list) and any(isinstance(x, dict) for x in accs):
-                    return accs
-            except Exception:
-                pass
+        """✅ 단일 진입점: 최신 ENV(KIWOOM_ACCOUNTS_JSON)만 신뢰."""
+        try:
+            accs = list_order_accounts_strict()
+        except Exception as e:
+            logger.warning(f"{DEBUG_TAG} list_order_accounts_strict() failed: {e}")
+            accs = []
 
-        # 2) token_provider가 리스트 제공
-        tp = self._token_provider()
-        if isinstance(tp, list) and all(isinstance(x, dict) for x in tp):
-            return tp
+        # 로그용 마스킹
+        def _mask(tok: Optional[str]) -> str:
+            t = (tok or "").strip()
+            if not t:
+                return "(empty)"
+            return (t[:6] + "..." + t[-4:]) if len(t) > 12 else "*" * len(t)
 
-        # 3) 환경변수
-        env_accs = _load_accounts_from_env()
-        if env_accs:
-            return env_accs
-
-        # 4) 단일 토큰만
-        if isinstance(tp, str) and tp.strip():
-            return [{"token": tp.strip(), "acc_no": None, "enabled": True, "alias": None}]
-        return [{"token": "", "acc_no": None, "enabled": True, "alias": None}]
+        safe_accounts = [
+            {"alias": a.get("alias"), "acc_no": a.get("acc_no"), "token": _mask(a.get("token"))}
+            for a in accs if a.get("enabled", True)
+        ]
+        logger.info(f"{DEBUG_TAG} RESOLVED_ACCOUNTS count={len(safe_accounts)} details={safe_accounts}")
+        return [a for a in accs if a.get("enabled", True)]
 
     def _do_place(self, token: str, api_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self._base_url}{self._order_path}"
@@ -127,11 +101,11 @@ class KiwoomRestBroker(Broker):
             logger.warning(f"{DEBUG_TAG} HTTP.EXC | {type(e).__name__}: {e}")
             return {"status_code": 598, "header": {}, "body": {"error": str(e)}}
 
+    # ---------------------------- 공개 API ----------------------------
     def place_order(self, req: OrderRequest) -> OrderResponse:
         """
-        - 저장된 모든 토큰에 대해 브로드캐스트(병렬) 주문
-        - account_id는 내부 분기 키로 사용되지 않음(표시/요청필드에만 삽입)
-        - 단일 토큰이면 단일 경로로 동작
+        - 최신 ENV 리스트를 읽어 모든 계정에 병렬 브로드캐스트
+        - 계좌번호가 있으면 요청 바디에 포함
         """
         api_id = self._api_id_buy if req.side.upper() == "BUY" else self._api_id_sell
 
@@ -145,35 +119,28 @@ class KiwoomRestBroker(Broker):
         }
 
         accounts = self._resolve_accounts()
-        enabled_accounts = [a for a in accounts if a.get("enabled", True)]
+        if not accounts:
+            logger.error(f"{DEBUG_TAG} No accounts available from KIWOOM_ACCOUNTS_JSON")
+            return OrderResponse(
+                status_code=424,  # Failed Dependency
+                header={"api-id": api_id, "multi-account": "false"},
+                body={"error": "No accounts/tokens available. Check KIWOOM_ACCOUNTS_JSON."},
+            )
 
-        def _mask(tok: Optional[str]) -> str:
-            t = (tok or "").strip()
-            if not t:
-                return "(empty)"
-            return (t[:6] + "..." + t[-4:]) if len(t) > 12 else "*" * len(t)
-
-        safe_accounts = [
-            {"alias": a.get("alias"), "acc_no": a.get("acc_no"), "token": _mask(a.get("token"))}
-            for a in enabled_accounts
-        ]
-        logger.info(f"{DEBUG_TAG} RESOLVED_ACCOUNTS count={len(enabled_accounts)} details={safe_accounts}")
-
-        # --- 단일 계좌 모드 ---
-        if len(enabled_accounts) <= 1:
+        # 단일/다중 분기
+        if len(accounts) == 1:
             logger.info(f"{DEBUG_TAG} MODE=single-account")
-            ctx = enabled_accounts[0] if enabled_accounts else {"token": self._token_provider(), "acc_no": None}
+            ctx = accounts[0]
             token = (ctx.get("token") or "").strip()
             if not token:
-                tp = self._token_provider()
-                token = (tp or "").strip() if isinstance(tp, str) else token
-            if not token:
-                raise RuntimeError(f"{DEBUG_TAG} Empty token resolved (single-account). Check token source.")
-
+                return OrderResponse(
+                    status_code=599,
+                    header={"api-id": api_id, "multi-account": "false"},
+                    body={"error": "empty token for single account"},
+                )
             body = dict(base_body)
-            if "acc_no" not in body and ctx.get("acc_no"):
+            if ctx.get("acc_no"):
                 body["acc_no"] = ctx["acc_no"]
-
             single = self._do_place(token, api_id, body)
             return OrderResponse(
                 status_code=single.get("status_code", 500),
@@ -181,9 +148,8 @@ class KiwoomRestBroker(Broker):
                 body=single.get("body", {}),
             )
 
-        # --- 멀티 계좌 모드(브로드캐스트) ---
-        logger.info(f"{DEBUG_TAG} MODE=multi-account | fanout={len(enabled_accounts)}")
-
+        # 멀티계좌 브로드캐스트
+        logger.info(f"{DEBUG_TAG} MODE=multi-account | fanout={len(accounts)}")
         results: List[Dict[str, Any]] = []
 
         def _submit_one(ctx: Dict[str, Any]):
@@ -197,7 +163,7 @@ class KiwoomRestBroker(Broker):
                     "body": {"error": "empty token for this account"},
                 }
             body = dict(base_body)
-            if "acc_no" not in body and ctx.get("acc_no"):
+            if ctx.get("acc_no"):
                 body["acc_no"] = ctx["acc_no"]
             try:
                 r = self._do_place(token, api_id, body)
@@ -218,25 +184,14 @@ class KiwoomRestBroker(Broker):
                 }
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as ex:
-            futs = []
-            for ctx in enabled_accounts:
-                tok = (ctx.get("token") or "").strip()
-                if not tok:
-                    results.append(_submit_one(ctx))
-                    continue
-                futs.append(ex.submit(_submit_one, ctx))
+            futs = [ex.submit(_submit_one, ctx) for ctx in accounts]
             for fut in as_completed(futs):
                 results.append(fut.result())
 
         codes = [int(x.get("status_code") or 0) for x in results]
         all_ok = all(200 <= c < 300 for c in codes if c)
         any_ok = any(200 <= c < 300 for c in codes if c)
-        if all_ok:
-            overall = 200
-        elif any_ok:
-            overall = 207  # Multi-Status
-        else:
-            overall = codes[0] if codes else 500
+        overall = 200 if all_ok else (207 if any_ok else (codes[0] if codes else 500))
 
         success_cnt = sum(1 for c in codes if 200 <= c < 300)
         failed_cnt = sum(1 for c in codes if not (200 <= c < 300))
@@ -245,6 +200,6 @@ class KiwoomRestBroker(Broker):
         header = {"api-id": api_id, "multi-account": "true", "cont-yn": "", "next-key": ""}
         body = {
             "results": results,
-            "summary": {"total": len(results), "success": success_cnt, "failed": failed_cnt}
+            "summary": {"total": len(results), "success": success_cnt, "failed": failed_cnt},
         }
         return OrderResponse(status_code=overall, header=header, body=body)

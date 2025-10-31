@@ -1,4 +1,9 @@
 # setting/settings_manager.py
+"""
+- 토큰 생성 버튼: APP_KEY_i / APP_SECRET_i 저장만 수행.
+
+- 저장 버튼: .cache 전체 정리 → 현재 테이블 프로필로 재발급 → KIWOOM_ACCOUNTS_JSON 최신화(덮어쓰기).
+"""
 from __future__ import annotations
 
 import os
@@ -22,9 +27,13 @@ except Exception:
     _TradeSettings = None  # type: ignore
     _LadderSettings = None  # type: ignore
 
-# ----- 토큰 매니저(행별 토큰 테스트에 사용)
-from utils.token_manager import get_access_token_cached as tm_get_token_cached
-
+# ----- 토큰 매니저 (행별 토큰 테스트/프로필 동기화/ENV 반영)
+from utils.token_manager import (
+    # Settings에서 필요한 공개 API (요구사항 적용)
+    set_indexed_keys,                       # APP_KEY_n / APP_SECRET_n 저장
+    set_keys as tm_set_main_keys,           # 메인(APP_KEY_1/APP_SECRET_1) 보정
+    mint_tokens_from_settings_manager,      # 일괄 발급 + KIWOOM_ACCOUNTS_JSON 최신화
+)
 
 # ===================== 유틸 =====================
 def _b(env_key: str, default: Optional[bool] = None) -> Optional[bool]:
@@ -42,7 +51,6 @@ def _normalize_base_url(api: str) -> str:
     if api.endswith("/"):
         api = api[:-1]
     return api
-
 
 # ===================== 데이터 모델 =====================
 @dataclass
@@ -122,12 +130,11 @@ class AppSettings:
             broker_vendor=broker,
         )
 
-
 # ---- (신규) Kiwoom 계좌 프로필 스키마 ----
 @dataclass
 class KiwoomProfile:
     id: str                 # 내부 식별자(임의 문자열)
-    account_id: Optional[str] = ""   # 계좌번호(메인 선택시 필수)
+    account_id: Optional[str] = ""   # 계좌번호(메인 선택시 필수였으나, 이제 선택사항)
     alias: str = ""         # 별칭
     app_key: str = ""
     app_secret: str = ""
@@ -137,8 +144,7 @@ class KiwoomProfile:
 class KiwoomSettings:
     profiles: List[KiwoomProfile] = field(default_factory=list)
     base_url: str = ""           # 비우면 브로커 기본값/환경변수 사용
-    main_account_id: str = ""    # 메인(조건검색/시세수신) 계좌
-
+    main_account_id: str = ""    # 메인(조건검색/시세수신) 계좌 — 비워도 저장 허용
 
 # ===================== 영속 스토어(QSettings) =====================
 class SettingsStore:
@@ -226,7 +232,7 @@ class SettingsStore:
         if getattr(cfg, "ws_uri", ""):
             os.environ["WS_URI"] = cfg.ws_uri  # 선택적
 
-        # 3) .env 반영(존재 시)
+        # 3) .env 반영(존재 시): token_manager가 .env만 쓰므로 유지
         try:
             from pathlib import Path
             env_path = Path(".env")
@@ -251,7 +257,6 @@ class SettingsStore:
             logging.getLogger(__name__).warning(f"Failed to update .env file: {e}")
 
         self.qs.sync()
-
 
 # ---- (신규) Kiwoom 전용 스토어 ----
 class KiwoomStore:
@@ -310,15 +315,14 @@ class KiwoomStore:
         self.qs.setValue(self.KEY, json.dumps(serial, ensure_ascii=False))
         self.qs.sync()
 
-
 # ===================== (신규) 키움 계좌 관리 탭 =====================
 class _KiwoomAccountsTab(QWidget):
     """
     - '키움 계좌 관리' 탭에서 멀티계정 설정/저장
-    - 메인 계좌(라디오 버튼) 1개 선택
-    - 각 행에 App Key/Secret 입력 후 '선택 토큰 발급'으로 캐시 발급 확인
+    - 메인 계좌(라디오 버튼) 1개 선택 (계좌번호 비워도 저장 허용)
+    - 각 행에 App Key/Secret 입력 후 '선택 토큰 발급' 버튼은 이제 '키 저장' 동작만 수행
     """
-    COLS = ["메인", "활성", "계좌번호", "별칭", "App Key", "App Secret", "토큰 상태"]
+    COLS = ["메인", "활성", "계좌번호", "별칭", "App Key", "App Secret", "상태"]
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -327,6 +331,53 @@ class _KiwoomAccountsTab(QWidget):
         self._radio_group.setExclusive(True)
         self._build_ui()
         self._load()
+
+    # ───────────── 내부 전용 헬퍼들 (공개 API 변경 없음) ─────────────
+    def __purge_kiwoom_cache(self, namespaces: tuple[str, ...] = ("kiwoom-prod",)) -> int:
+        """
+        .cache 내 토큰 JSON을 **네임스페이스 기준으로 전부 삭제**.
+        - token_manager 공개 API를 건드리지 않기 위해 여기서 자체 구현.
+        - 파일 내용(JSON)의 "namespace" == 대상이면 삭제.
+        - 안전망: 파일명이 '{ns}-' 접두면도 삭제.
+        반환: 삭제된 파일 수
+        """
+        from pathlib import Path
+        import json as _json
+        removed = 0
+        cache_dir = (Path.cwd() / ".cache")
+        if not cache_dir.exists():
+            return 0
+        for p in cache_dir.glob("*.json"):
+            try:
+                data = _json.loads(p.read_text(encoding="utf-8"))
+                ns = str(data.get("namespace") or "")
+                if ns and ns in namespaces:
+                    p.unlink(missing_ok=True)
+                    removed += 1
+                    continue
+            except Exception:
+                # 내용 파싱 실패 시 파일명 접두로 추정
+                if any(p.name.startswith(f"{ns}-") for ns in namespaces):
+                    try:
+                        p.unlink(missing_ok=True)
+                        removed += 1
+                    except Exception:
+                        pass
+        return removed
+
+    def __reissue_all_tokens_and_refresh_env(self, profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """
+        현재 테이블의 프로필만 대상으로 **일괄 토큰 재발급**하고,
+        token_manager의 표준 공개 API로 **KIWOOM_ACCOUNTS_JSON을 최신 리스트로 덮어쓰기**.
+        - 공개 API( mint_tokens_from_settings_manager )만 호출
+        - 외부 시그니처 변경 없음
+        """
+        latest_accounts = mint_tokens_from_settings_manager(
+            profiles,
+            cache_namespace="kiwoom-prod",
+            write_dotenv=True,       # .env에도 반영
+        )
+        return latest_accounts
 
     # ---- UI ----
     def _build_ui(self):
@@ -349,7 +400,7 @@ class _KiwoomAccountsTab(QWidget):
         btns = QHBoxLayout()
         self.btn_add = QPushButton("추가")
         self.btn_del = QPushButton("삭제")
-        self.btn_token = QPushButton("선택 토큰 발급")
+        self.btn_token = QPushButton("선택 키 저장")
         self.btn_save = QPushButton("저장")
         btns.addWidget(self.btn_add)
         btns.addWidget(self.btn_del)
@@ -424,9 +475,17 @@ class _KiwoomAccountsTab(QWidget):
     def _collect(self) -> KiwoomSettings:
         profiles: List[KiwoomProfile] = []
         main_id = ""
+        # 라디오 체크된 행 파악
+        radio_row = -1
         for r in range(self.tbl.rowCount()):
             rb = self.tbl.cellWidget(r, 0)
-            is_main = isinstance(rb, QRadioButton) and rb.isChecked()
+            if isinstance(rb, QRadioButton) and rb.isChecked():
+                radio_row = r
+                break
+
+        for r in range(self.tbl.rowCount()):
+            rb = self.tbl.cellWidget(r, 0)
+            is_main = (r == radio_row) and isinstance(rb, QRadioButton) and rb.isChecked()
 
             enabled = self.tbl.item(r, 1).checkState() == Qt.Checked
             account = (self.tbl.item(r, 2).text() if self.tbl.item(r,2) else "").strip()  # ← 비워도 됨
@@ -441,14 +500,14 @@ class _KiwoomAccountsTab(QWidget):
                 continue
 
             if is_main:
-                # 메인 계정은 데이터 수신/조건식에 쓰이므로 계좌번호 필수
-                if not account:
-                    main_id = ""  # 저장시 경고
-                else:
-                    main_id = account
+                # 메인 계좌는 이제 계좌번호가 비어도 저장 허용
+                main_id = account or ""
+
+            # QSettings용 프로필 id (토큰매니저 upsert에 그대로 전달)
+            pid = f"{(account or 'noacc')}:{app_key[:4]}"
 
             profiles.append(KiwoomProfile(
-                id=f"{(account or 'noacc')}:{app_key[:4]}",
+                id=pid,
                 account_id=account or "",
                 alias=alias,
                 app_key=app_key,
@@ -459,8 +518,10 @@ class _KiwoomAccountsTab(QWidget):
         return KiwoomSettings(
             profiles=profiles,
             base_url=self.le_base.text().strip(),
-            main_account_id=main_id,  # 빈 문자열이면 저장 시 보정/경고
+            main_account_id=main_id,  # 빈 문자열이어도 저장
         )
+
+
 
     # ---- 버튼 핸들러 ----
     @Slot()
@@ -471,34 +532,120 @@ class _KiwoomAccountsTab(QWidget):
     def _on_del(self):
         r = self.tbl.currentRow()
         if r >= 0:
+            # 1) .env에서 해당 인덱스(i = r+1)의 APP_KEY_i / APP_SECRET_i 제거
+            self.__remove_indexed_keys_from_env(r + 1)
+
+            # 2) UI 테이블에서 행 삭제
             self.tbl.removeRow(r)
+
+            # (선택 사항) 상태 표시 갱신 또는 안내 메시지 필요 시 아래와 같이 추가 가능
+            QMessageBox.information(self, "삭제", f"APP_KEY_{r+1} / APP_SECRET_{r+1} 제거 및 행 삭제 완료")
+
+    def __remove_indexed_keys_from_env(self, index: int) -> None:
+        """
+        .env에서 APP_KEY_{index}, APP_SECRET_{index} 라인을 제거하고
+        os.environ에서도 제거한다.
+        """
+        try:
+            from pathlib import Path
+            env_path = Path(".env")
+            if env_path.exists():
+                lines = env_path.read_text(encoding="utf-8").splitlines()
+            else:
+                lines = []
+
+            key_prefix  = f"APP_KEY_{index}="
+            sec_prefix  = f"APP_SECRET_{index}="
+
+            new_lines = [
+                ln for ln in lines
+                if not (ln.startswith(key_prefix) or ln.startswith(sec_prefix))
+            ]
+
+            # 파일 업데이트 (.env가 비게 되더라도 정상 동작)
+            env_text = "\n".join(new_lines)
+            if env_text and not env_text.endswith("\n"):
+                env_text += "\n"
+            env_path.write_text(env_text, encoding="utf-8")
+
+            # 프로세스 환경변수도 함께 정리
+            os.environ.pop(f"APP_KEY_{index}", None)
+            os.environ.pop(f"APP_SECRET_{index}", None)
+        except Exception:
+            # 조용히 무시 (UI 상에서 삭제는 계속 진행)
+            pass
 
     @Slot()
     def _on_save(self):
+        from utils.token_manager import update_env_variable, set_keys as _set_main_keys
+
         cfg = self._collect()
         if not cfg.profiles:
             QMessageBox.warning(self, "입력 필요", "최소 1개 프로필(App Key/Secret)을 입력하세요.")
             return
-        # 메인 계좌 경고
-        if not cfg.main_account_id:
-            QMessageBox.warning(self, "메인 계좌 확인", "메인 계좌로 사용할 행에 라디오 체크 후 계좌번호를 입력하세요.")
-            return
+
+        # 1) UI 영속화(QSettings)
         self.store.save(cfg)
-        # 2) 저장 직후, ENV/.env 동기화 (전체 프로필 기반 재빌드)
+
+        # 2) .env에 APP_KEY_n / APP_SECRET_n (행 인덱스 기준) 저장
+        #    - 요구사항③: 세팅매니저 인덱스로 저장
+        for i, p in enumerate(cfg.profiles, start=1):
+            try:
+                set_indexed_keys(i, p.app_key, p.app_secret)
+            except Exception:
+                pass
+
+        # 3) 메인 키 보정 (요구사항①: 메인 토큰은 APP_KEY_1/APP_SECRET_1 사용)
+        #    - 라디오 선택 행의 키를 APP_KEY_1/APP_SECRET_1로 설정
         try:
-            # 지연 import로 순환참조 회피
-            from utils.kiwoom_env_sync import rebuild_kiwoom_accounts_env
-            accs = rebuild_kiwoom_accounts_env(write_dotenv=True)  # ← ENV, .env 모두 갱신
+            chosen_main_keys: Optional[tuple[str, str]] = None
+            for r in range(self.tbl.rowCount()):
+                rb = self.tbl.cellWidget(r, 0)
+                if isinstance(rb, QRadioButton) and rb.isChecked():
+                    ak = (self.tbl.item(r, 4).text() if self.tbl.item(r,4) else "").strip()
+                    it = self.tbl.item(r, 5)
+                    sk = (it.data(Qt.UserRole) if it and it.data(Qt.UserRole) else (it.text() if it else "")).strip()
+                    if ak and sk:
+                        chosen_main_keys = (ak, sk)
+                    break
+            if chosen_main_keys:
+                tm_set_main_keys(*chosen_main_keys)
+            else:
+                # 라디오가 없으면 첫 활성 프로필로 보정
+                pick = next((p for p in cfg.profiles if p.enabled and p.app_key and p.app_secret), None)
+                if pick:
+                    tm_set_main_keys(pick.app_key, pick.app_secret)
+        except Exception:
+            pass
+
+        # 4) .cache(kiwoom) **전부 삭제** → 현재 프로필로 **재발급** → KIWOOM_ACCOUNTS_JSON **덮어쓰기**
+        try:
+            profiles = [
+                {
+                    "account_id": (p.account_id or ""),
+                    "app_key": p.app_key,
+                    "app_secret": p.app_secret,
+                    "alias": (p.alias or (p.account_id or p.id)),
+                    "enabled": bool(p.enabled),
+                }
+                for p in cfg.profiles
+            ]
+            try:
+                removed = self.__purge_kiwoom_cache(("kiwoom-prod",))
+                __import__("logging").getLogger(__name__).info("purged kiwoom cache: %s files", removed)
+            except Exception:
+                pass
+
+            latest_accounts = self.__reissue_all_tokens_and_refresh_env(profiles)
             QMessageBox.information(
                 self, "저장 완료",
-                f"키움 계좌 설정 저장 및 ENV/.env 갱신 완료\n"
-                f"(계정 {len(accs)}개)"
+                f"키움 계좌 설정 저장 및 토큰 최신화 완료\n"
+                f"(활성 계정 {len([a for a in latest_accounts if a.get('enabled', True)])}개)"
             )
         except Exception as e:
-            # 설정 저장은 성공했으나 ENV 반영 실패 시 경고만
             QMessageBox.warning(
                 self, "저장(일부)",
-                f"설정은 저장했으나 ENV(.env) 갱신에 실패했습니다.\n사유: {e}"
+                f"설정 저장은 완료했으나 토큰 최신화 중 문제가 발생했습니다.\n사유: {e}"
             )
 
     @Slot()
@@ -508,29 +655,21 @@ class _KiwoomAccountsTab(QWidget):
             QMessageBox.warning(self, "선택 필요", "토큰을 발급할 행을 선택하세요.")
             return
 
-        account_id = (self.tbl.item(r, 2).text() if self.tbl.item(r,2) else "").strip()  # 2=계좌번호
         app_key = (self.tbl.item(r, 4).text() if self.tbl.item(r,4) else "").strip()
         sec_it  = self.tbl.item(r, 5)
         app_sec = (sec_it.data(Qt.UserRole) if sec_it and sec_it.data(Qt.UserRole) else (sec_it.text() if sec_it else "")).strip()
 
         if not (app_key and app_sec):
-            QMessageBox.warning(self, "입력 필요", "App Key / App Secret 을 입력하세요. (계좌번호는 선택)")
+            QMessageBox.warning(self, "입력 필요", "App Key / App Secret 을 입력하세요.")
             return
         try:
-            token = tm_get_token_cached(
-                app_key=app_key,
-                app_secret=app_sec,
-                account_id=account_id,            # 계정별 분리 캐시
-                cache_namespace="kiwoom-prod",
-                update_env=True,
-            )
-            _ = token  # 필요 시 보관/브릿지 송신 가능
-            self.tbl.setItem(r, 6, QTableWidgetItem("발급 성공"))
-            QMessageBox.information(self, "성공", "토큰 발급 성공(캐시에 저장됨)")
+            # 요구사항 변경: "토큰 생성" 버튼은 **키 저장만** (캐시/ENV 변경 없음)
+            set_indexed_keys(r + 1, app_key, app_sec)
+            self.tbl.setItem(r, 6, QTableWidgetItem("키 저장됨"))
+            QMessageBox.information(self, "저장", f"APP_KEY_{r+1} / APP_SECRET_{r+1} 저장 완료")
         except Exception as e:
-            self.tbl.setItem(r, 6, QTableWidgetItem("발급 실패"))
-            QMessageBox.critical(self, "실패", f"토큰 발급 실패: {e}")
-
+            self.tbl.setItem(r, 6, QTableWidgetItem("저장 실패"))
+            QMessageBox.critical(self, "실패", f"키 저장 실패: {e}")
 
 # ===================== 설정 다이얼로그 =====================
 class SettingsDialog(QDialog):
@@ -761,7 +900,6 @@ class SettingsDialog(QDialog):
     def reject(self):
         self._save_geometry()
         super().reject()
-
 
 # ===================== AutoTrader 연동 헬퍼 =====================
 @runtime_checkable

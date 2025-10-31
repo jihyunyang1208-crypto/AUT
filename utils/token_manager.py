@@ -1,4 +1,14 @@
 # utils/token_manager.py
+"""
+# 토큰 관리 규칙
+
+Main 토큰: get_main_token()이 .env의 APP_KEY_1/APP_SECRET_1 우선 사용 → OK.
+Settings 저장: set_indexed_keys()가 APP_KEY_n/APP_SECRET_n로 저장 → OK.
+Settings 토큰 발급/적용:
+- request_new_token_for_profile() / mint_tokens_from_settings_manager() → 발급 후 파일 저장 및 rebuild_kiwoom_accounts_env()로 최신 리스트 덮어쓰기 → OK.
+- settings_apply_token_list() → 전달받은 리스트로 누적 없이 완전 교체 → OK.
+- 주문(브로커) 단일 진입점: list_order_accounts_strict()가 **ENV(KIWOOM_ACCOUNTS_JSON)**만 신뢰 → 브로커와 일치 → OK.
+"""
 from __future__ import annotations
 
 import errno
@@ -18,45 +28,32 @@ import requests
 logger = logging.getLogger(__name__)
 
 # ────────────────────────────────────────────────────────────────────
-# 상수 (하위호환 유지)
+# 상수/경로
 # ────────────────────────────────────────────────────────────────────
-APP_NAME = "AutoTrader"
 DEFAULT_TOKEN_URL = "https://api.kiwoom.com/oauth2/token"
 REQUEST_TIMEOUT_SEC = 8
 REQUEST_RETRIES = 3
 RETRY_BACKOFF_SEC = 1.2
 EXPIRY_SAFETY_MARGIN_SEC = 60  # 만료 60초 전부터 재발급
-TOKEN_EXP_MARGIN = 60
+TOKEN_EXP_MARGIN = 60          # 파일캐시 재사용 여유
 
-# 구버전 단일 토큰 캐시 경로(하위호환)
-CACHE_DIR = Path(os.getcwd()) / ".cache"
-CACHE_FILE = CACHE_DIR / "token_cache.json"
-LOCK_FILE = CACHE_DIR / "token_cache.lock"
-
-def _config_dir() -> Path:
-    if os.name == "nt":
-        base = Path(os.getenv("APPDATA", Path.home() / "AppData/Roaming"))
-    else:
-        base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
-    d = base / APP_NAME
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-CONFIG_DIR = _config_dir()
-ENV_FILE = CONFIG_DIR / ".env"
-NEW_TOKEN_FILE = CONFIG_DIR / "access_token.json"  # 신형 단일 토큰(하위호환)
-
-# 프로젝트 루트 기준 멀티프로필 토큰 디렉토리
 PROJECT_ROOT = Path.cwd()
-TOKENS_DIR = PROJECT_ROOT / ".cache"
-TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR = PROJECT_ROOT / ".cache"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-# 프로필 저장 경로
-_PROFILES_FILE = CONFIG_DIR / "kiwoom_profiles.json"
+# 레거시 단일 토큰 파일 캐시(하위호환)
+LEGACY_TOKEN_FILE = CACHE_DIR / "token_cache.json"
+LEGACY_LOCK_FILE = CACHE_DIR / "token_cache.lock"
+
+# 표준 멀티프로필 토큰 디렉토리/프로필 파일
+TOKENS_DIR = CACHE_DIR
+TOKENS_DIR.mkdir(parents=True, exist_ok=True)
+_PROFILES_FILE = TOKENS_DIR / "kiwoom_profiles.json"
 
 # ────────────────────────────────────────────────────────────────────
 # 공용 유틸
 # ────────────────────────────────────────────────────────────────────
+
 def _now_ts() -> float:
     return time.time()
 
@@ -75,8 +72,32 @@ def _ts_to_str(ts: float) -> str:
     ts = _normalize_epoch_seconds(ts)
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
-def _ensure_cache_dir():
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile("w", delete=False, encoding=encoding, dir=str(path.parent)) as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
+
+def _safe_key(s: str) -> str:
+    return "".join(ch if str(ch).isalnum() or ch in ("-", "_", ".") else "_" for ch in str(s))
+
+def _fingerprint_key(*parts: str) -> str:
+    raw = "|".join(p or "" for p in parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+def _cache_id_for(app_key: str, cache_namespace: str, account_id: Optional[str]) -> str:
+    fp = _fingerprint_key(cache_namespace, account_id or "", app_key)
+    safe_acc = _safe_key(account_id) if account_id else "na"
+    return f"{cache_namespace}-{safe_acc}-{fp}"
+
+def _paths_for_cache_id(cache_id: str) -> Tuple[Path, Path]:
+    fname = _safe_key(cache_id) + ".json"
+    return (TOKENS_DIR / fname, TOKENS_DIR / (fname + ".lock"))
+
+def _paths_for_namespace_id(cache_namespace: str, account_id: Optional[str], app_key: str) -> Tuple[Path, Path]:
+    cache_id = _cache_id_for(app_key, cache_namespace, account_id)
+    return _paths_for_cache_id(cache_id)
 
 class _FileLock:
     """
@@ -126,69 +147,114 @@ class _FileLock:
             except Exception:
                 pass
 
-def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile("w", delete=False, encoding=encoding, dir=str(path.parent)) as tmp:
-        tmp.write(text)
-        tmp_path = Path(tmp.name)
-    tmp_path.replace(path)
-
-def _safe_key(s: str) -> str:
-    return "".join(ch if str(ch).isalnum() or ch in ("-", "_", ".") else "_" for ch in str(s))
-
-def _fingerprint_key(*parts: str) -> str:
-    raw = "|".join(p or "" for p in parts)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
-
-def _paths_for_cache_id(cache_id: str) -> Tuple[Path, Path]:
-    fname = _safe_key(cache_id) + ".json"
-    return (TOKENS_DIR / fname, TOKENS_DIR / (fname + ".lock"))
-
-def _cache_id_for(app_key: str, cache_namespace: str, account_id: Optional[str]) -> str:
-    fp = _fingerprint_key(cache_namespace, account_id or "", app_key)
-    safe_acc = _safe_key(account_id) if account_id else "na"
-    return f"{cache_namespace}-{safe_acc}-{fp}"
-
-def _paths_for_namespace_id(cache_namespace: str, account_id: Optional[str], app_key: str) -> Tuple[Path, Path]:
-    cache_id = _cache_id_for(app_key, cache_namespace, account_id)
-    return _paths_for_cache_id(cache_id)
-
 # ────────────────────────────────────────────────────────────────────
-# .env 키 저장/로드 (강화)
+# .env 읽기/쓰기 (프로젝트 루트만 사용)
 # ────────────────────────────────────────────────────────────────────
+def update_env_variable(key: str, value: str, env_path: Optional[str] = None) -> Path:
+    """
+    dotenv 호환 .env 업데이트 (없으면 생성). 프로젝트 루트 .env만 사용.
+    os.environ에도 반영.
+    """
+    if env_path:
+        resolved = Path(env_path).expanduser().resolve()
+    else:
+        resolved = PROJECT_ROOT / ".env"
+
+    if not resolved.exists():
+        resolved.touch()
+
+    # python-dotenv가 있으면 사용, 없으면 수동 편집
+    try:
+        from dotenv import set_key  # type: ignore
+        set_key(str(resolved), key, value)
+    except Exception:
+        try:
+            text = resolved.read_text(encoding="utf-8")
+        except Exception:
+            text = resolved.read_text(encoding="utf-8-sig")
+        lines = text.splitlines()
+        key_prefix = f"{key}="
+        new_lines = [line for line in lines if not line.strip().startswith(key_prefix)]
+        safe_value = value.replace("\n", "\\n")
+        new_lines.append(f'{key}="{safe_value}"')
+        _atomic_write_text(resolved, "\n".join(new_lines) + "\n", encoding="utf-8")
+
+    os.environ[key] = value
+    return resolved
+
 def load_keys() -> Tuple[str, str]:
     """
-    키 로딩 우선순위:
-      1) 프로세스 환경변수 (APP_KEY/APP_SECRET)
-      2) %APPDATA%/AutoTrader/.env
-      3) CWD/.env
+    메인 계좌 키 로딩 우선순위
+      1) APP_KEY_1 / APP_SECRET_1
+      2) APP_KEY   / APP_SECRET   (하위호환)
+    + .env(프로젝트 루트)도 함께 스캔
     """
-    appkey = os.getenv("APP_KEY", "").strip()
-    appsecret = os.getenv("APP_SECRET", "").strip()
+    appkey = (os.getenv("APP_KEY_1") or os.getenv("APP_KEY") or "").strip()
+    appsecret = (os.getenv("APP_SECRET_1") or os.getenv("APP_SECRET") or "").strip()
 
     def _read_env_file(path: Path, ak: str, sk: str) -> Tuple[str, str]:
         if not path.exists():
             return ak, sk
         try:
             for line in path.read_text(encoding="utf-8").splitlines():
-                if line.startswith("APP_KEY="):
+                if line.startswith("APP_KEY_1="):
                     ak = line.split("=", 1)[1].strip().strip('"').strip()
-                elif line.startswith("APP_SECRET="):
+                elif line.startswith("APP_SECRET_1="):
+                    sk = line.split("=", 1)[1].strip().strip('"').strip()
+                elif line.startswith("APP_KEY=") and not ak:
+                    ak = line.split("=", 1)[1].strip().strip('"').strip()
+                elif line.startswith("APP_SECRET=") and not sk:
                     sk = line.split("=", 1)[1].strip().strip('"').strip()
         except Exception:
             pass
         return ak, sk
 
-    appkey, appsecret = _read_env_file(ENV_FILE, appkey, appsecret)
-    cwd_env = Path.cwd() / ".env"
-    appkey, appsecret = _read_env_file(cwd_env, appkey, appsecret)
+    appkey, appsecret = _read_env_file(PROJECT_ROOT / ".env", appkey, appsecret)
     return appkey, appsecret
 
 def set_keys(appkey: str, appsecret: str) -> None:
-    ENV_FILE.write_text(f'APP_KEY="{appkey}"\nAPP_SECRET="{appsecret}"\n', encoding="utf-8")
+    """
+    메인 키를 .env에 기록.
+    - 규약: 메인은 APP_KEY_1 / APP_SECRET_1
+    - 하위호환: APP_KEY / APP_SECRET도 같이 세팅
+    """
+    update_env_variable("APP_KEY_1", appkey)
+    update_env_variable("APP_SECRET_1", appsecret)
+    update_env_variable("APP_KEY", appkey)        # fallback
+    update_env_variable("APP_SECRET", appsecret)  # fallback
+    os.environ["APP_KEY_1"] = appkey
+    os.environ["APP_SECRET_1"] = appsecret
+    os.environ["APP_KEY"] = appkey
+    os.environ["APP_SECRET"] = appsecret
+
+def set_indexed_keys(index: int, appkey: str, appsecret: str) -> None:
+    """
+    세팅매니저용: 인덱스에 맞춰 APP_KEY_{n} / APP_SECRET_{n} 저장
+    예) index=2 → APP_KEY_2, APP_SECRET_2
+    """
+    if index < 1:
+        raise ValueError("index는 1 이상의 정수여야 합니다.")
+    update_env_variable(f"APP_KEY_{index}", appkey)
+    update_env_variable(f"APP_SECRET_{index}", appsecret)
+    os.environ[f"APP_KEY_{index}"] = appkey
+    os.environ[f"APP_SECRET_{index}"] = appsecret
+
+def get_indexed_keys(index: int) -> Tuple[str, str]:
+    ak = (os.getenv(f"APP_KEY_{index}") or "").strip()
+    sk = (os.getenv(f"APP_SECRET_{index}") or "").strip()
+    if not ak or not sk:
+        # .env 파일에서 재시도
+        path = PROJECT_ROOT / ".env"
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith(f"APP_KEY_{index}="):
+                    ak = line.split("=", 1)[1].strip().strip('"').strip()
+                elif line.startswith(f"APP_SECRET_{index}="):
+                    sk = line.split("=", 1)[1].strip().strip('"').strip()
+    return ak, sk
 
 # ────────────────────────────────────────────────────────────────────
-# 만료/캐시 유틸
+# 만료/캐시 유틸 (레거시 호환 포함)
 # ────────────────────────────────────────────────────────────────────
 def _parse_expires_from_str(dt_str: str) -> Optional[float]:
     if not dt_str:
@@ -236,17 +302,15 @@ def _parse_expires_from_response(data: Dict[str, Any]) -> float:
 def _is_valid(expires_at: Optional[float]) -> bool:
     return bool(expires_at and (_now_ts() + EXPIRY_SAFETY_MARGIN_SEC) < _normalize_epoch_seconds(expires_at))
 
-# ────────────────────────────────────────────────────────────────────
 # 레거시 단일 토큰 메모리 캐시 (하위호환)
-# ────────────────────────────────────────────────────────────────────
 _mem_token: Optional[str] = None
 _mem_expires_at: Optional[float] = None
 _mem_lock = threading.Lock()
 
-def _load_file_cache() -> Tuple[Optional[str], Optional[float]]:
-    if CACHE_FILE.exists():
+def _load_legacy_file_cache() -> Tuple[Optional[str], Optional[float]]:
+    if LEGACY_TOKEN_FILE.exists():
         try:
-            data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+            data = json.loads(LEGACY_TOKEN_FILE.read_text(encoding="utf-8"))
             token = data.get("token") or data.get("access_token")
             exp: Optional[float] = None
             if "expires_at" in data and str(data["expires_at"]).strip():
@@ -267,27 +331,64 @@ def _load_file_cache() -> Tuple[Optional[str], Optional[float]]:
                 return token, exp
         except Exception:
             pass
-    if NEW_TOKEN_FILE.exists():
-        try:
-            data = json.loads(NEW_TOKEN_FILE.read_text(encoding="utf-8"))
-            token = data.get("token") or data.get("access_token")
-            exp = data.get("expires_at") or _parse_expires_from_response(data)
-            exp = _normalize_epoch_seconds(float(exp))
-            if token:
-                return token, exp
-        except Exception:
-            pass
     return None, None
 
-def _save_file_cache(token: str, expires_at: float) -> None:
-    _ensure_cache_dir()
-    expires_at = _normalize_epoch_seconds(expires_at)
-    payload = {"token": token, "expires_at": expires_at, "expires_dt": _ts_to_str(expires_at)}
-    CACHE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    NEW_TOKEN_FILE.write_text(json.dumps({"access_token": token, "expires_at": expires_at}, ensure_ascii=False, indent=2), encoding="utf-8")
+def _save_legacy_file_cache(token: str, expires_at: float) -> None:
+    payload = {
+        "token": token,
+        "expires_at": _normalize_epoch_seconds(expires_at),
+        "expires_dt": _ts_to_str(expires_at),
+    }
+    LEGACY_TOKEN_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+def set_access_token(token: str, ttl_seconds: Optional[int] = None) -> None:
+    """레거시 호환: 메모리/단일 파일 캐시에 토큰 저장."""
+    global _mem_token, _mem_expires_at
+    if not token:
+        return
+    with _mem_lock:
+        _mem_token = token
+        _mem_expires_at = _now_ts() + (ttl_seconds if ttl_seconds else 55 * 60)
+        with _FileLock(LEGACY_LOCK_FILE):
+            _save_legacy_file_cache(_mem_token, _mem_expires_at)
+
+def clear_access_token_cache() -> None:
+    """레거시 호환: 단일 파일 캐시 삭제."""
+    global _mem_token, _mem_expires_at
+    with _mem_lock:
+        _mem_token = None
+        _mem_expires_at = None
+        try:
+            if LEGACY_TOKEN_FILE.exists():
+                LEGACY_TOKEN_FILE.unlink()
+        except Exception:
+            pass
+
+def get_cached_token() -> Optional[str]:
+    """레거시 호환: 메모리/파일 캐시에서 유효 토큰 조회."""
+    global _mem_token, _mem_expires_at
+    with _mem_lock:
+        if _mem_token and _is_valid(_mem_expires_at):
+            return _mem_token
+    with _FileLock(LEGACY_LOCK_FILE):
+        token, exp = _load_legacy_file_cache()
+    if token and _is_valid(exp):
+        with _mem_lock:
+            _mem_token, _mem_expires_at = token, exp
+        return token
+    return None
+
+def get_token_expiry() -> Optional[datetime]:
+    with _mem_lock:
+        exp = _mem_expires_at
+    if exp:
+        return datetime.fromtimestamp(_normalize_epoch_seconds(exp))
+    with _FileLock(LEGACY_LOCK_FILE):
+        _, exp = _load_legacy_file_cache()
+    return datetime.fromtimestamp(_normalize_epoch_seconds(exp)) if exp else None
 
 # ────────────────────────────────────────────────────────────────────
-# HTTP 발급 (JSON only + 헤더/중첩바디 탐색)
+# HTTP 토큰 발급 (JSON/FORM 모두 시도)
 # ────────────────────────────────────────────────────────────────────
 def _request_new_token(appkey: str, secretkey: str, token_url: str = DEFAULT_TOKEN_URL) -> Tuple[str, float]:
     def _h(s):
@@ -302,6 +403,7 @@ def _request_new_token(appkey: str, secretkey: str, token_url: str = DEFAULT_TOK
         raise RuntimeError(f"token_url이 올바르지 않습니다: {token_url!r}")
 
     headers_json = {"Content-Type": "application/json;charset=UTF-8", "Accept": "application/json"}
+    headers_form = {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8", "Accept": "application/json"}
 
     def _find_token_and_exp_in_headers(h) -> Tuple[Optional[str], Optional[float]]:
         if not h:
@@ -353,15 +455,25 @@ def _request_new_token(appkey: str, secretkey: str, token_url: str = DEFAULT_TOK
         return tok, (exp or _parse_expires_from_response(resp_json)), err
 
     scenarios = [
-        ("json(appsecret)", {"grant_type": "client_credentials", "appkey": appkey, "appsecret": secretkey}),
-        ("json(secretkey)", {"grant_type": "client_credentials", "appkey": appkey, "secretkey": secretkey}),
+        # 1) JSON (appsecret)
+        ("json(appsecret)", "json", {"grant_type": "client_credentials", "appkey": appkey, "appsecret": secretkey}),
+        # 2) JSON (secretkey)
+        ("json(secretkey)", "json", {"grant_type": "client_credentials", "appkey": appkey, "secretkey": secretkey}),
+        # 3) FORM (appsecret)
+        ("form(appsecret)", "form", {"grant_type": "client_credentials", "appkey": appkey, "appsecret": secretkey}),
+        # 4) FORM (secretkey)
+        ("form(secretkey)", "form", {"grant_type": "client_credentials", "appkey": appkey, "secretkey": secretkey}),
     ]
 
     last_exc: Optional[Exception] = None
     for attempt in range(1, REQUEST_RETRIES + 1):
-        for label, payload in scenarios:
+        for label, mode, payload in scenarios:
             try:
-                resp = requests.post(token_url, headers=headers_json, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+                if mode == "json":
+                    resp = requests.post(token_url, headers=headers_json, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+                else:
+                    resp = requests.post(token_url, headers=headers_form, data=payload, timeout=REQUEST_TIMEOUT_SEC)
+
                 if resp.status_code // 100 != 2:
                     raise RuntimeError(f"HTTP {resp.status_code} on {label}: {resp.text[:200]}")
 
@@ -404,18 +516,19 @@ def _request_new_token(appkey: str, secretkey: str, token_url: str = DEFAULT_TOK
 # ────────────────────────────────────────────────────────────────────
 # 표준 멀티프로필 캐시 (메인)
 # ────────────────────────────────────────────────────────────────────
-def _read_token_file(path: Path) -> Tuple[Optional[str], Optional[float]]:
+def _read_token_file(path: Path) -> Tuple[Optional[str], Optional[float], Optional[str]]:
     if not path.exists():
-        return None, None
+        return None, None, None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        tok = data.get("access_token")
+        tok = (data.get("access_token") or "") or None
         exp = data.get("expires_at")
+        acc = (data.get("account_id") or "") or None
         if tok and exp is not None:
-            return str(tok), float(exp)
+            return str(tok), float(exp), acc
     except Exception:
         pass
-    return None, None
+    return None, None, None
 
 def _write_token_file(path: Path, *, token: str, expires_at: float,
                       cache_namespace: str, account_id: Optional[str], app_key: str) -> None:
@@ -430,44 +543,12 @@ def _write_token_file(path: Path, *, token: str, expires_at: float,
     }
     _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-def update_env_variable(key: str, value: str, env_path: Optional[str] = None) -> Path:
-    """dotenv 호환 .env 업데이트 (없으면 생성)"""
-    if env_path:
-        resolved = Path(env_path).expanduser().resolve()
-    else:
-        try:
-            from dotenv import find_dotenv  # type: ignore
-            found = find_dotenv(usecwd=True)
-            resolved = Path(found).resolve() if found else (Path.cwd() / ".env")
-        except Exception:
-            resolved = Path.cwd() / ".env"
-
-    if not resolved.exists():
-        resolved.touch()
-
-    try:
-        from dotenv import set_key  # type: ignore
-        set_key(str(resolved), key, value)
-    except Exception:
-        try:
-            lines = resolved.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            lines = resolved.read_text(encoding="utf-8-sig").splitlines()
-        key_prefix = f"{key}="
-        new_lines = [line for line in lines if not line.strip().startswith(key_prefix)]
-        safe_value = value.replace("\n", "\\n")
-        new_lines.append(f'{key}="{safe_value}"')
-        _atomic_write_text(resolved, "\n".join(new_lines) + "\n", encoding="utf-8")
-
-    os.environ[key] = value
-    return resolved
-
-def _update_KIWOOM_ACCOUNTS_JSON_from_cache_dir() -> int:
+def rebuild_kiwoom_accounts_env(*, write_dotenv: bool = True) -> List[Dict[str, Any]]:
     """
-    .cache/*.json → KIWOOM_ACCOUNTS_JSON 재구성
-    alias/nickname은 가능하면 프로필에서 가져오고, 없으면 account_id로 대체
+    .cache/*.json을 스캔해 KIWOOM_ACCOUNTS_JSON을 다시 구성하고
+    os.environ 및 (옵션) .env에 **덮어쓰기**로 반영. (누적/병합 없음)
     """
-    # 프로필 불러오기
+    # 프로필에서 alias 우선
     profs = _load_profiles_file()
     alias_by_acc: Dict[str, str] = {}
     for p in profs.values():
@@ -477,12 +558,15 @@ def _update_KIWOOM_ACCOUNTS_JSON_from_cache_dir() -> int:
 
     accs: List[Dict[str, Any]] = []
     for p in TOKENS_DIR.glob("*.json"):
+        # 불필요한 메타/프로필 파일 제외
+        if p.name == "kiwoom_profiles.json":
+            continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-            tok = data.get("access_token")
+            tok = (data.get("access_token") or "").strip()
             if not tok:
                 continue
-            acc_no = data.get("account_id") or ""
+            acc_no = (data.get("account_id") or "").strip()
             accs.append({
                 "token": tok,
                 "acc_no": acc_no or "unknown",
@@ -491,9 +575,13 @@ def _update_KIWOOM_ACCOUNTS_JSON_from_cache_dir() -> int:
             })
         except Exception:
             continue
-    update_env_variable("KIWOOM_ACCOUNTS_JSON", json.dumps(accs, ensure_ascii=False))
+
+    payload = json.dumps(accs, ensure_ascii=False)
+    os.environ["KIWOOM_ACCOUNTS_JSON"] = payload
+    if write_dotenv:
+        update_env_variable("KIWOOM_ACCOUNTS_JSON", payload)
     logger.info("✅ KIWOOM_ACCOUNTS_JSON updated (count=%d)", len(accs))
-    return len(accs)
+    return accs
 
 def get_access_token_cached(
     app_key: str,
@@ -518,12 +606,12 @@ def get_access_token_cached(
     json_path, lock_path = _paths_for_namespace_id(cache_namespace, account_id or None, ak)
     now = _now_ts()
 
-    tok, exp = _read_token_file(json_path)
+    tok, exp, _ = _read_token_file(json_path)
     if tok and exp and (exp - now > TOKEN_EXP_MARGIN):
         return tok
 
     with _FileLock(lock_path):
-        tok, exp = _read_token_file(json_path)
+        tok, exp, _ = _read_token_file(json_path)
         if tok and exp and (exp - now > TOKEN_EXP_MARGIN):
             return tok
         new_tok, new_exp = _request_new_token(ak, sk, token_url=token_url)
@@ -532,69 +620,12 @@ def get_access_token_cached(
                           cache_namespace=cache_namespace, account_id=(account_id or ""), app_key=ak)
 
     if update_env:
-        _update_KIWOOM_ACCOUNTS_JSON_from_cache_dir()
+        rebuild_kiwoom_accounts_env(write_dotenv=True)
 
-    tok, _ = _read_token_file(json_path)
+    tok, _, _ = _read_token_file(json_path)
     if not tok:
         raise RuntimeError("Token cache write failed unexpectedly.")
     return tok
-
-# ────────────────────────────────────────────────────────────────────
-# 하위호환 API (필수 최소만 유지)
-# ────────────────────────────────────────────────────────────────────
-def set_access_token(token: str, ttl_seconds: Optional[int] = None) -> None:
-    global _mem_token, _mem_expires_at
-    if not token:
-        return
-    with _mem_lock:
-        _mem_token = token
-        _mem_expires_at = _now_ts() + (ttl_seconds if ttl_seconds else 55 * 60)
-        with _FileLock(LOCK_FILE):
-            _save_file_cache(_mem_token, _mem_expires_at)
-
-def clear_access_token_cache() -> None:
-    global _mem_token, _mem_expires_at
-    with _mem_lock:
-        _mem_token = None
-        _mem_expires_at = None
-        try:
-            if CACHE_FILE.exists():
-                CACHE_FILE.unlink()
-        except Exception:
-            pass
-        try:
-            if NEW_TOKEN_FILE.exists():
-                NEW_TOKEN_FILE.unlink()
-        except Exception:
-            pass
-
-def get_cached_token() -> Optional[str]:
-    global _mem_token, _mem_expires_at
-    with _mem_lock:
-        if _mem_token and _is_valid(_mem_expires_at):
-            return _mem_token
-    with _FileLock(LOCK_FILE):
-        token, exp = _load_file_cache()
-    if token and _is_valid(exp):
-        with _mem_lock:
-            _mem_token, _mem_expires_at = token, exp
-        return token
-    return None
-
-# ⚠ 미사용(Deprecated): 내부에서 account_id로 토큰을 찾는 API는 쓰지 않음
-# def get_access_token(appkey: str, secretkey: str, token_url: str = DEFAULT_TOKEN_URL) -> str:
-#     return get_access_token_cached(app_key=appkey, app_secret=secretkey,
-#                                    account_id="", cache_namespace="kiwoom-prod",
-#                                    token_url=token_url, update_env=False)
-
-def get_token_expiry() -> Optional[datetime]:
-    with _mem_lock:
-        exp = _mem_expires_at
-    if exp:
-        return datetime.fromtimestamp(_normalize_epoch_seconds(exp))
-    with _FileLock(LOCK_FILE):
-        _, exp = _load_file_cache()
-    return datetime.fromtimestamp(_normalize_epoch_seconds(exp)) if exp else None
 
 def request_new_token(appkey: Optional[str] = None, appsecret: Optional[str] = None,
                       token_url: str = DEFAULT_TOKEN_URL) -> str:
@@ -609,6 +640,25 @@ def request_new_token(appkey: Optional[str] = None, appsecret: Optional[str] = N
     with _FileLock(lock_path):
         _write_token_file(json_path, token=tok, expires_at=_normalize_epoch_seconds(exp),
                           cache_namespace="kiwoom-prod", account_id="", app_key=ak)
+    try:
+        rebuild_kiwoom_accounts_env(write_dotenv=True)
+    except Exception:
+        pass
+    return tok
+
+def request_new_token_for_profile(*, account_id: str, app_key: str, app_secret: str,
+                                  cache_namespace: str = "kiwoom-prod",
+                                  token_url: str = DEFAULT_TOKEN_URL) -> str:
+    """
+    세팅매니저에서 특정 프로필(account_id, app_key, app_secret)로 토큰 발급 후
+    해당 파일을 저장(계정 식별 포함)하고, KIWOOM_ACCOUNTS_JSON을 최신 상태로 덮어쓴다.
+    """
+    tok, exp = _request_new_token(app_key, app_secret, token_url=token_url)
+    json_path, lock_path = _paths_for_namespace_id(cache_namespace, account_id or None, app_key)
+    with _FileLock(lock_path):
+        _write_token_file(json_path, token=tok, expires_at=_normalize_epoch_seconds(exp),
+                          cache_namespace=cache_namespace, account_id=(account_id or ""), app_key=app_key)
+    rebuild_kiwoom_accounts_env(write_dotenv=True)
     return tok
 
 # ────────────────────────────────────────────────────────────────────
@@ -712,38 +762,49 @@ def active_account_ids() -> List[str]:
         return [p["account_id"] for p in _prof_mem.values() if p.get("enabled")]
 
 # ────────────────────────────────────────────────────────────────────
-# 멀티계좌 토큰/컨텍스트 공급 (브로드캐스트 전용)
+# 주문(브로드캐스트) 컨텍스트
 # ────────────────────────────────────────────────────────────────────
+def list_order_accounts_strict() -> List[Dict[str, Any]]:
+    """
+    주문 시 **반드시** ENV(KIWOOM_ACCOUNTS_JSON)만 사용하여 계정 리스트를 반환.
+    - 누적 금지/병합 금지(요구사항 #2, #4)
+    구조: [{"token":str, "acc_no":str|None, "enabled":bool, "alias":str|None}, ...]
+    """
+    raw = os.getenv("KIWOOM_ACCOUNTS_JSON", "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for x in data:
+            if not isinstance(x, dict):
+                continue
+            tok = (x.get("token") or "").strip()
+            if not tok:
+                continue
+            acc_no = (x.get("acc_no") or "").strip()
+            alias = (x.get("alias") or "").strip() or (acc_no or "unknown")
+            out.append({
+                "token": tok,
+                "acc_no": acc_no or None,
+                "enabled": bool(x.get("enabled", True)),
+                "alias": alias,
+            })
+        return out
+    except Exception:
+        logger.warning("Failed to parse KIWOOM_ACCOUNTS_JSON")
+        return []
+
 def build_account_provider_from_env_or_cache() -> Callable[[], List[Dict[str, Any]]]:
     """
-    브로커가 호출하는 account_provider() 팩토리.
+    (참고) 기존 브로커 호환 팩토리.
     1) ENV(KIWOOM_ACCOUNTS_JSON)이 있으면 우선 사용
-    2) 없으면 .cache/*.json 스캔해서 구성
+    2) 없으면 .cache/*.json 스캔 → ENV도 채워줌
     """
     def _from_env() -> List[Dict[str, Any]]:
-        raw = os.getenv("KIWOOM_ACCOUNTS_JSON", "").strip()
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-            if isinstance(data, list):
-                out = []
-                for x in data:
-                    if not isinstance(x, dict):
-                        continue
-                    tok = (x.get("token") or "").strip()
-                    if not tok:
-                        continue
-                    out.append({
-                        "token": tok,
-                        "acc_no": x.get("acc_no") or None,
-                        "enabled": bool(x.get("enabled", True)),
-                        "alias": x.get("alias") or (x.get("acc_no") or None),
-                    })
-                return out
-        except Exception:
-            logger.warning("Failed to parse KIWOOM_ACCOUNTS_JSON")
-        return []
+        return list_order_accounts_strict()
 
     def _from_cache() -> List[Dict[str, Any]]:
         res: List[Dict[str, Any]] = []
@@ -774,10 +835,8 @@ def build_account_provider_from_env_or_cache() -> Callable[[], List[Dict[str, An
         lst = _from_env()
         if lst:
             return lst
-        # env가 비어있다면 캐시에서라도 만들어준다
         lst = _from_cache()
         if lst:
-            # ENV도 갱신해 두면 이후 프로세스/서브프로세스가 재사용 가능
             try:
                 update_env_variable("KIWOOM_ACCOUNTS_JSON", json.dumps(lst, ensure_ascii=False))
             except Exception:
@@ -786,42 +845,8 @@ def build_account_provider_from_env_or_cache() -> Callable[[], List[Dict[str, An
 
     return _provider
 
-# ⚠ 미사용(Deprecated): 내부에서 account_id로 토큰을 직접 찾는 행위는 사용하지 않음
-# def token_provider_for_account_id(account_id: str) -> str:
-#     ...
-
-def token_provider_for_main() -> str:
-    """메인 프로필(AppKey/Secret)로 토큰 반환. 메인이 없으면 .env 사용."""
-    mp = _find_main_profile()
-    if not mp:
-        ak, sk = load_keys()
-        if not ak or not sk:
-            raise RuntimeError("No main profile and no .env APP_KEY/APP_SECRET found.")
-        return get_access_token_cached(app_key=ak, app_secret=sk, account_id="", cache_namespace="kiwoom-prod")
-    return get_access_token_cached(
-        app_key=mp["app_key"], app_secret=mp["app_secret"],
-        account_id=mp["account_id"], cache_namespace="kiwoom-prod"
-    )
-
-def warmup_all_profiles(cache_namespace: str = "kiwoom-prod") -> int:
-    _ensure_profiles_loaded()
-    cnt = 0
-    for p in list_profiles():
-        try:
-            get_access_token_cached(
-                app_key=p["app_key"],
-                app_secret=p["app_secret"],
-                account_id=p.get("account_id", ""),
-                cache_namespace=cache_namespace,
-                update_env=True,
-            )
-            cnt += 1
-        except Exception as e:
-            logger.warning("warmup failed for %s: %s", p.get("account_id"), e)
-    return cnt
-
 # ────────────────────────────────────────────────────────────────────
-# 전역(싱글톤) 토큰 공급자
+# 전역(싱글톤) 토큰 공급자 & 메인 토큰
 # ────────────────────────────────────────────────────────────────────
 _GLOBAL_TOKEN_SUPPLIER: Optional[Callable[[], str]] = None
 _SUPPLIER_LOCK = threading.Lock()
@@ -876,7 +901,23 @@ def reset_global_token_supplier() -> None:
     with _SUPPLIER_LOCK:
         _GLOBAL_TOKEN_SUPPLIER = None
 
+def get_main_token() -> str:
+    """
+    요구사항 #1: 메인 계좌 토큰은 .env의 APP_KEY_1 / APP_SECRET_1을 사용
+    (프로필이 있더라도 '메인'은 .env(1번) 우선)
+    """
+    ak1 = (os.getenv("APP_KEY_1") or "").strip()
+    sk1 = (os.getenv("APP_SECRET_1") or "").strip()
+    if not ak1 or not sk1:
+        ak1, sk1 = load_keys()
+    if not ak1 or not sk1:
+        raise RuntimeError("get_main_token: .env의 APP_KEY_1 / APP_SECRET_1 자격이 없습니다.")
+    return get_access_token_cached(app_key=ak1, app_secret=sk1, account_id="", cache_namespace="kiwoom-prod")
+
 def get_token() -> str:
+    """
+    기존 전역 제공과 호환: 전역 supplier → 프로필 메인 → .env(1번)
+    """
     with _SUPPLIER_LOCK:
         supplier = _GLOBAL_TOKEN_SUPPLIER
     if callable(supplier):
@@ -893,12 +934,8 @@ def get_token() -> str:
             account_id=mp.get("account_id", "") or "",
             cache_namespace="kiwoom-prod",
         )
-    ak, sk = load_keys()
-    if not ak or not sk:
-        raise RuntimeError("get_token: 전역 공급자/메인 프로필/.env 어디에서도 자격이 없습니다.")
-    return get_access_token_cached(
-        app_key=ak, app_secret=sk, account_id="", cache_namespace="kiwoom-prod"
-    )
+    # 마지막으로 .env (요구사항 1 충족)
+    return get_main_token()
 
 def force_refresh_token(
     *,
@@ -941,5 +978,71 @@ def force_refresh_token(
             account_id=(account_id or ""),
             app_key=ak,
         )
-    _update_KIWOOM_ACCOUNTS_JSON_from_cache_dir()
+    rebuild_kiwoom_accounts_env(write_dotenv=True)
     return tok
+
+# ────────────────────────────────────────────────────────────────────
+# 세팅매니저 연동: 최신 리스트로만 ENV 적용
+# ────────────────────────────────────────────────────────────────────
+def settings_apply_token_list(accounts: List[Dict[str, Any]], *, write_dotenv: bool = True) -> None:
+    """
+    요구사항 #4: 세팅매니저에서 토큰 생성 직후,
+    전달받은 accounts 리스트만으로 KIWOOM_ACCOUNTS_JSON을 **덮어쓰기** 적용.
+    accounts 원소 예:
+      {"token": "...", "acc_no": "12345678", "enabled": true, "alias": "주계좌"}
+    """
+    sanitized: List[Dict[str, Any]] = []
+    for x in accounts:
+        if not isinstance(x, dict):
+            continue
+        tok = (x.get("token") or "").strip()
+        if not tok:
+            continue
+        sanitized.append({
+            "token": tok,
+            "acc_no": (x.get("acc_no") or "") or "unknown",
+            "enabled": bool(x.get("enabled", True)),
+            "alias": x.get("alias") or (x.get("acc_no") or "unknown"),
+        })
+    payload = json.dumps(sanitized, ensure_ascii=False)
+    os.environ["KIWOOM_ACCOUNTS_JSON"] = payload
+    if write_dotenv:
+        update_env_variable("KIWOOM_ACCOUNTS_JSON", payload)
+    logger.info("🔄 KIWOOM_ACCOUNTS_JSON replaced by settings (count=%d)", len(sanitized))
+
+def mint_tokens_from_settings_manager(
+    profiles: List[Dict[str, Any]],
+    *,
+    cache_namespace: str = "kiwoom-prod",
+    token_url: str = DEFAULT_TOKEN_URL,
+    write_dotenv: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    세팅매니저에서 전달한 프로필 리스트로 일괄 토큰 발급 후,
+    **누적 없이 최신 리스트로만** KIWOOM_ACCOUNTS_JSON을 덮어씀.
+    profiles 원소 예:
+      {"account_id":"12345678","app_key":"...","app_secret":"...","enabled":true,"alias":"별칭"}
+    """
+    out_accounts: List[Dict[str, Any]] = []
+    for p in profiles:
+        acc = (p.get("account_id") or "").strip()
+        ak = (p.get("app_key") or "").strip()
+        sk = (p.get("app_secret") or "").strip()
+        if not acc or not ak or not sk:
+            logger.warning("skip profile (missing fields): %s", p)
+            continue
+        tok, exp = _request_new_token(ak, sk, token_url=token_url)
+        json_path, lock_path = _paths_for_namespace_id(cache_namespace, acc or None, ak)
+        with _FileLock(lock_path):
+            _write_token_file(json_path, token=tok, expires_at=_normalize_epoch_seconds(exp),
+                              cache_namespace=cache_namespace, account_id=acc, app_key=ak)
+        out_accounts.append({
+            "token": tok,
+            "acc_no": acc,
+            "enabled": bool(p.get("enabled", True)),
+            "alias": p.get("alias") or acc,
+        })
+
+    # 최신 리스트만 반영
+    settings_apply_token_list(out_accounts, write_dotenv=write_dotenv)
+    return out_accounts
